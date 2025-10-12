@@ -1,9 +1,9 @@
-# schema-lite
+# llm-schema-lite
 
-[![PyPI version](https://badge.fury.io/py/schema-lite.svg)](https://badge.fury.io/py/schema-lite)
-[![Python Versions](https://img.shields.io/pypi/pyversions/schema-lite.svg)](https://pypi.org/project/schema-lite/)
-[![CI](https://github.com/rohitgarud/schema-lite/workflows/CI/badge.svg)](https://github.com/rohitgarud/schema-lite/actions)
-[![codecov](https://codecov.io/gh/rohitgarud/schema-lite/branch/main/graph/badge.svg)](https://codecov.io/gh/rohitgarud/schema-lite)
+[![PyPI version](https://badge.fury.io/py/llm-schema-lite.svg)](https://badge.fury.io/py/llm-schema-lite)
+[![Python Versions](https://img.shields.io/pypi/pyversions/llm-schema-lite.svg)](https://pypi.org/project/llm-schema-lite/)
+[![CI](https://github.com/rohitgarud/llm-schema-lite/workflows/CI/badge.svg)](https://github.com/rohitgarud/llm-schema-lite/actions)
+[![codecov](https://codecov.io/gh/rohitgarud/llm-schema-lite/branch/main/graph/badge.svg)](https://codecov.io/gh/rohitgarud/llm-schema-lite)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
@@ -11,16 +11,16 @@ LLM-fy your JSON schemas.
 
 ## Installation
 
-You can install schema-lite using pip:
+You can install llm-schema-lite using pip:
 
 ```bash
-pip install schema-lite
+pip install llm-schema-lite
 ```
 
 Or using uv:
 
 ```bash
-uv pip install schema-lite
+uv pip install llm-schema-lite
 ```
 
 ## Development

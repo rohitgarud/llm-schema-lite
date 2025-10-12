@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "schema-lite"
+name = "llm-schema-lite"
 version = "0.1.0"
 description = "LLM-ify your JSON schemas"
 readme = "README.md"
@@ -61,11 +61,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/rohitgarud/schema-lite"
-Repository = "https://github.com/rohitgarud/schema-lite"
-Issues = "https://github.com/rohitgarud/schema-lite/issues"
-Documentation = "https://github.com/rohitgarud/schema-lite#readme"  # Or dedicated docs site
-Changelog = "https://github.com/rohitgarud/schema-lite/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/rohitgarud/llm-schema-lite"
+Repository = "https://github.com/rohitgarud/llm-schema-lite"
+Issues = "https://github.com/rohitgarud/llm-schema-lite/issues"
+Documentation = "https://github.com/rohitgarud/llm-schema-lite#readme"
+Changelog = "https://github.com/rohitgarud/llm-schema-lite/blob/main/CHANGELOG.md"
 
 
 [tool.hatch.build.targets.wheel]
