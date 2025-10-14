@@ -4,7 +4,7 @@ schema-lite: Transform verbose Pydantic schemas into LLM-friendly formats
 Reduce token usage by 60-85% while preserving essential type information.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from .core import SchemaLite, simplify_schema
 from .exceptions import (

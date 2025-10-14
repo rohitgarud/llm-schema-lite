@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [v0.2.1](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.2.1) - 2025-10-14
+
+<small>[Compare with v0.2.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.0...v0.2.1)</small>
+
+### Docs
+
+- update CHANGELOG for v0.2.0 ([c504369](https://github.com-personal/rohitgarud/llm-schema-lite/commit/c50436906db08107c3a26e0dafea1e83af62fd8d) by github-actions[bot]).
+
 ## [v0.2.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.2.0) - 2025-10-14
 
 <small>[Compare with v0.1.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.1.0...v0.2.0)</small>
