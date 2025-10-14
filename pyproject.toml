@@ -39,7 +39,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "pydantic>=2.10.0",
+    "pydantic[email]>=2.10.0",
     "tiktoken>=0.12.0",
 ]
 
