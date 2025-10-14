@@ -1,6 +1,6 @@
 .PHONY: help install sync install-dev install-pre-commit pre-commit-run
 .PHONY: test test-cov test-parallel test-fast test-slow
-.PHONY: lint check format clean build changelog
+.PHONY: lint check format clean build changelog release_notes
 .PHONY: publish-test publish update venv setup
 
 help:  ## Show this help message
@@ -83,3 +83,6 @@ setup: venv install-dev install-pre-commit  ## Complete setup for development
 
 update: clean sync install-pre-commit lint  ## Full project update
 	@echo "✓ Project updated successfully!"
+
+release_notes:  ## Generate release notes
+	sed -n '/## \[v0.2.1\]/,/## \[/p' CHANGELOG.md | head -n -1
