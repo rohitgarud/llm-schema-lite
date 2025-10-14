@@ -29,6 +29,7 @@ repos:
         files: ^src/
         additional_dependencies: [
           pytest>=7.0.0,
+          pydantic>=2.10.0,
         ]
         args: [--strict, --ignore-missing-imports]
 

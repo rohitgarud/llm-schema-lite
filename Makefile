@@ -25,7 +25,7 @@ test:  ## Run tests with pytest
 	pytest -rP -n auto --show-capture=no
 
 test-cov:  ## Run tests with coverage report
-	pytest --cov=schema_lite --cov-report=term-missing --cov-report=html
+	pytest --cov=llm_schema_lite --cov-report=term-missing --cov-report=html
 
 test-parallel:  ## Run tests in parallel (alias for test)
 	pytest -rP -n auto
@@ -68,12 +68,10 @@ changelog:  ## Generate changelog
 
 # Publishing
 publish-test:  ## Publish to Test PyPI
-	uv pip install twine
-	twine upload --repository-url https://test.pypi.org/legacy/ dist/*
+	hatch publish -r test
 
 publish:  ## Publish to PyPI
-	uv pip install twine
-	twine upload dist/*
+	hatch publish
 
 # Setup & Update
 venv:  ## Create virtual environment
