@@ -7,7 +7,144 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-LLM-ify your JSON schemas.
+Transform verbose Pydantic JSON schemas into LLM-friendly formats. Reduce token usage by **60-85%** while preserving essential type information.
+
+## 🚀 Quick Start
+
+### Basic Usage
+
+```python
+from pydantic import BaseModel
+from llm_schema_lite import simplify_schema
+
+# Define your Pydantic model
+class User(BaseModel):
+    name: str
+    age: int
+    email: str
+
+# Transform to LLM-friendly format
+schema = simplify_schema(User)
+print(schema.to_string())
+# Output: { name: string, age: int, email: string }
+```
+
+### Multiple Output Formats
+
+```python
+# JSONish format (BAML-like) - Default
+schema = simplify_schema(User)
+print(schema.to_string())
+# { name: string, age: int, email: string }
+
+# TypeScript format
+schema_ts = simplify_schema(User, format_type="typescript")
+print(schema_ts.to_string())
+# interface User { name: string; age: int; email: string; }
+
+# YAML format
+schema_yaml = simplify_schema(User, format_type="yaml")
+print(schema_yaml.to_string())
+# name: string
+# age: int
+# email: string
+```
+
+### Advanced Features
+
+```python
+from pydantic import BaseModel, Field
+
+class Product(BaseModel):
+    name: str = Field(..., description="Product name", min_length=1)
+    price: float = Field(..., ge=0, description="Price must be positive")
+    tags: list[str] = Field(default_factory=list)
+
+# Include metadata (descriptions, constraints)
+schema_with_meta = simplify_schema(Product, include_metadata=True)
+print(schema_with_meta.to_string())
+# {
+#  name: string  //Product name, minLength: 1,
+#  price: float  //Price must be positive, min: 0,
+#  tags: string[]
+# }
+
+# Exclude metadata for minimal output
+schema_minimal = simplify_schema(Product, include_metadata=False)
+print(schema_minimal.to_string())
+# {
+#  name: string,
+#  price: float,
+#  tags: string[]
+# }
+```
+
+### Nested Models
+
+```python
+class Address(BaseModel):
+    street: str
+    city: str
+    zipcode: str
+
+class Customer(BaseModel):
+    name: str
+    email: str
+    address: Address
+
+schema = simplify_schema(Customer)
+print(schema.to_string())
+# { name: string, email: string, address: { street: string, city: string, zipcode: string } }
+```
+
+### Different Output Methods
+
+```python
+schema = simplify_schema(User)
+
+# String output
+print(schema.to_string())
+
+# JSON output
+print(schema.to_json(indent=2))
+
+# Dictionary output
+print(schema.to_dict())
+
+# YAML output (if format_type="yaml")
+print(schema.to_yaml())
+```
+
+## 📊 Token Reduction
+
+Compare the token usage:
+
+```python
+import json
+from pydantic import BaseModel
+
+class User(BaseModel):
+    name: str
+    age: int
+    email: str
+
+# Original Pydantic schema (verbose)
+original_schema = User.model_json_schema()
+print("Original tokens:", len(json.dumps(original_schema)))
+
+# Simplified schema (LLM-friendly)
+simplified = simplify_schema(User)
+print("Simplified tokens:", len(simplified.to_string()))
+
+# Typical reduction: 60-85% fewer tokens!
+```
+
+## 🎯 Use Cases
+
+- **LLM Function Calling**: Reduce schema tokens in function definitions
+- **DSPy**: Optimize schema definitions for better performance
+- **LangChain**: Streamline Pydantic model schemas
+- **Raw LLM APIs**: Minimize prompt overhead with concise schemas
 
 ## Installation
 
