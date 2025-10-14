@@ -1,14 +1,14 @@
 """Basic tests for schema-lite package"""
 
-import schema_lite
+import llm_schema_lite
 
 
 def test_version():
     """Test that version is defined"""
-    assert hasattr(schema_lite, "__version__")
-    assert isinstance(schema_lite.__version__, str)
+    assert hasattr(llm_schema_lite, "__version__")
+    assert isinstance(llm_schema_lite.__version__, str)
 
 
 def test_import():
     """Test that package can be imported"""
-    assert schema_lite is not None
+    assert llm_schema_lite is not None
