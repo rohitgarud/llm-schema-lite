@@ -21,7 +21,7 @@ class TypeScriptFormatter(BaseFormatter):
         }
     """
 
-    REF_PATTERN = re.compile(r"#/\$defs/(.+)$")
+    REF_PATTERN = re.compile(r"#/\$defs/(.+)$", re.IGNORECASE)
     TYPE_MAP = {
         "string": "string",
         "integer": "number",
@@ -55,6 +55,20 @@ class TypeScriptFormatter(BaseFormatter):
         super().__init__(schema, include_metadata)
         self._ref_cache: dict[str, str] = {}
 
+        # Pre-warm cache for common patterns
+        self._warm_cache()
+
+    def _warm_cache(self) -> None:
+        """Pre-process common reference patterns."""
+        for ref_key, ref_def in self.defs.items():
+            # Only cache simple types that are NOT enums
+            if (
+                "type" in ref_def
+                and ref_def["type"] in ["string", "integer", "number", "boolean"]
+                and "enum" not in ref_def
+            ):
+                self._ref_cache[ref_key] = self.TYPE_MAP.get(ref_def["type"], ref_def["type"])
+
     def add_metadata(self, property_def: dict[str, Any]) -> str:
         """
         Generate metadata comment for a property.
@@ -68,12 +82,18 @@ class TypeScriptFormatter(BaseFormatter):
         if not self.include_metadata:
             return ""
 
-        metadata = []
-        for k, formatter in self.METADATA_MAP.items():
-            if k in property_def and not (k == "default" and property_def[k] is None):
-                metadata.append(formatter(property_def[k]))  # type: ignore[no-untyped-call]
+        # Pre-filter available metadata keys to avoid unnecessary formatting
+        available_metadata = [
+            k
+            for k in self.METADATA_MAP.keys()
+            if k in property_def and not (k == "default" and property_def[k] is None)
+        ]
+        if not available_metadata:
+            return ""
 
-        return f"  // {', '.join(metadata)}" if metadata else ""
+        # Format metadata parts
+        metadata_parts = [self.METADATA_MAP[k](property_def[k]) for k in available_metadata]  # type: ignore[no-untyped-call]
+        return f"  // {', '.join(metadata_parts)}"
 
     def process_ref(self, ref: dict[str, Any]) -> str:
         """
@@ -85,7 +105,12 @@ class TypeScriptFormatter(BaseFormatter):
         Returns:
             TypeScript type representation.
         """
-        ref_match = self.REF_PATTERN.search(ref["$ref"])
+        ref_str = ref.get("$ref", "")
+        if not ref_str:
+            return "object"
+
+        # Safely extract ref key with null check
+        ref_match = self.REF_PATTERN.search(ref_str)
         if not ref_match:
             return "object"
 
@@ -93,12 +118,15 @@ class TypeScriptFormatter(BaseFormatter):
         if ref_key in self._ref_cache:
             return self._ref_cache[ref_key]
 
-        ref_def = self.defs.get(ref_key, {})
+        # Safely get ref definition
+        ref_def = self.defs.get(ref_key)
+        if not ref_def:
+            return "object"
 
         if "enum" in ref_def:
             # Enum type - represent as union of literals
-            enum_values = " | ".join(f'"{v}"' for v in ref_def["enum"])
-            result = enum_values
+            enum_values = " | ".join(f'"{v}"' for v in ref_def.get("enum", []))
+            result = enum_values if enum_values else "string"
         elif "properties" in ref_def:
             # Nested object - for now just use the ref name
             result = ref_key
@@ -147,16 +175,19 @@ class TypeScriptFormatter(BaseFormatter):
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
         if type_str == "Array":
-            # Handle array types
-            if "items" in type_value:
-                if "type" in type_value["items"]:
-                    items_type = self.process_type_value(type_value["items"])
-                    type_str = f"{items_type}[]"
-                elif "$ref" in type_value["items"]:
-                    items_type = self.process_ref(type_value["items"])
-                    type_str = f"{items_type}[]"
-                else:
-                    type_str = "any[]"
+            # Safely handle array items
+            items = type_value.get("items")
+            if not items:
+                type_str = "any[]"  # Fallback for array without items
+            elif "type" in items:
+                items_type = self.process_type_value(items)
+                type_str = f"{items_type}[]"
+            elif "$ref" in items:
+                items_type = self.process_ref(items)
+                type_str = f"{items_type}[]"
+            elif "anyOf" in items:
+                items_type = self.process_anyof(items)
+                type_str = f"({items_type})[]"
             else:
                 type_str = "any[]"
 
@@ -245,31 +276,37 @@ class TypeScriptFormatter(BaseFormatter):
         if not self.properties:
             return "interface Schema {}"
 
+        from io import StringIO
+
         # Collect all interface definitions
         all_interfaces = []
 
         # Process nested definitions first (from $defs)
         for def_name, def_schema in self.defs.items():
             if "properties" in def_schema:
-                nested_lines = [f"interface {def_name} {{"]
+                nested_output = StringIO()
+                nested_output.write(f"interface {def_name} {{\n")
+
                 nested_props = def_schema["properties"]
                 for prop_name, prop_def in nested_props.items():
                     prop_type = self.process_property(prop_def)
                     prop_metadata = self.add_metadata(prop_def)
-                    nested_lines.append(f"  {prop_name}: {prop_type};{prop_metadata}")
+                    nested_output.write(f"  {prop_name}: {prop_type};{prop_metadata}\n")
 
-                nested_lines.append("}")
-                all_interfaces.append("\n".join(nested_lines))
+                nested_output.write("}")
+                all_interfaces.append(nested_output.getvalue())
 
         # Process main interface
-        lines = ["interface Schema {"]
+        main_output = StringIO()
+        main_output.write("interface Schema {\n")
+
         processed = self.process_properties(self.properties)
         for name, prop_info in processed.items():
             type_str = prop_info["type"]
             metadata = prop_info["metadata"]
-            lines.append(f"  {name}: {type_str};{metadata}")
+            main_output.write(f"  {name}: {type_str};{metadata}\n")
 
-        lines.append("}")
-        all_interfaces.append("\n".join(lines))
+        main_output.write("}")
+        all_interfaces.append(main_output.getvalue())
 
         return "\n\n".join(all_interfaces)

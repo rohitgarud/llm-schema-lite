@@ -19,7 +19,7 @@ class YAMLFormatter(BaseFormatter):
         tags: list[str]  # Product tags
     """
 
-    REF_PATTERN = re.compile(r"#/\$defs/(.+)$")
+    REF_PATTERN = re.compile(r"#/\$defs/(.+)$", re.IGNORECASE)
     TYPE_MAP = {
         "string": "str",
         "integer": "int",
@@ -53,6 +53,20 @@ class YAMLFormatter(BaseFormatter):
         super().__init__(schema, include_metadata)
         self._ref_cache: dict[str, str] = {}
 
+        # Pre-warm cache for common patterns
+        self._warm_cache()
+
+    def _warm_cache(self) -> None:
+        """Pre-process common reference patterns."""
+        for ref_key, ref_def in self.defs.items():
+            # Only cache simple types that are NOT enums
+            if (
+                "type" in ref_def
+                and ref_def["type"] in ["string", "integer", "number", "boolean"]
+                and "enum" not in ref_def
+            ):
+                self._ref_cache[ref_key] = self.TYPE_MAP.get(ref_def["type"], ref_def["type"])
+
     def add_metadata(self, property_def: dict[str, Any]) -> str:
         """
         Generate metadata comment for a property.
@@ -66,12 +80,18 @@ class YAMLFormatter(BaseFormatter):
         if not self.include_metadata:
             return ""
 
-        metadata = []
-        for k, formatter in self.METADATA_MAP.items():
-            if k in property_def and not (k == "default" and property_def[k] is None):
-                metadata.append(formatter(property_def[k]))  # type: ignore[no-untyped-call]
+        # Pre-filter available metadata keys to avoid unnecessary formatting
+        available_metadata = [
+            k
+            for k in self.METADATA_MAP.keys()
+            if k in property_def and not (k == "default" and property_def[k] is None)
+        ]
+        if not available_metadata:
+            return ""
 
-        return f"  # {', '.join(metadata)}" if metadata else ""
+        # Format metadata parts
+        metadata_parts = [self.METADATA_MAP[k](property_def[k]) for k in available_metadata]  # type: ignore[no-untyped-call]
+        return f"  # {', '.join(metadata_parts)}"
 
     def process_ref(self, ref: dict[str, Any]) -> str:
         """
@@ -83,7 +103,12 @@ class YAMLFormatter(BaseFormatter):
         Returns:
             YAML-style type representation.
         """
-        ref_match = self.REF_PATTERN.search(ref["$ref"])
+        ref_str = ref.get("$ref", "")
+        if not ref_str:
+            return "dict"
+
+        # Safely extract ref key with null check
+        ref_match = self.REF_PATTERN.search(ref_str)
         if not ref_match:
             return "dict"
 
@@ -91,14 +116,21 @@ class YAMLFormatter(BaseFormatter):
         if ref_key in self._ref_cache:
             return self._ref_cache[ref_key]
 
-        ref_def = self.defs.get(ref_key, {})
+        # Safely get ref definition
+        ref_def = self.defs.get(ref_key)
+        if not ref_def:
+            return "dict"
 
         if "enum" in ref_def:
             # Enum type - represent as literal union
-            enum_values = " | ".join(
-                f'"{v}"' if isinstance(v, str) else str(v) for v in ref_def["enum"]
-            )
-            result = f"Literal[{enum_values}]"
+            enum_list = ref_def.get("enum", [])
+            if not enum_list:
+                result = "str"
+            else:
+                enum_values = " | ".join(
+                    f'"{v}"' if isinstance(v, str) else str(v) for v in enum_list
+                )
+                result = f"Literal[{enum_values}]"
         elif "properties" in ref_def:
             # Nested object - use the ref name
             result = ref_key
@@ -147,19 +179,22 @@ class YAMLFormatter(BaseFormatter):
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
         if type_str == "list":
-            # Handle list types
-            if "items" in type_value:
-                if "type" in type_value["items"]:
-                    items_type = self.process_type_value(type_value["items"])
-                    type_str = f"list[{items_type}]"
-                elif "$ref" in type_value["items"]:
-                    items_type = self.process_ref(type_value["items"])
-                    type_str = f"list[{items_type}]"
-                elif "enum" in type_value["items"]:
-                    items_type = self.process_enum(type_value["items"])
-                    type_str = f"list[{items_type}]"
-                else:
-                    type_str = "list[Any]"
+            # Safely handle list items
+            items = type_value.get("items")
+            if not items:
+                type_str = "list[Any]"  # Fallback for list without items
+            elif "type" in items:
+                items_type = self.process_type_value(items)
+                type_str = f"list[{items_type}]"
+            elif "$ref" in items:
+                items_type = self.process_ref(items)
+                type_str = f"list[{items_type}]"
+            elif "enum" in items:
+                items_type = self.process_enum(items)
+                type_str = f"list[{items_type}]"
+            elif "anyOf" in items:
+                items_type = self.process_anyof(items)
+                type_str = f"list[{items_type}]"
             else:
                 type_str = "list[Any]"
 
@@ -249,39 +284,39 @@ class YAMLFormatter(BaseFormatter):
         if not self.properties:
             return "{}"
 
+        from io import StringIO
+
         all_sections = []
 
         # Process nested definitions first (from $defs)
         for def_name, def_schema in self.defs.items():
             if "properties" in def_schema:
-                nested_lines = []
+                nested_output = StringIO()
 
                 # Only add section header if metadata is included
                 if self.include_metadata:
-                    nested_lines.append(f"# {def_name}")
+                    nested_output.write(f"# {def_name}\n")
 
                 nested_props = def_schema["properties"]
 
                 for prop_name, prop_def in nested_props.items():
                     prop_type = self.process_property(prop_def)
                     prop_metadata = self.add_metadata(prop_def)
-                    nested_lines.append(f"{def_name}.{prop_name}: {prop_type}{prop_metadata}")
+                    nested_output.write(f"{def_name}.{prop_name}: {prop_type}{prop_metadata}\n")
 
-                all_sections.append("\n".join(nested_lines))
+                all_sections.append(nested_output.getvalue().rstrip())
 
         # Process main schema
-        lines = []
+        main_output = StringIO()
         processed = self.process_properties(self.properties)
 
         for name, prop_info in processed.items():
             type_str = prop_info["type"]
             metadata = prop_info["metadata"]
-
-            line = f"{name}: {type_str}{metadata}"
-            lines.append(line)
+            main_output.write(f"{name}: {type_str}{metadata}\n")
 
         if all_sections:
-            all_sections.append("\n".join(lines))
+            all_sections.append(main_output.getvalue().rstrip())
             return "\n\n".join(all_sections)
 
-        return "\n".join(lines)
+        return main_output.getvalue().rstrip()

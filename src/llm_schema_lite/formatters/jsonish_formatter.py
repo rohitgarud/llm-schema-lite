@@ -20,7 +20,7 @@ class JSONishFormatter(BaseFormatter):
         }
     """
 
-    REF_PATTERN = re.compile(r"#/\$defs/(.+)$")
+    REF_PATTERN = re.compile(r"#/\$defs/(.+)$", re.IGNORECASE)
     TYPE_MAP = {"number": "float", "integer": "int", "boolean": "bool"}
 
     METADATA_MAP = {
@@ -46,6 +46,20 @@ class JSONishFormatter(BaseFormatter):
         super().__init__(schema, include_metadata)
         self._ref_cache: dict[str, str] = {}
 
+        # Pre-warm cache for common patterns
+        self._warm_cache()
+
+    def _warm_cache(self) -> None:
+        """Pre-process common reference patterns."""
+        for ref_key, ref_def in self.defs.items():
+            # Only cache simple types that are NOT enums
+            if (
+                "type" in ref_def
+                and ref_def["type"] in ["string", "integer", "number", "boolean"]
+                and "enum" not in ref_def
+            ):
+                self._ref_cache[ref_key] = self.TYPE_MAP.get(ref_def["type"], ref_def["type"])
+
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
         Add metadata comments to a field representation.
@@ -57,15 +71,25 @@ class JSONishFormatter(BaseFormatter):
         Returns:
             Field representation with metadata comments.
         """
-        metadata = []
-        if self.include_metadata:
-            for k, formatter in self.METADATA_MAP.items():
-                if k in value and not (k == "default" and value[k] is None):
-                    metadata.append(formatter(value[k]))  # type: ignore[no-untyped-call]
-        return f"{representation}  //{', '.join(metadata)}" if metadata else representation
+        if not self.include_metadata:
+            return representation
+
+        # Pre-filter available metadata keys to avoid unnecessary formatting
+        available_metadata = [
+            k
+            for k in self.METADATA_MAP.keys()
+            if k in value and not (k == "default" and value[k] is None)
+        ]
+        if not available_metadata:
+            return representation
+
+        # Format metadata parts
+        metadata_parts = [self.METADATA_MAP[k](value[k]) for k in available_metadata]  # type: ignore[no-untyped-call]
+
+        return f"{representation}  //{', '.join(metadata_parts)}"
 
     @classmethod
-    def dict_to_string(cls, value: Any, indent: int = 1) -> str:
+    def dict_to_string_old(cls, value: Any, indent: int = 1) -> str:
         """
         Convert a dictionary or list to a formatted string representation.
 
@@ -97,6 +121,66 @@ class JSONishFormatter(BaseFormatter):
             return "[\n" + join_items(items, indent + 1) + "]"
         return str(value)  # Ensure string return type
 
+    @classmethod
+    def dict_to_string(cls, value: Any, indent: int = 1) -> str:
+        """
+        Convert a dictionary or list to a formatted string representation.
+
+        Args:
+            value: The value to convert (dict, list, or primitive).
+            indent: Current indentation level.
+
+        Returns:
+            Formatted string representation.
+        """
+        from io import StringIO
+
+        def _write_value(val: Any, current_indent: int) -> str:
+            """Recursively write value to StringIO buffer."""
+            if val is None:
+                return "null"
+            elif isinstance(val, str):
+                return val
+            elif isinstance(val, dict):
+                if not val:  # Empty dict
+                    return "{}"
+
+                output = StringIO()
+                output.write("{\n")
+
+                items = []
+                for k, v in val.items():
+                    item_indent = " " * (current_indent + 1)
+                    item_value = _write_value(v, current_indent + 1)
+                    items.append(f"{item_indent}{k}: {item_value}")
+
+                # Join items with comma and newline
+                output.write(",\n".join(items))
+                output.write(f"\n{' ' * current_indent}}}")
+                return output.getvalue()
+
+            elif isinstance(val, list):
+                if not val:  # Empty list
+                    return "[]"
+
+                output = StringIO()
+                output.write("[\n")
+
+                items = []
+                for v in val:
+                    item_indent = " " * (current_indent + 1)
+                    item_value = _write_value(v, current_indent + 1)
+                    items.append(f"{item_indent}{item_value}")
+
+                # Join items with comma and newline
+                output.write(",\n".join(items))
+                output.write(f"\n{' ' * current_indent}]")
+                return output.getvalue()
+            else:
+                return str(val)
+
+        return _write_value(value, indent)
+
     def process_ref(self, ref: dict[str, Any]) -> str:
         """
         Process a $ref reference to a definition.
@@ -107,8 +191,12 @@ class JSONishFormatter(BaseFormatter):
         Returns:
             Processed reference representation.
         """
+        ref_str: str = ref.get("$ref", "")
+        if not ref_str:
+            return "object"
+
         # Safely extract ref key with null check
-        ref_match = self.REF_PATTERN.search(ref.get("$ref", ""))
+        ref_match = self.REF_PATTERN.search(ref_str)
         if not ref_match:
             return "object"  # Fallback for invalid ref
 
@@ -154,7 +242,8 @@ class JSONishFormatter(BaseFormatter):
         type_str = (
             self.TYPE_MAP.get(enum_type, enum_type) if isinstance(enum_type, str) else "string"
         )
-        return f"{type_str} //oneOf: {', '.join(str(e) for e in enum_list)}"
+        enum_values = ", ".join(str(e) for e in enum_list)
+        return f"{type_str} //oneOf: {enum_values}"
 
     def process_type_value(self, type_value: dict[str, Any]) -> str:
         """
