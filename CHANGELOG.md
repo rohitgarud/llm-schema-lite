@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [v0.2.2](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.2.2) - 2025-10-15
+
+<small>[Compare with v0.2.1](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.1...v0.2.2)</small>
+
+### Bug Fixes
+
+- update CI workflow for codecov ([ae06ec4](https://github.com-personal/rohitgarud/llm-schema-lite/commit/ae06ec48b112d574c0181b2ee9cfb5b63d572f7d) by Rohit Garud).
+
+### Chore
+
+- update ci pipeline for codecov ([74d3abd](https://github.com-personal/rohitgarud/llm-schema-lite/commit/74d3abd745b6744fec21aec0a8c38fba42feaaa9) by Rohit Garud).
+
+### Performance Improvements
+
+- apply optimizations formatters ([736f221](https://github.com-personal/rohitgarud/llm-schema-lite/commit/736f221c55e998c5ec96602bd4bbe838d36a1cff) by Rohit Garud).
+
 ## [v0.2.1](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.2.1) - 2025-10-14
 
 <small>[Compare with v0.2.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.0...v0.2.1)</small>

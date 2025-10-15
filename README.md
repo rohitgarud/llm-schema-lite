@@ -1,6 +1,6 @@
 # llm-schema-lite
 
-[![PyPI version](https://badge.fury.io/py/llm-schema-lite.svg)](https://badge.fury.io/py/llm-schema-lite)
+[![PyPI version](https://img.shields.io/pypi/v/llm-schema-lite)](https://pypi.org/project/llm-schema-lite/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/llm-schema-lite.svg)](https://pypi.org/project/llm-schema-lite/)
 [![CI](https://github.com/rohitgarud/llm-schema-lite/workflows/CI/badge.svg)](https://github.com/rohitgarud/llm-schema-lite/actions)
 [![codecov](https://codecov.io/gh/rohitgarud/llm-schema-lite/branch/main/graph/badge.svg)](https://codecov.io/gh/rohitgarud/llm-schema-lite)
@@ -256,30 +256,6 @@ Commit message format:
 - `test:` - Test changes
 - `chore:` - Maintenance tasks
 - `perf:` - Performance improvements
-
-## Building and Publishing
-
-### Build the package
-
-```bash
-uv build
-```
-
-### Publish to PyPI
-
-```bash
-# Install twine if needed
-uv pip install twine
-
-# Upload to PyPI
-twine upload dist/*
-```
-
-### Publish to TestPyPI (for testing)
-
-```bash
-twine upload --repository-url https://test.pypi.org/legacy/ dist/*
-```
 
 ## License
 
