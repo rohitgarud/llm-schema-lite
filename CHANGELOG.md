@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [v0.3.0](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.3.0) - 2025-10-18
+
+<small>[Compare with v0.2.2](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.2...v0.3.0)</small>
+
+### Features
+
+- add DSPy integration with StructuredOutputAdapter ([0577d79](https://github.com-personal/rohitgarud/llm-schema-lite/commit/0577d790392fd0c48756a837a61655ad7757fb3f) by Rohit Garud). BREAKING CHANGES: None
+
+### Bug Fixes
+
+- CI issues ([ca15865](https://github.com-personal/rohitgarud/llm-schema-lite/commit/ca15865dbff247bd62ddc3fb748ad23d78654af0) by Rohit Garud).
+- CI issue ([1079832](https://github.com-personal/rohitgarud/llm-schema-lite/commit/107983288cddb34b5509f043d386597057164089) by Rohit Garud).
+
+### Tests
+
+- Add tests for dspy integration ([5b44d11](https://github.com-personal/rohitgarud/llm-schema-lite/commit/5b44d1115a9c909c5390c703babe2a54bf42e3b7) by Rohit Garud).
+
 ## [v0.2.2](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.2.2) - 2025-10-15
 
 <small>[Compare with v0.2.1](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.1...v0.2.2)</small>
