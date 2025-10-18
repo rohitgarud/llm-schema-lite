@@ -88,7 +88,7 @@ class SchemaLite:
             ImportError: If PyYAML is not installed.
         """
         try:
-            import yaml  # type: ignore[import-untyped]
+            import yaml
 
             return str(
                 yaml.dump(self._data, default_flow_style=default_flow_style, sort_keys=False)

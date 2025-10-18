@@ -61,6 +61,10 @@ dev = [
     "git-changelog>=2.5.0",
 ]
 
+dspy = [
+    "dspy>=3.0.3",
+]
+
 [project.urls]
 Homepage = "https://github.com/rohitgarud/llm-schema-lite"
 Repository = "https://github.com/rohitgarud/llm-schema-lite"
@@ -91,6 +95,7 @@ addopts = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
+    "asyncio: marks tests as async tests",
 ]
 
 [tool.black]
@@ -185,3 +190,8 @@ sections = ["feat", "fix", "refactor", "docs", "chore", "test", "perf"]
 template = "keepachangelog"
 versioning = "semver"
 zerover = true
+
+[dependency-groups]
+dspy = [
+    "dspy>=3.0.3",
+]
