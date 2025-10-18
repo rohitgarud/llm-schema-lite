@@ -403,7 +403,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
 
         # Use regex to find JSON object
         pattern = r"\{(?:[^{}]|(?R))*\}"
-        match = regex.search(pattern, completion, regex.DOTALL)
+        match = regex.search(pattern, completion, regex.DOTALL)  # type: ignore [assignment, unused-ignore]
         if match:
             completion = match.group(0)
 

@@ -41,6 +41,7 @@ classifiers = [
 dependencies = [
     "pydantic[email]>=2.10.0",
     "tiktoken>=0.12.0",
+    "types-regex>=2025.9.18.20250921",
 ]
 
 [project.optional-dependencies]
@@ -156,6 +157,7 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+disable_error_code = "import-untyped"
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv", "__pycache__"]
@@ -194,4 +196,5 @@ zerover = true
 [dependency-groups]
 dspy = [
     "dspy>=3.0.3",
+    "types-pyyaml>=6.0.12.20250915",
 ]
