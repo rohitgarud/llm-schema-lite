@@ -142,22 +142,70 @@ print("Simplified tokens:", len(simplified.to_string()))
 ## 🎯 Use Cases
 
 - **LLM Function Calling**: Reduce schema tokens in function definitions
-- **DSPy**: Optimize schema definitions for better performance
+- **DSPy Integration**: Native adapter for structured outputs with multiple modes
 - **LangChain**: Streamline Pydantic model schemas
 - **Raw LLM APIs**: Minimize prompt overhead with concise schemas
 
+## 🔌 DSPy Integration
+
+**NEW!** Native DSPy adapter with support for JSON, JSONish, and YAML output modes:
+
+```python
+import dspy
+from pydantic import BaseModel
+from llm_schema_lite.dspy_integration import StructuredOutputAdapter, OutputMode
+
+class Answer(BaseModel):
+    answer: str
+    confidence: float
+
+# Create adapter with JSONish mode (60-85% fewer tokens)
+adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
+
+# Configure DSPy
+lm = dspy.LM(model="openai/gpt-4")
+dspy.configure(lm=lm, adapter=adapter)
+
+# Use with any DSPy module
+class QA(dspy.Signature):
+    question: str = dspy.InputField()
+    answer: Answer = dspy.OutputField()
+
+predictor = dspy.Predict(QA)
+result = predictor(question="What is Python?")
+```
+
+**Features:**
+- 🎯 **Multiple Output Modes**: JSON, JSONish (BAML-style), and YAML
+- 📉 **60-85% Token Reduction**: With JSONish mode
+- 🔄 **Input Schema Simplification**: Automatically simplifies Pydantic input fields
+- 🛡️ **Robust Parsing**: Handles malformed outputs with automatic recovery
+- ✅ **Full Compatibility**: Works with Predict, ChainOfThought, and all DSPy modules
+
+See [DSPy Integration Guide](src/llm_schema_lite/dspy_integration/README.md) for detailed documentation.
+
 ## Installation
 
-You can install llm-schema-lite using pip:
+### Basic Installation
 
 ```bash
 pip install llm-schema-lite
 ```
 
-Or using uv:
+### With DSPy Support
 
 ```bash
+pip install "llm-schema-lite[dspy]"
+```
+
+### Using uv
+
+```bash
+# Basic
 uv pip install llm-schema-lite
+
+# With DSPy
+uv pip install "llm-schema-lite[dspy]"
 ```
 
 ## Development
