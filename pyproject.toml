@@ -41,7 +41,8 @@ classifiers = [
 dependencies = [
     "pydantic[email]>=2.10.0",
     "tiktoken>=0.12.0",
-    "types-regex>=2025.9.18.20250921",
+    "json-repair>=0.7.0",
+    "regex>=2023.0.0",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +56,8 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "bandit[toml]>=1.7.10",
+    # Type stubs for mypy
+    "types-requests>=2.32.0",
     # Git Hooks & Changelog
     "pre-commit>=4.0.0",
     "gitlint>=0.19.0",
@@ -64,6 +67,7 @@ dev = [
 
 dspy = [
     "dspy>=3.0.3",
+    "PyYAML>=6.0.0",
 ]
 
 [project.urls]
@@ -197,4 +201,5 @@ zerover = true
 dspy = [
     "dspy>=3.0.3",
     "types-pyyaml>=6.0.12.20250915",
+    "types-regex>=2025.9.18.20250921",
 ]

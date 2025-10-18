@@ -1200,9 +1200,10 @@ wheels = [
 name = "llm-schema-lite"
 source = { editable = "." }
 dependencies = [
+    { name = "json-repair" },
     { name = "pydantic", extra = ["email"] },
+    { name = "regex" },
     { name = "tiktoken" },
-    { name = "types-regex" },
 ]
 
 [package.optional-dependencies]
@@ -1218,15 +1219,18 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "types-requests" },
 ]
 dspy = [
     { name = "dspy" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
 dspy = [
     { name = "dspy" },
     { name = "types-pyyaml" },
+    { name = "types-regex" },
 ]
 
 [package.metadata]
@@ -1237,15 +1241,18 @@ requires-dist = [
     { name = "dspy", marker = "extra == 'dspy'", specifier = ">=3.0.3" },
     { name = "git-changelog", marker = "extra == 'dev'", specifier = ">=2.5.0" },
     { name = "gitlint", marker = "extra == 'dev'", specifier = ">=0.19.0" },
+    { name = "json-repair", specifier = ">=0.7.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.10.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6.0" },
+    { name = "pyyaml", marker = "extra == 'dspy'", specifier = ">=6.0.0" },
+    { name = "regex", specifier = ">=2023.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "tiktoken", specifier = ">=0.12.0" },
-    { name = "types-regex", specifier = ">=2025.9.18.20250921" },
+    { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.32.0" },
 ]
 provides-extras = ["dev", "dspy"]
 
@@ -1253,6 +1260,7 @@ provides-extras = ["dev", "dspy"]
 dspy = [
     { name = "dspy", specifier = ">=3.0.3" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20250915" },
+    { name = "types-regex", specifier = ">=2025.9.18.20250921" },
 ]
 
 [[package]]
@@ -2850,6 +2858,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/74/4a/493aa95abb5733f52740df4ffe52ed802d9305cd318e6b7bb386ff6d82f8/types_regex-2025.9.18.20250921.tar.gz", hash = "sha256:e1700c21b1c31290e4a6dd62584ed1f1d69d704ed1676b68a8eda2d1d2420c3f", size = 12438, upload-time = "2025-09-21T03:01:00.503Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/52/1f/5b26a2ef84b0a98a43eae46fb1c4bbb2928ead4397d22153685e6304d090/types_regex-2025.9.18.20250921-py3-none-any.whl", hash = "sha256:7bd96178829f4499be9109ce7e8bf7bd8e00d06f6e51c5a33213599eb94e3ec1", size = 10358, upload-time = "2025-09-21T03:00:59.293Z" },
+]
+
+[[package]]
+name = "types-requests"
+version = "2.32.4.20250913"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/36/27/489922f4505975b11de2b5ad07b4fe1dca0bca9be81a703f26c5f3acfce5/types_requests-2.32.4.20250913.tar.gz", hash = "sha256:abd6d4f9ce3a9383f269775a9835a4c24e5cd6b9f647d64f88aa4613c33def5d", size = 23113, upload-time = "2025-09-13T02:40:02.309Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/20/9a227ea57c1285986c4cf78400d0a91615d25b24e257fd9e2969606bdfae/types_requests-2.32.4.20250913-py3-none-any.whl", hash = "sha256:78c9c1fffebbe0fa487a418e0fa5252017e9c60d1a2da394077f1780f655d7e1", size = 20658, upload-time = "2025-09-13T02:40:01.115Z" },
 ]
 
 [[package]]

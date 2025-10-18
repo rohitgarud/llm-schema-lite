@@ -358,7 +358,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             import yaml
 
             serialized = serialize_for_json(data)
-            return yaml.dump(serialized, default_flow_style=False, allow_unicode=True)
+            return yaml.dump(serialized, default_flow_style=False, allow_unicode=True)  # type: ignore[no-any-return, unused-ignore]
         except ImportError:
             logger.warning("PyYAML not installed, falling back to JSON-like YAML")
             # Fallback to your current implementation
