@@ -179,15 +179,15 @@ class SchemaLite:
 
 
 def simplify_schema(
-    model: type["BaseModel"] | dict[str, Any],
+    model: type["BaseModel"] | dict[str, Any] | str,
     include_metadata: bool = True,
     format_type: Literal["jsonish", "typescript", "yaml"] = "jsonish",
 ) -> SchemaLite:
     """
-    Convert Pydantic model to simplified schema.
+    Convert Pydantic model, JSON schema dict, or JSON schema string to simplified schema.
 
     Args:
-        model: Pydantic BaseModel class or JSON schema dict.
+        model: Pydantic BaseModel class, JSON schema dict, or JSON schema string.
         include_metadata: Include validation rules as inline comments.
         format_type: Output format preference:
             - 'jsonish': JSONish/BAML-like format with inline comments (default)
@@ -217,6 +217,30 @@ def simplify_schema(
          age: int
         }
 
+        >>> # From JSON schema dict
+        >>> schema_dict = {
+        ...     "type": "object",
+        ...     "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}
+        ... }
+        >>> schema = simplify_schema(schema_dict)
+        >>> print(schema.to_string())
+        {
+         name: string,
+         age: int
+        }
+
+        >>> # From JSON schema string
+        >>> schema_string = (
+        ...     '{"type": "object", "properties": {"name": {"type": "string"}, '
+        ...     '"age": {"type": "integer"}}}'
+        ... )
+        >>> schema = simplify_schema(schema_string)
+        >>> print(schema.to_string())
+        {
+         name: string,
+         age: int
+        }
+
         >>> # TypeScript format
         >>> ts_schema = simplify_schema(User, format_type="typescript")
         >>> print(ts_schema.to_string())
@@ -240,9 +264,15 @@ def simplify_schema(
     # Handle dict (already a JSON schema)
     elif isinstance(model, dict):
         original_schema = model
+    # Handle string (JSON schema string)
+    elif isinstance(model, str):
+        try:
+            original_schema = json.loads(model)
+        except json.JSONDecodeError as e:
+            raise ConversionError(f"Failed to parse JSON schema string: {e}") from e
     else:
         raise UnsupportedModelError(
-            f"Unsupported model type: {type(model)}. Expected Pydantic BaseModel or dict."
+            f"Unsupported model type: {type(model)}. Expected Pydantic BaseModel, dict, or str."
         )
 
     # Select formatter based on format_type
