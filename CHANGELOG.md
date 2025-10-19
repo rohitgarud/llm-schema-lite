@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [v0.4.0](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.4.0) - 2025-10-19
+
+<small>[Compare with v0.3.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.3.0...v0.4.0)</small>
+
+### Features
+
+- add robust loads() function for unified JSON/YAML parsing ([0cb5f2b](https://github.com-personal/rohitgarud/llm-schema-lite/commit/0cb5f2b8285e59a6697e5488e3fc24919210419e) by Rohit Garud).
+
+### Bug Fixes
+
+- Mypy issues ([b907784](https://github.com-personal/rohitgarud/llm-schema-lite/commit/b907784b62c7289d57487312e7baf68c9b6f22de) by Rohit Garud).
+
 ## [v0.3.0](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.3.0) - 2025-10-18
 
 <small>[Compare with v0.2.2](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.2...v0.3.0)</small>
