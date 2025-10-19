@@ -1202,6 +1202,7 @@ source = { editable = "." }
 dependencies = [
     { name = "json-repair" },
     { name = "pydantic", extra = ["email"] },
+    { name = "pyyaml" },
     { name = "regex" },
     { name = "tiktoken" },
 ]
@@ -1223,7 +1224,6 @@ dev = [
 ]
 dspy = [
     { name = "dspy" },
-    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -1248,7 +1248,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6.0" },
-    { name = "pyyaml", marker = "extra == 'dspy'", specifier = ">=6.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "regex", specifier = ">=2023.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "tiktoken", specifier = ">=0.12.0" },

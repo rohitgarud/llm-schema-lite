@@ -12,7 +12,7 @@ except ImportError:
 try:
     import json_repair
 except ImportError:
-    json_repair = None
+    json_repair = None  # type: ignore[assignment, unused-ignore]
 
 try:
     from pydantic import BaseModel

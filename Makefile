@@ -37,6 +37,9 @@ test-slow:  ## Run only slow tests
 	pytest -m slow -rP
 
 # Code Quality
+pre-commit-run:  ## Run pre-commit on all files
+	pre-commit run --all-files
+
 check:  ## Quick health check (fast lint + type check)
 	ruff check src tests
 	mypy src --no-error-summary
@@ -45,13 +48,13 @@ lint:  ## Run all linters (ruff, mypy, bandit)
 	ruff check src tests
 	mypy src
 	bandit -c pyproject.toml -r src
+	pre-commit run --all-files
 
 format:  ## Format code with ruff
 	ruff format src tests
 	ruff check --fix src tests
 
-pre-commit-run:  ## Run pre-commit on all files
-	pre-commit run --all-files
+
 
 # Maintenance
 clean:  ## Clean build artifacts and cache files
