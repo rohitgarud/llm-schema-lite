@@ -173,8 +173,8 @@ class TestDictHandling:
         # YAML
         yaml = simplify_schema(Model, format_type="yaml", include_metadata=False)
         output_y = yaml.to_string()
-        assert "metadata: dict" in output_y
-        assert "settings: dict" in output_y
+        assert "metadata: object" in output_y
+        assert "settings: object" in output_y
 
     def test_dict_with_types(self):
         """Test Dict with type parameters."""
@@ -261,8 +261,8 @@ class TestEnumAndDictCombined:
         # Enums should be Literal
         assert "Literal[" in output_y
 
-        # Dicts should be dict
-        assert "dict" in output_y
+        # Dicts should be object
+        assert "object" in output_y
 
     def test_nested_with_enums(self):
         """Test nested models with enums."""

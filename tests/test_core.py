@@ -5,9 +5,10 @@ import json
 import pytest
 
 from llm_schema_lite import SchemaLite, simplify_schema
-from llm_schema_lite.exceptions import UnsupportedModelError
+from llm_schema_lite.exceptions import ConversionError, UnsupportedModelError
 
-from .fixtures import Order, SimpleUser, User
+# Import models from conftest (fixtures are auto-discovered but models need explicit import)
+from .conftest import Order, SimpleUser, User
 
 
 class TestSimplifySchema:
@@ -24,10 +25,295 @@ class TestSimplifySchema:
         schema = simplify_schema(schema_dict)
         assert isinstance(schema, SchemaLite)
 
+    def test_with_string_schema(self):
+        """Test simplify_schema with JSON schema string."""
+        schema_string = (
+            '{"type": "object", "properties": {"name": {"type": "string"}, '
+            '"age": {"type": "integer"}}}'
+        )
+        schema = simplify_schema(schema_string)
+        assert isinstance(schema, SchemaLite)
+
+        # Test that it produces the same output as dict version
+        schema_dict = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+        }
+        schema_from_dict = simplify_schema(schema_dict)
+        assert schema.to_string() == schema_from_dict.to_string()
+
+    def test_with_invalid_string_schema(self):
+        """Test simplify_schema with invalid JSON string."""
+        with pytest.raises(ConversionError):
+            simplify_schema('{"invalid": json}')  # Invalid JSON
+
+    def test_string_schema_with_all_formats(self):
+        """Test string schema with all format types."""
+        schema_string = (
+            '{"type": "object", "properties": {"name": {"type": "string"}, '
+            '"age": {"type": "integer"}}}'
+        )
+
+        # JSONish format
+        schema_jsonish = simplify_schema(schema_string, format_type="jsonish")
+        assert "{" in schema_jsonish.to_string()
+
+        # TypeScript format
+        schema_ts = simplify_schema(schema_string, format_type="typescript")
+        assert "interface Schema {" in schema_ts.to_string()
+
+        # YAML format
+        schema_yaml = simplify_schema(schema_string, format_type="yaml")
+        output = schema_yaml.to_string()
+        assert "{" not in output and "interface" not in output
+
+    def test_string_schema_with_metadata(self):
+        """Test string schema with metadata handling."""
+        schema_string = (
+            '{"type": "object", "properties": {"name": {"type": "string", '
+            '"minLength": 1, "description": "User name"}}}'
+        )
+
+        # With metadata
+        schema_with = simplify_schema(schema_string, include_metadata=True)
+        output_with = schema_with.to_string()
+        assert "//" in output_with
+
+        # Without metadata
+        schema_without = simplify_schema(schema_string, include_metadata=False)
+        output_without = schema_without.to_string()
+        assert len(output_with) > len(output_without)
+
+    def test_string_schema_complex(self):
+        """Test string schema with complex nested structure."""
+        schema_string = """{
+            "type": "object",
+            "properties": {
+                "user": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "age": {"type": "integer"}
+                    }
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                }
+            }
+        }"""
+
+        schema = simplify_schema(schema_string)
+        output = schema.to_string()
+        assert "user:" in output
+        assert "items:" in output
+
+    def test_string_schema_with_array_types(self):
+        """Test string schema with array types (union types like ['string', 'null'])."""
+        schema_string = """{
+            "type": "object",
+            "properties": {
+                "name": {"type": ["string", "null"]},
+                "age": {"type": ["integer", "null"]},
+                "email": {"type": "string"}
+            }
+        }"""
+
+        schema = simplify_schema(schema_string)
+        output = schema.to_string()
+        assert "name:" in output
+        assert "age:" in output
+        assert "email:" in output
+        # Should handle nullable types properly
+        assert "string?" in output or "int?" in output
+
+    def test_string_schema_with_boolean_in_anyof(self):
+        """Test string schema with boolean values in anyOf/oneOf arrays."""
+        schema_string = """{
+            "type": "object",
+            "properties": {
+                "field1": {
+                    "anyOf": [
+                        {"type": "string"},
+                        true,
+                        {"type": "integer"}
+                    ]
+                },
+                "field2": {
+                    "oneOf": [
+                        {"type": "string"},
+                        false,
+                        {"type": "boolean"}
+                    ]
+                }
+            }
+        }"""
+
+        schema = simplify_schema(schema_string)
+        output = schema.to_string()
+        assert "field1:" in output
+        assert "field2:" in output
+        # Should handle boolean values gracefully without crashing
+        assert "string" in output
+
+    def test_string_schema_with_boolean_property_values(self):
+        """Test string schema with boolean property values (not just boolean types)."""
+        schema_string = """{
+            "type": "object",
+            "properties": {
+                "enabled": true,
+                "disabled": false,
+                "name": "test",
+                "count": 42,
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "active": true
+                    }
+                }
+            }
+        }"""
+
+        schema = simplify_schema(schema_string)
+        output = schema.to_string()
+        assert "enabled:" in output
+        assert "disabled:" in output
+        assert "name:" in output
+        assert "count:" in output
+        assert "config:" in output
+        # Should handle boolean property values as "bool"
+        assert "bool" in output
+
+    def test_string_schema_with_single_element_type_array(self):
+        """Test string schema with single-element type arrays."""
+        schema_string = """{
+            "type": "object",
+            "properties": {
+                "field1": {"type": ["string"]},
+                "field2": {"type": ["integer"]},
+                "field3": {"type": ["array"], "items": {"type": "string"}}
+            }
+        }"""
+
+        schema = simplify_schema(schema_string)
+        output = schema.to_string()
+        assert "field1:" in output
+        assert "field2:" in output
+        assert "field3:" in output
+        # Should handle single-element arrays correctly
+        assert "string" in output
+        assert "int" in output
+        assert "string[]" in output
+
+    def test_string_schema_with_enum_single_element_type_array(self):
+        """Test string schema with enum and single-element type arrays."""
+        schema_string = """{
+            "type": "object",
+            "properties": {
+                "field1": {"type": ["boolean"], "enum": [true, false]},
+                "field2": {"type": ["string"], "enum": ["option1", "option2"]},
+                "field3": {"type": ["boolean"], "enum": [false]}
+            }
+        }"""
+
+        schema = simplify_schema(schema_string)
+        output = schema.to_string()
+        assert "field1:" in output
+        assert "field2:" in output
+        assert "field3:" in output
+        # Should handle enum with single-element type arrays correctly
+        assert "bool" in output
+        assert "string" in output
+        assert "oneOf:" in output
+
+    def test_string_schema_with_circular_references(self):
+        """Test string schema with circular references to prevent infinite recursion."""
+        schema_string = """{
+            "type": "object",
+            "properties": {
+                "block": {
+                    "type": "array",
+                    "items": {
+                        "anyOf": [
+                            {"$ref": "#/definitions/task"},
+                            {"$ref": "#/definitions/block"}
+                        ]
+                    }
+                }
+            },
+            "definitions": {
+                "task": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "block": {
+                            "type": "array",
+                            "items": {
+                                "anyOf": [
+                                    {"$ref": "#/definitions/task"},
+                                    {"$ref": "#/definitions/block"}
+                                ]
+                            }
+                        }
+                    }
+                },
+                "block": {
+                    "type": "object",
+                    "properties": {
+                        "block": {
+                            "type": "array",
+                            "items": {
+                                "anyOf": [
+                                    {"$ref": "#/definitions/task"},
+                                    {"$ref": "#/definitions/block"}
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        }"""
+
+        schema = simplify_schema(schema_string)
+        output = schema.to_string()
+        assert "block:" in output
+        # Should handle circular references without crashing
+        assert "[" in output
+
+    def test_string_schema_with_boolean_items(self):
+        """Test string schema with boolean items values in arrays."""
+        schema_string = """{
+            "type": "object",
+            "properties": {
+                "field1": {
+                    "items": true,
+                    "type": "array"
+                },
+                "field2": {
+                    "items": false,
+                    "type": "array"
+                },
+                "field3": {
+                    "items": true,
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "type": "array"
+                }
+            }
+        }"""
+
+        schema = simplify_schema(schema_string)
+        output = schema.to_string()
+        assert "field1:" in output
+        assert "field2:" in output
+        assert "field3:" in output
+        # Should handle boolean items without crashing
+        assert "array" in output
+
     def test_unsupported_input(self):
         """Test simplify_schema with unsupported input."""
         with pytest.raises(UnsupportedModelError):
-            simplify_schema("invalid_input")  # type: ignore
+            simplify_schema(123)  # type: ignore
 
     def test_format_types(self):
         """Test all supported format types."""
