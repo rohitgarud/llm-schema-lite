@@ -19,6 +19,8 @@ try:
     import dspy
     from dspy.utils.exceptions import AdapterParseError
 
+    from llm_schema_lite.exceptions import ConversionError
+
     DSPY_AVAILABLE = True
 except ImportError:
     DSPY_AVAILABLE = False
@@ -456,7 +458,7 @@ class TestErrorHandling:
 
         completion = "This is not JSON at all"
 
-        with pytest.raises((AdapterParseError, ValueError)):
+        with pytest.raises((AdapterParseError, ValueError, ConversionError)):
             adapter._parse_json(SimpleQA, completion)
 
     def test_non_dict_json_raises_error(self):

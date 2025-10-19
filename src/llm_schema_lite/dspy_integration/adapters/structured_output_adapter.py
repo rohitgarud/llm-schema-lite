@@ -2,12 +2,9 @@ import enum
 import inspect
 import json
 import logging
-import re
 from typing import Any, Literal, get_origin
 
-import json_repair
 import pydantic
-import regex
 from dspy.adapters.chat_adapter import FieldInfoWithName
 from dspy.adapters.json_adapter import JSONAdapter
 from dspy.adapters.types.tool import ToolCalls
@@ -26,7 +23,7 @@ from pydantic import TypeAdapter
 from pydantic.fields import FieldInfo
 
 # Import your schema-lite formatters
-from llm_schema_lite import simplify_schema
+from llm_schema_lite import loads, simplify_schema
 
 logger = logging.getLogger(__name__)
 
@@ -395,20 +392,9 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
 
     def _parse_json(self, signature: type[Signature], completion: str) -> dict[str, Any]:
         """Parse JSON completion (used for both JSON and JSONish modes)."""
-        # Extract JSON from markdown code blocks if present
-        if "```json" in completion:
-            match = re.search(r"```json(.*?)```", completion, re.DOTALL)
-            if match:
-                completion = match.group(1).strip()
-
-        # Use regex to find JSON object
-        pattern = r"\{(?:[^{}]|(?R))*\}"
-        match = regex.search(pattern, completion, regex.DOTALL)  # type: ignore [assignment, unused-ignore]
-        if match:
-            completion = match.group(0)
-
-        # Parse with json_repair for robustness
-        fields = json_repair.loads(completion)
+        # Parse with llm-schema-lite for robustness
+        # (includes markdown extraction and JSON object extraction)
+        fields = loads(completion, mode="json")
 
         if not isinstance(fields, dict):
             raise AdapterParseError(
@@ -443,32 +429,8 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         Convert YAML to dict then process normally.
         """
         try:
-            import yaml
-        except ImportError:
-            logger.warning("PyYAML not installed, falling back to JSON parsing")
-            return self._parse_json(signature, completion)
-
-        try:
-            # Extract YAML from markdown code blocks if present
-            if "```yaml" in completion or "```yml" in completion:
-                match = re.search(r"```ya?ml(.*?)```", completion, re.DOTALL)
-                if match:
-                    completion = match.group(1).strip()
-
-            # Try to find YAML-like structure if no code blocks
-            # YAML typically starts with a key at the beginning of a line
-            lines = completion.split("\n")
-            yaml_start = None
-            for i, line in enumerate(lines):
-                if line.strip() and ":" in line and not line.strip().startswith("#"):
-                    yaml_start = i
-                    break
-
-            if yaml_start is not None:
-                completion = "\n".join(lines[yaml_start:])
-
-            # Try to parse as YAML
-            fields = yaml.safe_load(completion)
+            # Use llm-schema-lite for robust YAML parsing with markdown extraction
+            fields = loads(completion, mode="yaml")
 
             if not isinstance(fields, dict):
                 raise ValueError("YAML did not parse to a dictionary")

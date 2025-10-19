@@ -1,7 +1,18 @@
 """Core API for schema-lite."""
 
 import json
+import re
 from typing import Any, Literal
+
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore[assignment]
+
+try:
+    import json_repair
+except ImportError:
+    json_repair = None
 
 try:
     from pydantic import BaseModel
@@ -258,3 +269,214 @@ def simplify_schema(
         )
     except Exception as e:
         raise ConversionError(f"Failed to convert schema: {e}") from e
+
+
+def loads(
+    text: str,
+    mode: Literal["json", "yaml"] = "json",
+    repair: bool = True,
+    extract_from_markdown: bool = True,
+) -> dict[str, Any]:
+    """
+    Parse structured text (JSON or YAML) with robust error handling and repair capabilities.
+
+    This function provides a unified interface for parsing JSON and YAML content with
+    automatic repair, markdown extraction, and fallback mechanisms.
+
+    Args:
+        text: The text content to parse
+        mode: The parsing mode - "json" or "yaml"
+        repair: Whether to attempt repair for malformed content
+        extract_from_markdown: Whether to extract content from markdown code blocks
+
+    Returns:
+        Parsed dictionary content
+
+    Raises:
+        ConversionError: If parsing fails and repair is disabled or unsuccessful
+
+    Examples:
+        >>> # Parse JSON with repair
+        >>> data = loads('{"name": "John", "age": 30}', mode="json")
+
+        >>> # Parse YAML with markdown extraction
+        >>> data = loads('```yaml\\nname: John\\nage: 30\\n```', mode="yaml")
+
+        >>> # Parse with repair disabled
+        >>> data = loads('{"name": "John"}', mode="json", repair=False)
+    """
+    if not text or not text.strip():
+        raise ConversionError("Empty or whitespace-only text provided")
+
+    # Extract from markdown code blocks if requested
+    if extract_from_markdown:
+        text = _extract_from_markdown(text, mode)
+
+    # Clean and prepare text
+    text = text.strip()
+
+    if mode == "json":
+        return _parse_json(text, repair, extract_from_markdown)
+    elif mode == "yaml":
+        return _parse_yaml(text, repair)
+    else:
+        raise ConversionError(f"Unsupported mode: {mode}. Supported modes: 'json', 'yaml'")
+
+
+def _extract_from_markdown(text: str, mode: str) -> str:
+    """Extract content from markdown code blocks."""
+    if mode == "json":
+        # Look for ```json code blocks
+        match = re.search(r"```json(.*?)```", text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    elif mode == "yaml":
+        # Look for ```yaml or ```yml code blocks
+        match = re.search(r"```ya?ml(.*?)```", text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+    return text
+
+
+def _extract_json_object(text: str) -> str:
+    """Extract JSON object from text using brace counting."""
+    # Look for JSON object pattern - find the first complete JSON object
+    # This handles cases where JSON is embedded in other text
+    # Use a simpler approach: find the first { and then find the matching }
+    start = text.find("{")
+    if start == -1:
+        return text
+
+    # Count braces to find the matching closing brace
+    brace_count = 0
+    for i, char in enumerate(text[start:], start):
+        if char == "{":
+            brace_count += 1
+        elif char == "}":
+            brace_count -= 1
+            if brace_count == 0:
+                return text[start : i + 1]
+
+    # If no matching brace found, return the original text
+    return text
+
+
+def _parse_json(text: str, repair: bool, extract_from_markdown: bool = True) -> dict[str, Any]:
+    """Parse JSON text with optional repair."""
+    # Only extract JSON object if markdown extraction was disabled AND
+    # the text doesn't look like markdown code blocks
+    if not extract_from_markdown and not text.strip().startswith("```"):
+        extracted_text = _extract_json_object(text)
+    else:
+        extracted_text = text
+
+    try:
+        # Try standard JSON parsing first
+        return json.loads(extracted_text)  # type: ignore[no-any-return]
+    except json.JSONDecodeError as e:
+        if not repair or json_repair is None:
+            raise ConversionError(f"Failed to parse JSON: {extracted_text[:100]}...") from e
+
+        try:
+            # Try json_repair for malformed JSON
+            repaired = json_repair.repair_json(extracted_text)
+            return json.loads(repaired)  # type: ignore[no-any-return]
+        except Exception as e:
+            raise ConversionError(f"Failed to repair and parse JSON: {e}") from e
+
+
+def _parse_yaml(text: str, repair: bool) -> dict[str, Any]:
+    """Parse YAML text with optional repair."""
+    if yaml is None:
+        # Fallback to JSON parsing if PyYAML is not available
+        try:
+            return _parse_json(text, repair)
+        except ConversionError as e:
+            raise ConversionError("PyYAML not available and JSON fallback failed") from e
+
+    try:
+        # Try YAML parsing
+        parsed = yaml.safe_load(text)
+        if not isinstance(parsed, dict):
+            raise ConversionError("YAML content did not parse to a dictionary")
+        return parsed
+    except yaml.YAMLError as e:
+        if not repair:
+            raise ConversionError(f"Failed to parse YAML: {e}") from e
+
+        # Try to find YAML-like structure if parsing fails
+        try:
+            # First, try to fix common indentation issues
+            lines = text.split("\n")
+
+            # Find the minimum indentation (excluding empty lines)
+            min_indent = float("inf")
+            for line in lines:
+                if line.strip() and not line.strip().startswith("#"):
+                    indent = len(line) - len(line.lstrip())
+                    if indent > 0:
+                        min_indent = min(min_indent, indent)
+
+            # If we found a minimum indentation, normalize it
+            if min_indent != float("inf") and min_indent > 0:
+                normalized_lines = []
+                for line in lines:
+                    if line.strip() and not line.strip().startswith("#"):
+                        # Remove the common indentation
+                        if line.startswith(" " * int(min_indent)):
+                            normalized_lines.append(line[int(min_indent) :])
+                        else:
+                            normalized_lines.append(line)
+                    else:
+                        normalized_lines.append(line)
+
+                try:
+                    normalized_text = "\n".join(normalized_lines)
+                    parsed = yaml.safe_load(normalized_text)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except yaml.YAMLError:
+                    pass
+
+            # Look for key-value pairs at the start of lines
+            yaml_start = None
+            for i, line in enumerate(lines):
+                if line.strip() and ":" in line and not line.strip().startswith("#"):
+                    yaml_start = i
+                    break
+
+            if yaml_start is not None:
+                cleaned_text = "\n".join(lines[yaml_start:])
+                parsed = yaml.safe_load(cleaned_text)
+                if isinstance(parsed, dict):
+                    return parsed
+
+            # Try to convert simple key-value pairs to proper YAML format
+            if ":" in text and not text.strip().startswith("{"):
+                try:
+                    # Convert simple key: value format to proper YAML
+                    lines = text.strip().split("\n")
+                    yaml_lines = []
+                    for line in lines:
+                        if ":" in line and not line.strip().startswith("#"):
+                            # Ensure proper indentation
+                            if not line.startswith(" "):
+                                yaml_lines.append(line)
+                            else:
+                                yaml_lines.append(line)
+
+                    if yaml_lines:
+                        yaml_text = "\n".join(yaml_lines)
+                        parsed = yaml.safe_load(yaml_text)
+                        if isinstance(parsed, dict):
+                            return parsed
+                except Exception:
+                    pass
+
+            # Final fallback: try JSON parsing
+            return _parse_json(text, repair)
+        except Exception as fallback_error:
+            raise ConversionError(
+                f"Failed to parse YAML with repair: {fallback_error}"
+            ) from fallback_error

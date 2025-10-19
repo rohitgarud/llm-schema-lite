@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-Transform verbose Pydantic JSON schemas into LLM-friendly formats. Reduce token usage by **60-85%** while preserving essential type information.
+Transform verbose Pydantic JSON schemas into LLM-friendly formats. Reduce token usage by **60-85%** while preserving essential type information. Includes robust JSON/YAML parsing with automatic error recovery.
 
 ## 🚀 Quick Start
 
@@ -15,7 +15,7 @@ Transform verbose Pydantic JSON schemas into LLM-friendly formats. Reduce token 
 
 ```python
 from pydantic import BaseModel
-from llm_schema_lite import simplify_schema
+from llm_schema_lite import simplify_schema, loads
 
 # Define your Pydantic model
 class User(BaseModel):
@@ -27,6 +27,10 @@ class User(BaseModel):
 schema = simplify_schema(User)
 print(schema.to_string())
 # Output: { name: string, age: int, email: string }
+
+# Parse JSON/YAML with robust error handling
+json_data = loads('{"name": "John", "age": 30}', mode="json")
+yaml_data = loads('name: Jane\nage: 25', mode="yaml")
 ```
 
 ### Multiple Output Formats
@@ -145,6 +149,8 @@ print("Simplified tokens:", len(simplified.to_string()))
 - **DSPy Integration**: Native adapter for structured outputs with multiple modes
 - **LangChain**: Streamline Pydantic model schemas
 - **Raw LLM APIs**: Minimize prompt overhead with concise schemas
+- **Robust Parsing**: Parse malformed JSON/YAML from LLM responses with automatic repair
+- **Data Extraction**: Extract structured data from mixed text content and markdown
 
 ## 🔌 DSPy Integration
 
@@ -183,6 +189,154 @@ result = predictor(question="What is Python?")
 - ✅ **Full Compatibility**: Works with Predict, ChainOfThought, and all DSPy modules
 
 See [DSPy Integration Guide](src/llm_schema_lite/dspy_integration/README.md) for detailed documentation.
+
+## 🔧 Robust Parsing with `loads`
+
+**NEW!** The `loads` function provides unified, robust parsing for JSON and YAML content with automatic error recovery and markdown extraction.
+
+### Basic Usage
+
+```python
+from llm_schema_lite import loads
+
+# Parse JSON
+data = loads('{"name": "John", "age": 30}', mode="json")
+print(data)  # {'name': 'John', 'age': 30}
+
+# Parse YAML
+data = loads('name: Jane\nage: 25', mode="yaml")
+print(data)  # {'name': 'Jane', 'age': 25}
+```
+
+### Markdown Extraction
+
+Automatically extracts content from markdown code blocks:
+
+```python
+# JSON from markdown
+markdown_json = '''```json
+{"name": "Alice", "age": 28}
+```'''
+data = loads(markdown_json, mode="json")
+print(data)  # {'name': 'Alice', 'age': 28}
+
+# YAML from markdown
+markdown_yaml = '''```yaml
+name: Bob
+age: 32
+```'''
+data = loads(markdown_yaml, mode="yaml")
+print(data)  # {'name': 'Bob', 'age': 32}
+```
+
+### JSON Object Extraction
+
+Extracts JSON objects from embedded text when markdown extraction is disabled:
+
+```python
+# Extract JSON from mixed content
+text = 'Here is the result: {"name": "Charlie", "age": 35} and some other text'
+data = loads(text, mode="json", extract_from_markdown=False)
+print(data)  # {'name': 'Charlie', 'age': 35}
+
+# Multiple JSON objects - extracts the first one
+multiple = 'First: {"a": 1} Second: {"b": 2}'
+data = loads(multiple, mode="json", extract_from_markdown=False)
+print(data)  # {'a': 1}
+```
+
+### Error Recovery and Repair
+
+Handles malformed JSON with automatic repair:
+
+```python
+# Malformed JSON with trailing comma
+malformed = '{"name": "David", "age": 40,}'
+data = loads(malformed, mode="json")
+print(data)  # {'name': 'David', 'age': 40}
+
+# Missing quotes
+missing_quotes = '{name: "Eve", age: 22}'
+data = loads(missing_quotes, mode="json")
+print(data)  # {'name': 'Eve', 'age': 22}
+
+# Disable repair to get errors
+try:
+    loads(malformed, mode="json", repair=False)
+except ConversionError as e:
+    print(f"Parse error: {e}")
+```
+
+### YAML Fallback
+
+YAML parsing automatically falls back to JSON when YAML parsing fails:
+
+```python
+# YAML that looks like JSON
+yaml_like_json = '{"name": "Frank", "age": 45}'
+data = loads(yaml_like_json, mode="yaml")
+print(data)  # {'name': 'Frank', 'age': 45}
+```
+
+### Advanced Features
+
+```python
+# Complex nested structures
+complex_json = '''```json
+{
+  "user": {
+    "name": "Grace",
+    "details": {
+      "age": 30,
+      "city": "NYC"
+    }
+  }
+}
+```'''
+data = loads(complex_json, mode="json")
+print(data['user']['details']['city'])  # NYC
+
+# Arrays and special values
+array_json = '{"items": ["apple", "banana"], "active": true, "data": null}'
+data = loads(array_json, mode="json")
+print(data)  # {'items': ['apple', 'banana'], 'active': True, 'data': None}
+
+# YAML with comments
+yaml_with_comments = '''# User information
+name: Henry  # Full name
+age: 35
+# Contact details
+email: henry@example.com'''
+data = loads(yaml_with_comments, mode="yaml")
+print(data)  # {'name': 'Henry', 'age': 35, 'email': 'henry@example.com'}
+```
+
+### Error Handling
+
+```python
+from llm_schema_lite import loads, ConversionError
+
+try:
+    # This will raise ConversionError
+    data = loads('This is not JSON at all', mode="json", repair=False)
+except ConversionError as e:
+    print(f"Failed to parse: {e}")
+
+# With repair enabled (default), it will attempt to fix the content
+try:
+    data = loads('This is not JSON at all', mode="json")
+    # This might still fail, but will try json_repair first
+except ConversionError as e:
+    print(f"Even repair failed: {e}")
+```
+
+### Use Cases
+
+- **LLM Output Parsing**: Robustly parse JSON/YAML from LLM responses
+- **API Response Handling**: Handle malformed or embedded JSON/YAML
+- **Data Extraction**: Extract structured data from mixed text content
+- **Error Recovery**: Automatically repair common JSON/YAML issues
+- **Markdown Processing**: Extract code blocks from documentation or responses
 
 ## Installation
 
