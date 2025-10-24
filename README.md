@@ -27,6 +27,10 @@ Transform verbose Pydantic JSON schemas into LLM-friendly formats. Reduce token 
   - [Error Recovery](#error-recovery-and-repair)
   - [YAML Support](#yaml-support)
 - [DSPy Integration](#-dspy-integration)
+- [Schema Validation](#-schema-validation)
+  - [Basic Validation](#basic-validation)
+  - [Multiple Error Collection](#multiple-error-collection)
+  - [YAML Validation](#yaml-validation)
 - [Token Reduction](#-token-reduction)
 - [Use Cases](#-use-cases)
 - [API Reference](#-api-reference)
@@ -41,13 +45,14 @@ Transform verbose Pydantic JSON schemas into LLM-friendly formats. Reduce token 
 - 🎯 **60-85% Token Reduction** - Dramatically reduce schema tokens for LLM prompts
 - 🔄 **Multiple Output Formats** - JSON, JSONish (BAML-style), TypeScript, YAML
 - 🛡️ **Robust Parsing** - Parse malformed JSON/YAML with automatic repair
+- ✅ **Schema Validation** - Validate data with comprehensive error messages for LLM feedback
 - 📦 **Flexible Input** - Works with Pydantic models, JSON schema dicts, or strings
 - 🔌 **DSPy Integration** - Native adapter for structured outputs
 - 📝 **Markdown Extraction** - Extract code blocks from LLM responses
 - ⚡ **Fast & Lightweight** - Minimal dependencies, maximum performance
 - 🎨 **Metadata Control** - Include/exclude descriptions and constraints
 - 🔍 **Type Preservation** - Maintains essential type information
-- ✅ **Fully Typed** - Complete type hints for better IDE support
+- 💯 **Fully Typed** - Complete type hints for better IDE support
 
 ---
 
@@ -547,6 +552,175 @@ For detailed documentation, see the [DSPy Integration Guide](src/llm_schema_lite
 
 ---
 
+## ✅ Schema Validation
+
+Validate data against schemas with comprehensive error messages for LLM feedback loops.
+
+### Basic Validation
+
+```python
+from pydantic import BaseModel, Field
+from llm_schema_lite import validate
+
+class User(BaseModel):
+    name: str
+    age: int = Field(..., ge=0, le=120)
+    email: str
+
+# Valid data
+is_valid, errors = validate(User, {"name": "Alice", "age": 30, "email": "alice@example.com"})
+print(is_valid)  # True
+print(errors)    # None
+
+# Invalid data - missing field
+is_valid, errors = validate(User, {"name": "Bob", "age": 25})
+print(is_valid)  # False
+print(errors)    # ["Validation error at '.email': 'email' is a required property"]
+
+# Invalid data - wrong type
+is_valid, errors = validate(User, {"name": "Charlie", "age": "thirty", "email": "charlie@example.com"})
+print(is_valid)  # False
+print(errors)    # ["Validation error at '.age': 'thirty' is not of type 'integer' (got str)"]
+
+# Invalid data - constraint violation
+is_valid, errors = validate(User, {"name": "David", "age": 150, "email": "david@example.com"})
+print(is_valid)  # False
+print(errors)    # ["Validation error at '.age': 150 is greater than the maximum of 120"]
+```
+
+### Multiple Error Collection
+
+By default, `validate()` returns **all** validation errors to help LLMs fix multiple issues at once:
+
+```python
+from pydantic import BaseModel, Field
+from llm_schema_lite import validate
+
+class Product(BaseModel):
+    name: str = Field(..., min_length=3)
+    price: float = Field(..., ge=0)
+    quantity: int = Field(..., ge=1)
+
+# Multiple errors - all returned by default
+is_valid, errors = validate(
+    Product,
+    {"name": "AB", "price": -10, "quantity": 0}
+)
+print(is_valid)  # False
+print(len(errors))  # 3 errors
+for error in errors:
+    print(f"  - {error}")
+# Output:
+#   - Validation error at '.name': 'AB' is too short (minimum length is 3)
+#   - Validation error at '.price': -10 is less than the minimum of 0
+#   - Validation error at '.quantity': 0 is less than the minimum of 1
+
+# Get only the first error
+is_valid, errors = validate(
+    Product,
+    {"name": "AB", "price": -10, "quantity": 0},
+    return_all_errors=False
+)
+print(len(errors))  # 1 error (first one only)
+```
+
+### YAML Validation
+
+Validate YAML data with automatic format detection:
+
+```python
+from pydantic import BaseModel
+from llm_schema_lite import validate
+
+class Config(BaseModel):
+    host: str
+    port: int
+    debug: bool
+
+# YAML string
+yaml_data = """
+host: localhost
+port: 8080
+debug: true
+"""
+
+is_valid, errors = validate(Config, yaml_data, mode="yaml")
+print(is_valid)  # True
+
+# Auto-detect format (tries JSON first, then YAML)
+is_valid, errors = validate(Config, yaml_data, mode="auto")
+print(is_valid)  # True
+
+# JSON string
+json_data = '{"host": "localhost", "port": 8080, "debug": true}'
+is_valid, errors = validate(Config, json_data, mode="json")
+print(is_valid)  # True
+```
+
+### Validation with JSON Schema
+
+Works with JSON schema dicts and strings:
+
+```python
+from llm_schema_lite import validate
+
+# JSON schema dict
+schema = {
+    "type": "object",
+    "properties": {
+        "username": {"type": "string", "minLength": 3},
+        "age": {"type": "integer", "minimum": 0}
+    },
+    "required": ["username", "age"]
+}
+
+is_valid, errors = validate(schema, {"username": "alice", "age": 25})
+print(is_valid)  # True
+
+# JSON schema string
+schema_str = '{"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}'
+is_valid, errors = validate(schema_str, {"name": "Bob"})
+print(is_valid)  # True
+```
+
+### LLM Feedback Loop Example
+
+Use validation errors to help LLMs improve their output:
+
+```python
+from pydantic import BaseModel, Field
+from llm_schema_lite import validate
+
+class BlogPost(BaseModel):
+    title: str = Field(..., min_length=10, max_length=100)
+    content: str = Field(..., min_length=50)
+    tags: list[str] = Field(..., min_items=1, max_items=5)
+
+# Simulate LLM output (with errors)
+llm_output = {
+    "title": "Short",  # Too short
+    "content": "Brief content",  # Too short
+    "tags": []  # Empty list
+}
+
+is_valid, errors = validate(BlogPost, llm_output)
+
+if not is_valid:
+    # Send errors back to LLM for correction
+    feedback = "Your output has the following issues:\n"
+    for i, error in enumerate(errors, 1):
+        feedback += f"{i}. {error}\n"
+
+    print(feedback)
+    # Output:
+    # Your output has the following issues:
+    # 1. Validation error at '.title': 'Short' is too short (minimum length is 10)
+    # 2. Validation error at '.content': 'Brief content' is too short (minimum length is 50)
+    # 3. Validation error at '.tags': [] has too few items (minimum is 1)
+```
+
+---
+
 ## 📊 Token Reduction
 
 Compare the token usage between original and simplified schemas:
@@ -670,10 +844,10 @@ from llm_schema_lite import loads, ConversionError
 
 # Handle potentially malformed API responses
 def safe_parse_response(response_text):
-    try:
+try:
         return loads(response_text, mode="json", repair=True)
-    except ConversionError as e:
-        print(f"Failed to parse: {e}")
+except ConversionError as e:
+    print(f"Failed to parse: {e}")
         return None
 
 # Works with malformed JSON

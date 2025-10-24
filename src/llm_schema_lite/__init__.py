@@ -6,7 +6,7 @@ Reduce token usage by 60-85% while preserving essential type information.
 
 __version__ = "0.5.0"
 
-from .core import SchemaLite, loads, simplify_schema
+from .core import SchemaLite, loads, simplify_schema, validate
 from .exceptions import (
     ConversionError,
     SchemaLiteError,
@@ -20,6 +20,7 @@ __all__ = [
     # Core API
     "simplify_schema",
     "loads",
+    "validate",
     "SchemaLite",
     # Formatters
     "BaseFormatter",
