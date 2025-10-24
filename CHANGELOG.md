@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [v0.5.0](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.5.0) - 2025-10-24
+
+<small>[Compare with v0.4.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.4.0...v0.5.0)</small>
+
+### Features
+
+- enhance core functionality with advanced JSON Schema features ([0e88e4b](https://github.com-personal/rohitgarud/llm-schema-lite/commit/0e88e4b149787e7121ae0b076d3c7a1ac5ced58a) by Rohit Garud).
+
+### Bug Fixes
+
+- resolve mypy type errors in formatters ([657468f](https://github.com-personal/rohitgarud/llm-schema-lite/commit/657468f177a72645f676759cbfb906ba6ea06408) by Rohit Garud).
+
+### Tests
+
+- Improve test coverage ([37b6776](https://github.com-personal/rohitgarud/llm-schema-lite/commit/37b67763888990cf52995a265057940d831490bb) by Rohit Garud).
+- comprehensive test refactoring and consolidation ([46b395d](https://github.com-personal/rohitgarud/llm-schema-lite/commit/46b395d46aee8175299eb114b8d6ddc4993a9e34) by Rohit Garud).
+
 ## [v0.4.0](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.4.0) - 2025-10-19
 
 <small>[Compare with v0.3.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.3.0...v0.4.0)</small>

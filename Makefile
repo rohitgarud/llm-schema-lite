@@ -1,5 +1,5 @@
-.PHONY: help install sync install-dev install-pre-commit pre-commit-run
-.PHONY: test test-cov test-parallel test-fast test-slow
+.PHONY: help install sync install-dev install-dspy install-pre-commit pre-commit-run
+.PHONY: test test-cov test-cov-full test-parallel test-fast test-slow test-dspy
 .PHONY: lint check format clean build changelog release_notes
 .PHONY: publish-test publish update venv setup
 
@@ -16,6 +16,9 @@ install:  ## Install package
 install-dev:  ## Install package with development dependencies
 	uv pip install -e ".[dev]"
 
+install-dspy:  ## Install package with DSPy integration
+	uv pip install -e ".[dspy]"
+
 install-pre-commit:  ## Install pre-commit hooks
 	uv pip install pre-commit
 	pre-commit uninstall; pre-commit install; pre-commit install --hook-type commit-msg
@@ -24,8 +27,22 @@ install-pre-commit:  ## Install pre-commit hooks
 test:  ## Run tests with pytest
 	pytest -rP -n auto --show-capture=no
 
-test-cov:  ## Run tests with coverage report
-	pytest --cov=llm_schema_lite --cov-report=term-missing --cov-report=html
+test-cov:  ## Run tests with coverage report (core only, no DSPy)
+	pytest --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml
+
+test-cov-full:  ## Run tests with full coverage including DSPy integration
+	@echo "Installing DSPy for full coverage..."
+	@uv pip install -e ".[dspy]" > /dev/null 2>&1 || true
+	@echo "Running tests with DSPy integration..."
+	.venv/bin/python -m pytest --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml
+	@echo ""
+	@echo "✓ Full coverage report generated (includes DSPy)"
+	@echo "→ HTML report: htmlcov/index.html"
+	@echo "→ XML report: coverage.xml"
+
+test-dspy:  ## Run only DSPy integration tests
+	@uv pip install -e ".[dspy]" > /dev/null 2>&1 || echo "DSPy already installed"
+	.venv/bin/python -m pytest tests/test_dspy*.py -v
 
 test-parallel:  ## Run tests in parallel (alias for test)
 	pytest -rP -n auto
@@ -80,9 +97,15 @@ publish:  ## Publish to PyPI
 venv:  ## Create virtual environment
 	uv venv
 
-setup: venv install-dev install-pre-commit  ## Complete setup for development
-	@echo "✓ Development environment setup complete!"
+setup: venv install-dev install-dspy install-pre-commit  ## Complete setup for development
+	@echo "✓ Development environment setup complete (including DSPy)!"
 	@echo "Activate the virtual environment with: source .venv/bin/activate"
+	@echo ""
+	@echo "Available test commands:"
+	@echo "  make test          - Run all tests"
+	@echo "  make test-cov      - Coverage report (core only)"
+	@echo "  make test-cov-full - Full coverage report (includes DSPy)"
+	@echo "  make test-dspy     - Run only DSPy tests"
 
 update: clean sync install-pre-commit lint  ## Full project update
 	@echo "✓ Project updated successfully!"
