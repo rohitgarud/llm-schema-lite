@@ -229,7 +229,7 @@ class BaseFormatter(ABC):
             else:
                 # Multiple non-null types - treat as union
                 type_strs = [self.TYPE_MAP.get(t, t) for t in type_name if t != "null"]
-                return " or ".join(type_strs)
+                return " or ".join(s for s in type_strs if s is not None)
 
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
