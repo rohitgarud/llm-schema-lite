@@ -309,6 +309,104 @@ scientific: 1e5"""
         data = loads(multiple_json, mode="json", extract_from_markdown=False)
         assert data == {"a": 1}
 
+
+class TestLoadsExtractFromMarkdown:
+    """Test markdown extraction functionality."""
+
+    def test_extract_json_from_markdown_codeblock(self):
+        """Test extracting JSON from markdown code block."""
+        markdown = """# API Response
+
+Here's the response:
+
+```json
+{
+  "id": 123,
+  "name": "test"
+}
+```
+
+That's the result."""
+        data = loads(markdown, mode="json")
+        assert data["id"] == 123
+        assert data["name"] == "test"
+
+    def test_extract_yaml_from_markdown_codeblock(self):
+        """Test extracting YAML from markdown code block."""
+        markdown = """# Configuration
+
+```yaml
+database:
+  host: localhost
+  port: 5432
+```
+"""
+        data = loads(markdown, mode="yaml")
+        assert data["database"]["host"] == "localhost"
+        assert data["database"]["port"] == 5432
+
+    def test_extract_from_yml_codeblock(self):
+        """Test extracting from yml (alternative YAML extension) code block."""
+        markdown = """```yml
+server: production
+region: us-west
+```"""
+        data = loads(markdown, mode="yaml")
+        assert data["server"] == "production"
+        assert data["region"] == "us-west"
+
+
+class TestLoadsEdgeCasesAndErrors:
+    """Test edge cases and error handling."""
+
+    def test_loads_with_nested_json_objects(self):
+        """Test loads with deeply nested JSON."""
+        json_text = """{"level1": {"level2": {"level3": {"level4": {"value": "deep"}}}}}"""
+        data = loads(json_text)
+        assert data["level1"]["level2"]["level3"]["level4"]["value"] == "deep"
+
+    def test_loads_with_nested_yaml_objects(self):
+        """Test loads with deeply nested YAML."""
+        yaml_text = """level1:
+  level2:
+    level3:
+      level4:
+        value: deep"""
+        data = loads(yaml_text, mode="yaml")
+        assert data["level1"]["level2"]["level3"]["level4"]["value"] == "deep"
+
+    def test_loads_json_with_arrays_and_nested_objects(self):
+        """Test loads with complex JSON structure."""
+        json_text = """{
+    "users": [
+        {"id": 1, "name": "Alice"},
+        {"id": 2, "name": "Bob"}
+    ],
+    "metadata": {
+        "total": 2,
+        "page": 1
+    }
+}"""
+        data = loads(json_text)
+        assert len(data["users"]) == 2
+        assert data["users"][0]["name"] == "Alice"
+        assert data["metadata"]["total"] == 2
+
+    def test_loads_yaml_with_arrays_and_nested_objects(self):
+        """Test loads with complex YAML structure."""
+        yaml_text = """users:
+  - id: 1
+    name: Alice
+  - id: 2
+    name: Bob
+metadata:
+  total: 2
+  page: 1"""
+        data = loads(yaml_text, mode="yaml")
+        assert len(data["users"]) == 2
+        assert data["users"][0]["name"] == "Alice"
+        assert data["metadata"]["total"] == 2
+
         # Test nested JSON objects
         nested_text = 'Result: {"user": {"name": "David", "details": {"age": 40}}}'
         data = loads(nested_text, mode="json", extract_from_markdown=False)

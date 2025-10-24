@@ -616,3 +616,91 @@ class TestFormatComparison:
 
             # With metadata should be longer
             assert len(with_meta) > len(without_meta)
+
+
+class TestSchemaLiteYAMLOutput:
+    """Test YAML output methods."""
+
+    def test_to_yaml_default_parameters(self):
+        """Test to_yaml with default parameters."""
+        schema = simplify_schema(SimpleUser)
+        yaml_output = schema.to_yaml()
+        assert isinstance(yaml_output, str)
+        assert len(yaml_output) > 0
+
+    def test_to_yaml_with_flow_style_true(self):
+        """Test to_yaml with flow style enabled."""
+        schema = simplify_schema(SimpleUser)
+        yaml_output = schema.to_yaml(default_flow_style=True)
+        assert isinstance(yaml_output, str)
+        assert len(yaml_output) > 0
+
+    def test_to_yaml_with_flow_style_false(self):
+        """Test to_yaml with flow style disabled."""
+        schema = simplify_schema(SimpleUser)
+        yaml_output = schema.to_yaml(default_flow_style=False)
+        assert isinstance(yaml_output, str)
+        assert len(yaml_output) > 0
+
+
+class TestSimplifySchemaInvalidInputs:
+    """Test error handling for invalid inputs."""
+
+    def test_invalid_format_type(self):
+        """Test with invalid format_type parameter."""
+        with pytest.raises(ValueError, match="Unsupported format_type"):
+            simplify_schema(SimpleUser, format_type="invalid_format")
+
+    def test_unsupported_model_type_integer(self):
+        """Test with unsupported integer type."""
+        with pytest.raises(UnsupportedModelError, match="Unsupported model type"):
+            simplify_schema(42)
+
+    def test_unsupported_model_type_list(self):
+        """Test with unsupported list type."""
+        with pytest.raises(UnsupportedModelError, match="Unsupported model type"):
+            simplify_schema([1, 2, 3])
+
+    def test_unsupported_model_type_none(self):
+        """Test with None type."""
+        with pytest.raises(UnsupportedModelError, match="Unsupported model type"):
+            simplify_schema(None)
+
+    def test_unsupported_model_type_float(self):
+        """Test with unsupported float type."""
+        with pytest.raises(UnsupportedModelError, match="Unsupported model type"):
+            simplify_schema(3.14)
+
+
+class TestSchemaLiteMultipleFormats:
+    """Test SchemaLite with multiple format types."""
+
+    def test_schema_from_dict_all_formats(self):
+        """Test creating schema from dict with all format types."""
+        schema_dict = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"},
+                "email": {"type": "string"},
+            },
+        }
+
+        for fmt in ["jsonish", "typescript", "yaml"]:
+            schema = simplify_schema(schema_dict, format_type=fmt)
+            assert isinstance(schema, SchemaLite)
+            output = schema.to_string()
+            assert "name" in output
+            assert "age" in output
+            assert "email" in output
+
+    def test_schema_from_string_all_formats(self):
+        """Test creating schema from JSON string with all format types."""
+        schema_str = '{"type": "object", "properties": {"title": {"type": "string"}, "count": {"type": "integer"}}}'  # noqa: E501
+
+        for fmt in ["jsonish", "typescript", "yaml"]:
+            schema = simplify_schema(schema_str, format_type=fmt)
+            assert isinstance(schema, SchemaLite)
+            output = schema.to_string()
+            assert "title" in output
+            assert "count" in output
