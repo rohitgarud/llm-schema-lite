@@ -54,6 +54,7 @@ Transform verbose Pydantic JSON schemas into LLM-friendly formats. Reduce token 
 - 🎨 **Metadata Control** - Include/exclude descriptions and constraints
 - 🔍 **Type Preservation** - Maintains essential type information
 - 💯 **Fully Typed** - Complete type hints for better IDE support
+- 🚀 **Enhanced Constraint Integration** - Validation constraints embedded in type descriptions for better LLM readability
 
 ---
 
@@ -171,7 +172,7 @@ print(schema.to_string())
 # // Fields marked with * are required
 # {
 #   name*: string  //User's full name,
-#   age*: int  //User's age, min: 0, max: 120,
+#   age*: int (0-120)  //User's age,
 #   email*: string  //User's email address,
 #   phone: string or null  //Optional phone number
 # }
@@ -182,7 +183,7 @@ print(schema_ts.to_string())
 # // Fields marked with * are required
 # interface User {
 #   name*: string  // User's full name;
-#   age*: number  // User's age, min: 0, max: 120;
+#   age*: number (0-120)  // User's age;
 #   email*: string  // User's email address;
 #   phone: string | null  // Optional phone number;
 # }
@@ -192,7 +193,7 @@ schema_yaml = simplify_schema(User, format_type="yaml", include_metadata=True)
 print(schema_yaml.to_string())
 # // Fields marked with * are required
 # name*: str  # User's full name
-# age*: int  # User's age, min: 0, max: 120
+# age*: int (0-120)  # User's age
 # email*: str  # User's email address
 # phone: str | None  # Optional phone number
 
@@ -216,6 +217,37 @@ All formatters automatically highlight required fields with asterisks (`*`) and 
 - **Comment**: "Fields marked with * are required" appears at the top
 - **Works with**: All output formats (JSONish, TypeScript, YAML)
 - **Nested models**: Required fields in nested definitions are also highlighted
+
+#### Enhanced Constraint Integration
+
+Validation constraints are now integrated directly into type descriptions for better LLM readability:
+
+**Before (legacy metadata format):**
+```
+age*: int  //User's age, min: 0, max: 120
+name*: string  //User's name, minLength: 2, maxLength: 50
+scores: array  //unique items, minItems: 1, maxItems: 5
+```
+
+**After (integrated constraint format):**
+```
+age*: int (0-120)  //User's age
+name*: string (2-50 chars)  //User's name
+scores: array (unique, length: 1-5 items)
+```
+
+**Supported constraint integrations:**
+- **String constraints**: `string (5-50 chars)` instead of `string //minLength: 5, maxLength: 50`
+- **Number constraints**: `int (0-100)` instead of `int //minimum: 0, maximum: 100`
+- **Array constraints**: `string[] (unique, length: 2-10 items)` instead of raw metadata
+- **Contains constraints**: `string (urgent, important)` for enum values
+- **Conditional logic**: `if: condition then: action` for if/then/else logic
+
+**Benefits:**
+- 🎯 **Better LLM Understanding**: Constraints are part of the type, not separate metadata
+- 📖 **Cleaner Output**: Reduced redundancy and improved readability
+- 🔄 **Consistent Experience**: Same integration across all formatters (JSONish, TypeScript, YAML)
+- ⚡ **Backward Compatible**: Legacy metadata format still supported
 
 ### Nested Models
 

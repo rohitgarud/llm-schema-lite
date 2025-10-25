@@ -6,75 +6,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
-## [v0.5.0](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.5.0) - 2025-10-24
+## [v0.6.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.0) - 2025-10-25
 
-<small>[Compare with v0.4.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.4.0...v0.5.0)</small>
+<small>[Compare with v0.5.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.5.0...v0.6.0)</small>
 
 ### Features
 
-- enhance core functionality with advanced JSON Schema features ([0e88e4b](https://github.com-personal/rohitgarud/llm-schema-lite/commit/0e88e4b149787e7121ae0b076d3c7a1ac5ced58a) by Rohit Garud).
+- enhance constraint integration across all formatters ([66fc219](https://github.com/rohitgarud/llm-schema-lite/commit/66fc219d3567b314b5e0ee4c2df931b6b80e9876) by Rohit Garud).
+- Add required field highlighting with asterisk notation ([84b9e3e](https://github.com/rohitgarud/llm-schema-lite/commit/84b9e3edb304bbd2aad3db2fa0636728c3b88658) by Rohit Garud).
+- add comprehensive schema validation with multiple error collection ([9c311c7](https://github.com/rohitgarud/llm-schema-lite/commit/9c311c7e5bd28cd93c81a67929abd87a7a39d115) by Rohit Garud).
+
+## [v0.5.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.5.0) - 2025-10-24
+
+<small>[Compare with v0.4.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.4.0...v0.5.0)</small>
+
+### Features
+
+- enhance core functionality with advanced JSON Schema features ([0e88e4b](https://github.com/rohitgarud/llm-schema-lite/commit/0e88e4b149787e7121ae0b076d3c7a1ac5ced58a) by Rohit Garud).
 
 ### Bug Fixes
 
-- resolve mypy type errors in formatters ([657468f](https://github.com-personal/rohitgarud/llm-schema-lite/commit/657468f177a72645f676759cbfb906ba6ea06408) by Rohit Garud).
+- resolve mypy type errors in formatters ([657468f](https://github.com/rohitgarud/llm-schema-lite/commit/657468f177a72645f676759cbfb906ba6ea06408) by Rohit Garud).
 
 ### Tests
 
-- Improve test coverage ([37b6776](https://github.com-personal/rohitgarud/llm-schema-lite/commit/37b67763888990cf52995a265057940d831490bb) by Rohit Garud).
-- comprehensive test refactoring and consolidation ([46b395d](https://github.com-personal/rohitgarud/llm-schema-lite/commit/46b395d46aee8175299eb114b8d6ddc4993a9e34) by Rohit Garud).
+- Improve test coverage ([37b6776](https://github.com/rohitgarud/llm-schema-lite/commit/37b67763888990cf52995a265057940d831490bb) by Rohit Garud).
+- comprehensive test refactoring and consolidation ([46b395d](https://github.com/rohitgarud/llm-schema-lite/commit/46b395d46aee8175299eb114b8d6ddc4993a9e34) by Rohit Garud).
 
-## [v0.4.0](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.4.0) - 2025-10-19
+## [v0.4.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.4.0) - 2025-10-19
 
-<small>[Compare with v0.3.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.3.0...v0.4.0)</small>
-
-### Features
-
-- add robust loads() function for unified JSON/YAML parsing ([0cb5f2b](https://github.com-personal/rohitgarud/llm-schema-lite/commit/0cb5f2b8285e59a6697e5488e3fc24919210419e) by Rohit Garud).
-
-### Bug Fixes
-
-- Mypy issues ([b907784](https://github.com-personal/rohitgarud/llm-schema-lite/commit/b907784b62c7289d57487312e7baf68c9b6f22de) by Rohit Garud).
-
-## [v0.3.0](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.3.0) - 2025-10-18
-
-<small>[Compare with v0.2.2](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.2...v0.3.0)</small>
+<small>[Compare with v0.3.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.3.0...v0.4.0)</small>
 
 ### Features
 
-- add DSPy integration with StructuredOutputAdapter ([0577d79](https://github.com-personal/rohitgarud/llm-schema-lite/commit/0577d790392fd0c48756a837a61655ad7757fb3f) by Rohit Garud). BREAKING CHANGES: None
+- add robust loads() function for unified JSON/YAML parsing ([0cb5f2b](https://github.com/rohitgarud/llm-schema-lite/commit/0cb5f2b8285e59a6697e5488e3fc24919210419e) by Rohit Garud).
 
 ### Bug Fixes
 
-- CI issues ([ca15865](https://github.com-personal/rohitgarud/llm-schema-lite/commit/ca15865dbff247bd62ddc3fb748ad23d78654af0) by Rohit Garud).
-- CI issue ([1079832](https://github.com-personal/rohitgarud/llm-schema-lite/commit/107983288cddb34b5509f043d386597057164089) by Rohit Garud).
+- Mypy issues ([b907784](https://github.com/rohitgarud/llm-schema-lite/commit/b907784b62c7289d57487312e7baf68c9b6f22de) by Rohit Garud).
+
+## [v0.3.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.3.0) - 2025-10-18
+
+<small>[Compare with v0.2.2](https://github.com/rohitgarud/llm-schema-lite/compare/v0.2.2...v0.3.0)</small>
+
+### Features
+
+- add DSPy integration with StructuredOutputAdapter ([0577d79](https://github.com/rohitgarud/llm-schema-lite/commit/0577d790392fd0c48756a837a61655ad7757fb3f) by Rohit Garud). BREAKING CHANGES: None
+
+### Bug Fixes
+
+- CI issues ([ca15865](https://github.com/rohitgarud/llm-schema-lite/commit/ca15865dbff247bd62ddc3fb748ad23d78654af0) by Rohit Garud).
+- CI issue ([1079832](https://github.com/rohitgarud/llm-schema-lite/commit/107983288cddb34b5509f043d386597057164089) by Rohit Garud).
 
 ### Tests
 
-- Add tests for dspy integration ([5b44d11](https://github.com-personal/rohitgarud/llm-schema-lite/commit/5b44d1115a9c909c5390c703babe2a54bf42e3b7) by Rohit Garud).
+- Add tests for dspy integration ([5b44d11](https://github.com/rohitgarud/llm-schema-lite/commit/5b44d1115a9c909c5390c703babe2a54bf42e3b7) by Rohit Garud).
 
-## [v0.2.2](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.2.2) - 2025-10-15
+## [v0.2.2](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.2.2) - 2025-10-15
 
-<small>[Compare with v0.2.1](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.1...v0.2.2)</small>
+<small>[Compare with v0.2.1](https://github.com/rohitgarud/llm-schema-lite/compare/v0.2.1...v0.2.2)</small>
 
 ### Bug Fixes
 
-- update CI workflow for codecov ([ae06ec4](https://github.com-personal/rohitgarud/llm-schema-lite/commit/ae06ec48b112d574c0181b2ee9cfb5b63d572f7d) by Rohit Garud).
+- update CI workflow for codecov ([ae06ec4](https://github.com/rohitgarud/llm-schema-lite/commit/ae06ec48b112d574c0181b2ee9cfb5b63d572f7d) by Rohit Garud).
 
 ### Chore
 
-- update ci pipeline for codecov ([74d3abd](https://github.com-personal/rohitgarud/llm-schema-lite/commit/74d3abd745b6744fec21aec0a8c38fba42feaaa9) by Rohit Garud).
+- update ci pipeline for codecov ([74d3abd](https://github.com/rohitgarud/llm-schema-lite/commit/74d3abd745b6744fec21aec0a8c38fba42feaaa9) by Rohit Garud).
 
 ### Performance Improvements
 
-- apply optimizations formatters ([736f221](https://github.com-personal/rohitgarud/llm-schema-lite/commit/736f221c55e998c5ec96602bd4bbe838d36a1cff) by Rohit Garud).
+- apply optimizations formatters ([736f221](https://github.com/rohitgarud/llm-schema-lite/commit/736f221c55e998c5ec96602bd4bbe838d36a1cff) by Rohit Garud).
 
-## [v0.2.1](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.2.1) - 2025-10-14
+## [v0.2.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.2.1) - 2025-10-14
 
-<small>[Compare with v0.2.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.2.0...v0.2.1)</small>
+<small>[Compare with v0.2.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.2.0...v0.2.1)</small>
 
 ### Docs
 
-- update CHANGELOG for v0.2.0 ([c504369](https://github.com-personal/rohitgarud/llm-schema-lite/commit/c50436906db08107c3a26e0dafea1e83af62fd8d) by github-actions[bot]).
+- update CHANGELOG for v0.2.0 ([c504369](https://github.com/rohitgarud/llm-schema-lite/commit/c50436906db08107c3a26e0dafea1e83af62fd8d) by github-actions[bot]).
 
 ## [v0.2.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.2.0) - 2025-10-14
 
