@@ -44,6 +44,7 @@ Transform verbose Pydantic JSON schemas into LLM-friendly formats. Reduce token 
 
 - 🎯 **60-85% Token Reduction** - Dramatically reduce schema tokens for LLM prompts
 - 🔄 **Multiple Output Formats** - JSON, JSONish (BAML-style), TypeScript, YAML
+- ⭐ **Required Field Highlighting** - Automatically mark required fields with asterisks
 - 🛡️ **Robust Parsing** - Parse malformed JSON/YAML with automatic repair
 - ✅ **Schema Validation** - Validate data with comprehensive error messages for LLM feedback
 - 📦 **Flexible Input** - Works with Pydantic models, JSON schema dicts, or strings
@@ -155,34 +156,45 @@ print(schema.to_string())
 Choose from multiple output formats to suit your needs:
 
 ```python
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from llm_schema_lite import simplify_schema
 
 class User(BaseModel):
-    name: str
-    age: int
-    email: str
+    name: str = Field(description="User's full name")
+    age: int = Field(ge=0, le=120, description="User's age")
+    email: str = Field(description="User's email address")
+    phone: str | None = Field(default=None, description="Optional phone number")
 
 # JSONish format (BAML-like) - Default, most compact
-schema = simplify_schema(User, format_type="jsonish")
+schema = simplify_schema(User, format_type="jsonish", include_metadata=True)
 print(schema.to_string())
-# { name: string, age: int, email: string }
+# // Fields marked with * are required
+# {
+#   name*: string  //User's full name,
+#   age*: int  //User's age, min: 0, max: 120,
+#   email*: string  //User's email address,
+#   phone: string or null  //Optional phone number
+# }
 
 # TypeScript interface format
-schema_ts = simplify_schema(User, format_type="typescript")
+schema_ts = simplify_schema(User, format_type="typescript", include_metadata=True)
 print(schema_ts.to_string())
+# // Fields marked with * are required
 # interface User {
-#   name: string;
-#   age: number;
-#   email: string;
+#   name*: string  // User's full name;
+#   age*: number  // User's age, min: 0, max: 120;
+#   email*: string  // User's email address;
+#   phone: string | null  // Optional phone number;
 # }
 
 # YAML format
-schema_yaml = simplify_schema(User, format_type="yaml")
+schema_yaml = simplify_schema(User, format_type="yaml", include_metadata=True)
 print(schema_yaml.to_string())
-# name: string
-# age: int
-# email: string
+# // Fields marked with * are required
+# name*: str  # User's full name
+# age*: int  # User's age, min: 0, max: 120
+# email*: str  # User's email address
+# phone: str | None  # Optional phone number
 
 # JSON format (standard)
 schema_json = simplify_schema(User, format_type="json")
@@ -190,9 +202,20 @@ print(schema_json.to_json(indent=2))
 # {
 #   "name": "string",
 #   "age": "int",
-#   "email": "string"
+#   "email": "string",
+#   "phone": "string | null"
 # }
 ```
+
+#### Required Field Highlighting
+
+All formatters automatically highlight required fields with asterisks (`*`) and include an explanatory comment:
+
+- **Required fields**: Marked with `*` (e.g., `name*`, `email*`)
+- **Optional fields**: No asterisk (e.g., `phone`, `is_active`)
+- **Comment**: "Fields marked with * are required" appears at the top
+- **Works with**: All output formats (JSONish, TypeScript, YAML)
+- **Nested models**: Required fields in nested definitions are also highlighted
 
 ### Nested Models
 

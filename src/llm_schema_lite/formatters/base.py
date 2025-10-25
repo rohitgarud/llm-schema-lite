@@ -58,6 +58,7 @@ class BaseFormatter(ABC):
         self.include_metadata = include_metadata
         self.defs = schema.get("$defs", {})
         self.properties = schema.get("properties", {})
+        self.required_fields = set(schema.get("required", []))
         self._ref_cache: dict[str, str] = {}
         self._recursion_depth: dict[str, int] = {}
         self._max_recursion_depth = 10
@@ -104,6 +105,31 @@ class BaseFormatter(ABC):
         """
         available_metadata = self.get_available_metadata(value)
         return [self.METADATA_MAP[k](value[k]) for k in available_metadata]  # type: ignore[no-untyped-call]
+
+    def format_field_name(self, field_name: str) -> str:
+        """
+        Format field name with required indicator if applicable.
+
+        Args:
+            field_name: The name of the field.
+
+        Returns:
+            Field name with asterisk if required, otherwise unchanged.
+        """
+        if field_name in self.required_fields:
+            return f"{field_name}*"
+        return field_name
+
+    def get_required_fields_comment(self) -> str:
+        """
+        Get a comment explaining the required field notation.
+
+        Returns:
+            Comment string explaining asterisk notation for required fields.
+        """
+        if not self.required_fields:
+            return ""
+        return "// Fields marked with * are required"
 
     @property
     @abstractmethod
@@ -436,11 +462,13 @@ class BaseFormatter(ABC):
             properties: Dictionary of property definitions.
 
         Returns:
-            Dictionary of processed properties.
+            Dictionary of processed properties with required field names formatted.
         """
         processed_properties = {}
         for prop_name, value in properties.items():
-            processed_properties[prop_name] = self.process_property(value)
+            # Format field name with required indicator
+            formatted_name = self.format_field_name(prop_name)
+            processed_properties[formatted_name] = self.process_property(value)
         return processed_properties
 
     def process_additional_properties(self, schema: dict[str, Any]) -> str:

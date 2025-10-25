@@ -360,9 +360,9 @@ class TestSchemaLiteToDict:
         result = schema.to_dict()
 
         assert isinstance(result, dict)
-        assert "name" in result
-        assert "age" in result
-        assert "email" in result
+        assert "name*" in result  # Required field with asterisk
+        assert "age*" in result  # Required field with asterisk
+        assert "email*" in result  # Required field with asterisk
 
     def test_to_dict_complex(self):
         """Test to_dict with complex model."""
@@ -370,8 +370,8 @@ class TestSchemaLiteToDict:
         result = schema.to_dict()
 
         assert isinstance(result, dict)
-        assert "name" in result
-        assert "contact_info" in result
+        assert "name*" in result  # Required field with asterisk
+        assert "contact_info*" in result  # Required field with asterisk
 
 
 class TestSchemaLiteToJSON:
@@ -386,7 +386,7 @@ class TestSchemaLiteToJSON:
         # Should be valid JSON
         parsed = json.loads(result)
         assert isinstance(parsed, dict)
-        assert "name" in parsed
+        assert "name*" in parsed  # Required field with asterisk
 
     def test_to_json_with_indent(self):
         """Test to_json with custom indentation."""
@@ -409,7 +409,7 @@ class TestSchemaLiteToString:
 
         assert isinstance(result, str)
         assert "{" in result
-        assert "name:" in result
+        assert "name*:" in result  # Required field with asterisk
 
     def test_to_string_typescript(self):
         """Test to_string with TypeScript formatter."""
@@ -417,14 +417,14 @@ class TestSchemaLiteToString:
         result = schema.to_string()
 
         assert "interface Schema {" in result
-        assert "name: string;" in result
+        assert "name*: string;" in result  # Required field with asterisk
 
     def test_to_string_yaml(self):
         """Test to_string with YAML formatter."""
         schema = simplify_schema(SimpleUser, format_type="yaml")
         result = schema.to_string()
 
-        assert "name: str" in result
+        assert "name*: str" in result  # Required field with asterisk
         assert "{" not in result
 
 
@@ -439,7 +439,7 @@ class TestSchemaLiteToYAML:
             result = schema.to_yaml()
             assert isinstance(result, str)
             # Should have YAML-like structure
-            assert "name:" in result or "age:" in result
+            assert "name*:" in result or "age*:" in result  # Required fields with asterisks
         except ImportError:
             # If PyYAML not installed, should raise ImportError with helpful message
             pytest.skip("PyYAML not installed")

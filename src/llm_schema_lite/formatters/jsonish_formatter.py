@@ -135,6 +135,11 @@ class JSONishFormatter(BaseFormatter):
             processed_properties = self.process_properties(self.properties)
             main_content = self.dict_to_string(processed_properties, indent=0)
 
+            # Add required fields comment if there are required fields
+            required_comment = self.get_required_fields_comment()
+            if required_comment:
+                main_content = f"{required_comment}\n{main_content}"
+
             # Add schema-level constraints as metadata
             if result:
                 # If we have schema-level features, add them as comments

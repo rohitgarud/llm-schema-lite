@@ -143,9 +143,9 @@ class TestEnumHandling:
 
             # Should have content for all enums
             assert len(output) > 50
-            assert "status:" in output or "status;" in output
-            assert "role:" in output or "role;" in output
-            assert "priority:" in output or "priority;" in output
+            assert "status*:" in output or "status*;" in output  # Required field with asterisk
+            assert "role*:" in output or "role*;" in output  # Required field with asterisk
+            assert "priority*:" in output or "priority*;" in output  # Required field with asterisk
 
 
 class TestDictHandling:
@@ -161,20 +161,20 @@ class TestDictHandling:
         # JSONish
         jsonish = simplify_schema(Model, format_type="jsonish", include_metadata=False)
         output_j = jsonish.to_string()
-        assert "metadata: object" in output_j
-        assert "settings: object" in output_j
+        assert "metadata*: object" in output_j  # Required field with asterisk
+        assert "settings*: object" in output_j  # Required field with asterisk
 
         # TypeScript
         ts = simplify_schema(Model, format_type="typescript", include_metadata=False)
         output_ts = ts.to_string()
-        assert "metadata: object" in output_ts
-        assert "settings: object" in output_ts
+        assert "metadata*: object" in output_ts  # Required field with asterisk
+        assert "settings*: object" in output_ts  # Required field with asterisk
 
         # YAML
         yaml = simplify_schema(Model, format_type="yaml", include_metadata=False)
         output_y = yaml.to_string()
-        assert "metadata: object" in output_y
-        assert "settings: object" in output_y
+        assert "metadata*: object" in output_y  # Required field with asterisk
+        assert "settings*: object" in output_y  # Required field with asterisk
 
     def test_dict_with_types(self):
         """Test Dict with type parameters."""
@@ -188,9 +188,9 @@ class TestDictHandling:
         output = schema.to_string()
 
         # All dict types become object
-        assert "str_to_str: object" in output
-        assert "str_to_int: object" in output
-        assert "str_to_list: object" in output
+        assert "str_to_str*: object" in output  # Required field with asterisk
+        assert "str_to_int*: object" in output  # Required field with asterisk
+        assert "str_to_list*: object" in output  # Required field with asterisk
 
     def test_optional_dict(self):
         """Test optional dict fields."""
@@ -280,5 +280,5 @@ class TestEnumAndDictCombined:
         output = schema.to_string()
 
         # Should handle nested model
-        assert "config:" in output
-        assert "metadata: object" in output
+        assert "config*:" in output  # Required field with asterisk
+        assert "metadata*: object" in output  # Required field with asterisk

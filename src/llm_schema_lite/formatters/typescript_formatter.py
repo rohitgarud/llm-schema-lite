@@ -189,20 +189,35 @@ class TypeScriptFormatter(BaseFormatter):
                 nested_output.write(f"interface {def_name} {{\n")
 
                 nested_props = def_schema["properties"]
+                nested_required = set(def_schema.get("required", []))
+
                 for prop_name, prop_def in nested_props.items():
                     prop_type = self.process_property(prop_def)
-                    nested_output.write(f"  {prop_name}: {prop_type};\n")
+                    # Format field name with required indicator for nested definitions
+                    formatted_prop_name = (
+                        f"{prop_name}*" if prop_name in nested_required else prop_name
+                    )
+                    nested_output.write(f"  {formatted_prop_name}: {prop_type};\n")
 
                 nested_output.write("}")
                 all_interfaces.append(nested_output.getvalue())
 
         # Process main interface
         main_output = StringIO()
+
+        # Add required fields comment if there are required fields
+        required_comment = self.get_required_fields_comment()
+        if required_comment:
+            main_output.write(f"{required_comment}\n")
+
         main_output.write("interface Schema {\n")
 
         processed_properties = self.process_properties(self.properties)
         for name, prop_type in processed_properties.items():
-            main_output.write(f"  {name}: {prop_type};\n")
+            # Get original field name (without asterisk) for metadata lookup
+            original_name = name.rstrip("*")
+            prop_with_metadata = self.add_metadata(prop_type, self.properties[original_name])
+            main_output.write(f"  {name}: {prop_with_metadata};\n")
 
         main_output.write("}")
         all_interfaces.append(main_output.getvalue())

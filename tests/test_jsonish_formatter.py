@@ -242,9 +242,16 @@ class TestJSONishParameterized:
             assert "//" in output
             assert "description" in output or "The user's full name" in output
         else:
-            # Should not have metadata comments (except enum values which are type info)
+            # Should not have metadata comments (except enum values which are type info
+            # and required fields comment)
             lines = output.split("\n")
-            metadata_lines = [line for line in lines if "//" in line and "oneOf:" not in line]
+            metadata_lines = [
+                line
+                for line in lines
+                if "//" in line
+                and "oneOf:" not in line
+                and "Fields marked with * are required" not in line
+            ]
             assert (
                 len(metadata_lines) == 0
             ), f"Found metadata when include_metadata=False: {metadata_lines}"

@@ -262,20 +262,33 @@ class YAMLFormatter(BaseFormatter):
                     nested_output.write(f"# {def_name}\n")
 
                 nested_props = def_schema["properties"]
+                nested_required = set(def_schema.get("required", []))
 
                 for prop_name, prop_def in nested_props.items():
                     prop_type = self.process_property(prop_def)
                     prop_with_metadata = self.add_metadata(prop_type, prop_def)
-                    nested_output.write(f"{def_name}.{prop_name}: {prop_with_metadata}\n")
+                    # Format field name with required indicator for nested definitions
+                    formatted_prop_name = (
+                        f"{prop_name}*" if prop_name in nested_required else prop_name
+                    )
+                    nested_output.write(f"{def_name}.{formatted_prop_name}: {prop_with_metadata}\n")
 
                 all_sections.append(nested_output.getvalue().rstrip())
 
         # Process main schema
         main_output = StringIO()
+
+        # Add required fields comment if there are required fields
+        required_comment = self.get_required_fields_comment()
+        if required_comment:
+            main_output.write(f"{required_comment}\n")
+
         processed_properties = self.process_properties(self.properties)
 
         for name, prop_type in processed_properties.items():
-            prop_with_metadata = self.add_metadata(prop_type, self.properties[name])
+            # Get original field name (without asterisk) for metadata lookup
+            original_name = name.rstrip("*")
+            prop_with_metadata = self.add_metadata(prop_type, self.properties[original_name])
             main_output.write(f"{name}: {prop_with_metadata}\n")
 
         # Add schema-level features as comments if present
