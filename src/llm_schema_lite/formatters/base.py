@@ -2,6 +2,7 @@
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 
@@ -17,9 +18,9 @@ class BaseFormatter(ABC):
     REF_PATTERN = re.compile(r"#/\$defs/(.+)$", re.IGNORECASE)
 
     # Common metadata mapping for all formatters
-    METADATA_MAP = {
+    METADATA_MAP: dict[str, Callable[[Any], str]] = {
         "default": lambda v: f"(defaults to {v})",
-        "description": lambda v: v,
+        "description": lambda v: str(v),
         "pattern": lambda v: f"pattern: {v}",
         "minimum": lambda v: f"min: {v}",
         "maximum": lambda v: f"max: {v}",
@@ -104,7 +105,48 @@ class BaseFormatter(ABC):
             List of formatted metadata strings.
         """
         available_metadata = self.get_available_metadata(value)
-        return [self.METADATA_MAP[k](value[k]) for k in available_metadata]  # type: ignore[no-untyped-call]
+        formatted_parts = []
+
+        for k in available_metadata:
+            if k == "contains":
+                formatted_parts.append(f"contains: {self._format_contains(value[k])}")
+            elif k == "additionalItems":
+                formatted_parts.append(f"additionalItems: {self._format_type_simple(value[k])}")
+            elif k == "if" and "then" in value:
+                # Handle conditional logic as a single unit
+                if_schema = value.get("if", {})
+                then_schema = value.get("then", {})
+                else_schema = value.get("else")
+                if else_schema is not None:
+                    formatted_parts.append(
+                        self._format_conditional(if_schema, then_schema, else_schema)
+                    )
+                else:
+                    formatted_parts.append(self._format_conditional(if_schema, then_schema))
+            elif k in ["then", "else"] and "if" in value:
+                # Skip these as they're handled with "if"
+                continue
+            elif (
+                k in ["uniqueItems", "minItems", "maxItems"]
+                and "type" in value
+                and value["type"] == "array"
+            ):
+                # Skip these for arrays as they're integrated into the type description
+                continue
+            elif k in ["minLength", "maxLength"] and "type" in value and value["type"] == "string":
+                # Skip these for strings as they're integrated into the type description
+                continue
+            elif (
+                k in ["minimum", "maximum"]
+                and "type" in value
+                and value["type"] in ["number", "integer"]
+            ):
+                # Skip these for numbers as they're integrated into the type description
+                continue
+            else:
+                formatted_parts.append(self.METADATA_MAP[k](value[k]))
+
+        return formatted_parts
 
     def format_field_name(self, field_name: str) -> str:
         """
@@ -260,7 +302,18 @@ class BaseFormatter(ABC):
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
-        if type_str == "array":
+        # Add validation constraints to type description
+        if type_name == "string":
+            length_range = self._format_validation_range(
+                type_value, "minLength", "maxLength", " chars"
+            )
+            if length_range:
+                type_str = f"{type_str} ({length_range})"
+        elif type_name in ["number", "integer"]:
+            range_info = self._format_validation_range(type_value, "minimum", "maximum")
+            if range_info:
+                type_str = f"{type_str} ({range_info})"
+        elif type_str == "array":
             # Safely handle array items
             items = type_value.get("items")
             if not items:
@@ -279,6 +332,20 @@ class BaseFormatter(ABC):
                 type_str = f"[{items_type}]"
             else:
                 type_str = "array"  # Fallback for unknown array item type
+
+            # Add array-specific constraints
+            constraints = []
+            if "uniqueItems" in type_value and type_value["uniqueItems"]:
+                constraints.append("unique")
+
+            items_range = self._format_validation_range(
+                type_value, "minItems", "maxItems", " items"
+            )
+            if items_range:
+                constraints.append(f"length: {items_range}")
+
+            if constraints:
+                type_str = f"{type_str} ({', '.join(constraints)})"
 
             # Add array-specific metadata (contains, uniqueItems)
             if "contains" in type_value:
@@ -525,7 +592,7 @@ class BaseFormatter(ABC):
         """Process contains constraint for arrays."""
         contains = schema.get("contains")
         if contains:
-            return f" //contains: {self.process_type_value(contains)}"
+            return f" //contains: {self._format_contains(contains)}"
         return ""
 
     def process_unique_items(self, schema: dict[str, Any]) -> str:
@@ -550,6 +617,77 @@ class BaseFormatter(ABC):
         elif isinstance(uneval_props, dict):
             return f" //unevaluated: {self.process_type_value(uneval_props)}"
         return ""
+
+    def _format_contains(self, contains_schema: Any) -> str:
+        """Format contains constraint in user-friendly way."""
+        if isinstance(contains_schema, dict):
+            if "enum" in contains_schema:
+                return f"string ({', '.join(contains_schema['enum'])})"
+            elif "type" in contains_schema:
+                return str(contains_schema["type"])
+            else:
+                return str(contains_schema)
+        return str(contains_schema)
+
+    def _format_type_simple(self, schema: Any) -> str:
+        """Extract simple type from schema."""
+        if isinstance(schema, dict):
+            return str(schema.get("type", "any"))
+        return str(schema)
+
+    def _format_validation_range(
+        self, schema: dict[str, Any], min_key: str, max_key: str, unit: str = ""
+    ) -> str:
+        """Format validation range constraints."""
+        min_val = schema.get(min_key)
+        max_val = schema.get(max_key)
+
+        if min_val is not None and max_val is not None:
+            return f"{min_val}-{max_val}{unit}"
+        elif min_val is not None:
+            return f"≥{min_val}{unit}"
+        elif max_val is not None:
+            return f"≤{max_val}{unit}"
+        return ""
+
+    def _format_conditional(
+        self,
+        if_schema: dict[str, Any],
+        then_schema: dict[str, Any],
+        else_schema: dict[str, Any] | None = None,
+    ) -> str:
+        """Format conditional logic in user-friendly way."""
+        if_desc = self._describe_condition(if_schema)
+        then_desc = self._describe_schema(then_schema)
+
+        if else_schema:
+            else_desc = self._describe_schema(else_schema)
+            return f"if {if_desc} then {then_desc} else {else_desc}"
+        else:
+            return f"if {if_desc} then {then_desc}"
+
+    def _describe_condition(self, condition: dict[str, Any]) -> str:
+        """Describe a condition in user-friendly way."""
+        if "properties" in condition:
+            props = condition["properties"]
+            if len(props) == 1:
+                prop_name, prop_schema = next(iter(props.items()))
+                if "minimum" in prop_schema:
+                    return f"{prop_name} ≥ {prop_schema['minimum']}"
+                elif "maximum" in prop_schema:
+                    return f"{prop_name} ≤ {prop_schema['maximum']}"
+                elif "pattern" in prop_schema:
+                    return f"{prop_name} matches {prop_schema['pattern']}"
+            return f"condition on {', '.join(props.keys())}"
+        return "condition"
+
+    def _describe_schema(self, schema: dict[str, Any]) -> str:
+        """Describe a schema in user-friendly way."""
+        if "required" in schema:
+            return f"requires {', '.join(schema['required'])}"
+        elif "properties" in schema:
+            return f"object with {', '.join(schema['properties'].keys())}"
+        return "schema"
 
     @abstractmethod
     def transform_schema(self) -> str:

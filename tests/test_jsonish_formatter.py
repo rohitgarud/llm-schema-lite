@@ -71,7 +71,8 @@ class TestJSONishFormatterConsolidated(TestJSONishFormatter):
 
         # Should show constraints in comments
         assert "//" in output
-        assert "minLength:" in output or "maxLength:" in output
+        # Check for integrated constraints in type descriptions
+        assert "chars" in output or "minLength:" in output or "maxLength:" in output
         assert "pattern:" in output
 
     def test_jsonish_default_values(self):
@@ -119,7 +120,8 @@ class TestJSONishFormatterConsolidated(TestJSONishFormatter):
         # Should integrate metadata properly
         assert "//" in output
         assert "description" in output or "The user's full name" in output
-        assert "minLength:" in output or "maxLength:" in output
+        # Check for integrated constraints in type descriptions
+        assert "chars" in output or "minLength:" in output or "maxLength:" in output
         assert "pattern:" in output
 
     def test_jsonish_edge_cases(self):

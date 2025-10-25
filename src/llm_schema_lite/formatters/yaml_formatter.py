@@ -108,7 +108,18 @@ class YAMLFormatter(BaseFormatter):
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
-        if type_str == "list":
+        # Add validation constraints to type description
+        if type_name == "string":
+            length_range = self._format_validation_range(
+                type_value, "minLength", "maxLength", " chars"
+            )
+            if length_range:
+                type_str = f"{type_str} ({length_range})"
+        elif type_name in ["number", "integer"]:
+            range_info = self._format_validation_range(type_value, "minimum", "maximum")
+            if range_info:
+                type_str = f"{type_str} ({range_info})"
+        elif type_str == "list":
             # Handle list items
             items = type_value.get("items")
             if not items:
@@ -127,11 +138,23 @@ class YAMLFormatter(BaseFormatter):
             else:
                 type_str = "list[Any]"
 
-            # Add array-specific metadata (contains, uniqueItems)
+            # Add array constraints to type description
+            constraints = []
+            if type_value.get("uniqueItems"):
+                constraints.append("unique")
+
+            items_range = self._format_validation_range(
+                type_value, "minItems", "maxItems", " items"
+            )
+            if items_range:
+                constraints.append(f"length: {items_range}")
+
+            if constraints:
+                type_str = f"{type_str} ({', '.join(constraints)})"
+
+            # Add array-specific metadata (contains)
             if "contains" in type_value:
                 type_str += self.process_contains(type_value)
-            if "uniqueItems" in type_value:
-                type_str += self.process_unique_items(type_value)
         elif type_str == "dict":
             # For object types, just return "object" to keep YAML simple
             # Don't try to format the internal structure

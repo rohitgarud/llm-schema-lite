@@ -69,7 +69,7 @@ class TestAdvancedJSONSchemaFeatures:
 
         # Should include unique items information when metadata is enabled
         if format_type in ["jsonish", "yaml"]:
-            assert "unique items" in output or "uniqueItems:" in output
+            assert "unique items" in output or "uniqueItems:" in output or "unique" in output
 
     @pytest.mark.parametrize("format_type", ["jsonish", "typescript", "yaml"])
     def test_property_names(self, property_names_schema, format_type):

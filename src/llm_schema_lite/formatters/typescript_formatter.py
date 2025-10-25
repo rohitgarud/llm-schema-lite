@@ -131,7 +131,18 @@ class TypeScriptFormatter(BaseFormatter):
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
-        if type_str == "Array":
+        # Add validation constraints to type description
+        if type_name == "string":
+            length_range = self._format_validation_range(
+                type_value, "minLength", "maxLength", " chars"
+            )  # noqa: E501
+            if length_range:
+                type_str = f"{type_str} ({length_range})"
+        elif type_name in ["number", "integer"]:
+            range_info = self._format_validation_range(type_value, "minimum", "maximum")
+            if range_info:
+                type_str = f"{type_str} ({range_info})"
+        elif type_str == "Array":
             # Handle array items
             items = type_value.get("items")
             if not items:
@@ -149,6 +160,29 @@ class TypeScriptFormatter(BaseFormatter):
                 return f"Array<{items_type}>"
             else:
                 return "Array<any>"
+
+        # Add array constraints for arrays
+        if type_name == "array":
+            items = type_value.get("items")
+            if items and isinstance(items, dict) and "type" in items:
+                items_type = self.process_type_value(items)
+                array_type = f"Array<{items_type}>"
+
+                # Add array constraints
+                constraints = []
+                if type_value.get("uniqueItems"):
+                    constraints.append("unique")
+
+                items_range = self._format_validation_range(
+                    type_value, "minItems", "maxItems", " items"
+                )
+                if items_range:
+                    constraints.append(f"length: {items_range}")
+
+                if constraints:
+                    array_type = f"{array_type} ({', '.join(constraints)})"
+
+                return array_type
 
         return str(type_str)
 
