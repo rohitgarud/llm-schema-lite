@@ -24,6 +24,11 @@ class JSONishFormatter(BaseFormatter):
         """Type mapping for JSONish format."""
         return {"number": "float", "integer": "int", "boolean": "bool"}
 
+    @property
+    def comment_prefix(self) -> str:
+        """Comment prefix for JSONish format."""
+        return "//"
+
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
         Add metadata comments to a field representation.
@@ -112,6 +117,16 @@ class JSONishFormatter(BaseFormatter):
         Returns:
             Formatted schema as a string.
         """
+        # Check if we have processed data to use instead of re-processing
+        if hasattr(self, "_processed_data") and self._processed_data:
+            # Use the processed data directly
+            content = self.dict_to_string(self._processed_data, indent=0)
+            required_comment = self.get_required_fields_comment()
+            if required_comment:
+                return f"{required_comment}\n{content}"
+            else:
+                return content
+
         result = ""
 
         # Handle schema-level features first
@@ -156,5 +171,23 @@ class JSONishFormatter(BaseFormatter):
                 return f"{type_content}  //{result.strip()}"
             else:
                 return type_content
+        elif "oneOf" in self.schema:
+            oneof_content = self.process_oneof(self.schema)
+            if result:
+                return f"{oneof_content}  //{result.strip()}"
+            else:
+                return oneof_content
+        elif "anyOf" in self.schema:
+            anyof_content = self.process_anyof(self.schema)
+            if result:
+                return f"{anyof_content}  //{result.strip()}"
+            else:
+                return anyof_content
+        elif "allOf" in self.schema:
+            allof_content = self.process_allof(self.schema)
+            if result:
+                return f"{allof_content}  //{result.strip()}"
+            else:
+                return allof_content
 
         return result if result else ""

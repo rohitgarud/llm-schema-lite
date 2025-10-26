@@ -33,6 +33,11 @@ class TypeScriptFormatter(BaseFormatter):
             "null": "null",
         }
 
+    @property
+    def comment_prefix(self) -> str:
+        """Comment prefix for TypeScript format."""
+        return "//"
+
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
         Add metadata comments to a field representation.
@@ -131,18 +136,20 @@ class TypeScriptFormatter(BaseFormatter):
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
-        # Add validation constraints to type description
-        if type_name == "string":
-            length_range = self._format_validation_range(
-                type_value, "minLength", "maxLength", " chars"
-            )  # noqa: E501
-            if length_range:
-                type_str = f"{type_str} ({length_range})"
-        elif type_name in ["number", "integer"]:
-            range_info = self._format_validation_range(type_value, "minimum", "maximum")
-            if range_info:
-                type_str = f"{type_str} ({range_info})"
-        elif type_str == "Array":
+        # Add validation constraints to type description (only if metadata is enabled)
+        if self.include_metadata:
+            if type_name == "string":
+                length_range = self._format_validation_range(
+                    type_value, "minLength", "maxLength", " chars"
+                )  # noqa: E501
+                if length_range:
+                    type_str = f"{type_str} ({length_range})"
+            elif type_name in ["number", "integer"]:
+                range_info = self._format_validation_range(type_value, "minimum", "maximum")
+                if range_info:
+                    type_str = f"{type_str} ({range_info})"
+
+        if type_str == "Array":
             # Handle array items
             items = type_value.get("items")
             if not items:
@@ -168,19 +175,20 @@ class TypeScriptFormatter(BaseFormatter):
                 items_type = self.process_type_value(items)
                 array_type = f"Array<{items_type}>"
 
-                # Add array constraints
-                constraints = []
-                if type_value.get("uniqueItems"):
-                    constraints.append("unique")
+                # Add array constraints (only if metadata is enabled)
+                if self.include_metadata:
+                    constraints = []
+                    if type_value.get("uniqueItems"):
+                        constraints.append("unique")
 
-                items_range = self._format_validation_range(
-                    type_value, "minItems", "maxItems", " items"
-                )
-                if items_range:
-                    constraints.append(f"length: {items_range}")
+                    items_range = self._format_validation_range(
+                        type_value, "minItems", "maxItems", " items"
+                    )
+                    if items_range:
+                        constraints.append(f"length: {items_range}")
 
-                if constraints:
-                    array_type = f"{array_type} ({', '.join(constraints)})"
+                    if constraints:
+                        array_type = f"{array_type} ({', '.join(constraints)})"
 
                 return array_type
 
@@ -190,6 +198,8 @@ class TypeScriptFormatter(BaseFormatter):
         """
         Convert a dictionary or list to a formatted string representation.
 
+        This is used for processed properties dict or nested objects.
+
         Args:
             value: The value to convert (dict, list, or primitive).
             indent: Current indentation level.
@@ -197,9 +207,19 @@ class TypeScriptFormatter(BaseFormatter):
         Returns:
             Formatted string representation.
         """
-        # For TypeScript, we don't need to format nested objects as strings
-        # since they're handled by the interface generation
-        return str(value)
+        if isinstance(value, dict):
+            if not value:  # Empty dict
+                return "{}"
+
+            # Format as TypeScript object representation (inline style)
+            pairs = []
+            for k, v in value.items():
+                pairs.append(f"'{k}': '{v}'")
+            return "{" + ", ".join(pairs) + "}"
+        elif isinstance(value, list):
+            return "[" + ", ".join(str(v) for v in value) + "]"
+        else:
+            return str(value)
 
     def transform_schema(self) -> str:
         """
@@ -208,8 +228,42 @@ class TypeScriptFormatter(BaseFormatter):
         Returns:
             TypeScript interface definition as a string.
         """
+        # Check if we have processed data to use instead of re-processing
+        if hasattr(self, "_processed_data") and self._processed_data:
+            # Use the processed data to build proper TypeScript interface
+            required_comment = self.get_required_fields_comment()
+            interface_lines = ["interface Schema {"]
+
+            for name, prop_type in self._processed_data.items():
+                interface_lines.append(f"  {name}: {prop_type};")
+
+            interface_lines.append("}")
+
+            content = "\n".join(interface_lines)
+            if required_comment:
+                return f"{required_comment}\n{content}"
+            else:
+                return content
+
+        # Handle non-object schemas
         if not self.properties:
-            return "interface Schema {}"
+            if "type" in self.schema:
+                # For empty object type, return interface instead of type alias
+                if self.schema.get("type") == "object":
+                    return "interface Schema {}"
+                type_content = self.process_type_value(self.schema)
+                return f"type Schema = {type_content};"
+            elif "oneOf" in self.schema:
+                oneof_content = self.process_oneof(self.schema)
+                return f"type Schema = {oneof_content};"
+            elif "anyOf" in self.schema:
+                anyof_content = self.process_anyof(self.schema)
+                return f"type Schema = {anyof_content};"
+            elif "allOf" in self.schema:
+                allof_content = self.process_allof(self.schema)
+                return f"type Schema = {allof_content};"
+            else:
+                return "interface Schema {}"
 
         from io import StringIO
 
@@ -248,10 +302,9 @@ class TypeScriptFormatter(BaseFormatter):
 
         processed_properties = self.process_properties(self.properties)
         for name, prop_type in processed_properties.items():
-            # Get original field name (without asterisk) for metadata lookup
-            original_name = name.rstrip("*")
-            prop_with_metadata = self.add_metadata(prop_type, self.properties[original_name])
-            main_output.write(f"  {name}: {prop_with_metadata};\n")
+            # process_properties() already includes metadata via process_property()
+            # so we don't need to add it again
+            main_output.write(f"  {name}: {prop_type};\n")
 
         main_output.write("}")
         all_interfaces.append(main_output.getvalue())

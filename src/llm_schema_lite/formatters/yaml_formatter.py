@@ -31,6 +31,11 @@ class YAMLFormatter(BaseFormatter):
             "null": "None",
         }
 
+    @property
+    def comment_prefix(self) -> str:
+        """Comment prefix for YAML format."""
+        return "#"
+
     def process_anyof(self, anyof: dict[str, Any]) -> str:
         """
         Process an anyOf field (union types) for YAML.
@@ -108,18 +113,20 @@ class YAMLFormatter(BaseFormatter):
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
-        # Add validation constraints to type description
-        if type_name == "string":
-            length_range = self._format_validation_range(
-                type_value, "minLength", "maxLength", " chars"
-            )
-            if length_range:
-                type_str = f"{type_str} ({length_range})"
-        elif type_name in ["number", "integer"]:
-            range_info = self._format_validation_range(type_value, "minimum", "maximum")
-            if range_info:
-                type_str = f"{type_str} ({range_info})"
-        elif type_str == "list":
+        # Add validation constraints to type description (only if metadata is enabled)
+        if self.include_metadata:
+            if type_name == "string":
+                length_range = self._format_validation_range(
+                    type_value, "minLength", "maxLength", " chars"
+                )
+                if length_range:
+                    type_str = f"{type_str} ({length_range})"
+            elif type_name in ["number", "integer"]:
+                range_info = self._format_validation_range(type_value, "minimum", "maximum")
+                if range_info:
+                    type_str = f"{type_str} ({range_info})"
+
+        if type_str == "list":
             # Handle list items
             items = type_value.get("items")
             if not items:
@@ -138,26 +145,34 @@ class YAMLFormatter(BaseFormatter):
             else:
                 type_str = "list[Any]"
 
-            # Add array constraints to type description
-            constraints = []
-            if type_value.get("uniqueItems"):
-                constraints.append("unique")
+            # Add array constraints to type description (only if metadata is enabled)
+            if self.include_metadata:
+                constraints = []
+                if type_value.get("uniqueItems"):
+                    constraints.append("unique")
 
-            items_range = self._format_validation_range(
-                type_value, "minItems", "maxItems", " items"
-            )
-            if items_range:
-                constraints.append(f"length: {items_range}")
+                items_range = self._format_validation_range(
+                    type_value, "minItems", "maxItems", " items"
+                )
+                if items_range:
+                    constraints.append(f"length: {items_range}")
 
-            if constraints:
-                type_str = f"{type_str} ({', '.join(constraints)})"
+                if constraints:
+                    type_str = f"{type_str} ({', '.join(constraints)})"
 
-            # Add array-specific metadata (contains)
-            if "contains" in type_value:
-                type_str += self.process_contains(type_value)
-        elif type_str == "dict":
-            # For object types, just return "object" to keep YAML simple
-            # Don't try to format the internal structure
+                # Add array-specific metadata (contains)
+                if "contains" in type_value:
+                    type_str += self.process_contains(type_value)
+
+        if type_str == "dict":
+            # For empty object types (no properties), return "{}"
+            if (
+                "properties" not in type_value
+                and "patternProperties" not in type_value
+                and not isinstance(type_value.get("additionalProperties"), dict)
+            ):
+                return "{}"
+            # For object types with content, return "object" to keep YAML simple
             return "object"
 
         return str(type_str)
@@ -187,6 +202,8 @@ class YAMLFormatter(BaseFormatter):
         """
         Convert a dictionary or list to a formatted string representation.
 
+        This is used for processed properties dict or nested objects.
+
         Args:
             value: The value to convert (dict, list, or primitive).
             indent: Current indentation level.
@@ -195,9 +212,14 @@ class YAMLFormatter(BaseFormatter):
             Formatted string representation.
         """
         if isinstance(value, dict):
-            # For YAML, always return "object" for nested objects to keep it simple
-            # Don't try to format the internal structure
-            return "object"
+            if not value:  # Empty dict
+                return "{}"
+
+            # Format as YAML key: value pairs (similar to transform_schema output)
+            lines = []
+            for k, v in value.items():
+                lines.append(f"{k}: {v}")
+            return "\n".join(lines)
         elif isinstance(value, list):
             # For arrays, show the item type
             if value and isinstance(value[0], dict):
@@ -214,6 +236,16 @@ class YAMLFormatter(BaseFormatter):
         Returns:
             YAML-style schema definition as a string.
         """
+        # Check if we have processed data to use instead of re-processing
+        if hasattr(self, "_processed_data") and self._processed_data:
+            # Use the processed data directly
+            content = self.dict_to_string(self._processed_data, indent=0)
+            required_comment = self.get_required_fields_comment()
+            if required_comment:
+                return f"{required_comment}\n{content}"
+            else:
+                return content
+
         if not self.properties:
             # Handle schema-level features even when there are no properties
             schema_level_features = ""
@@ -247,6 +279,33 @@ class YAMLFormatter(BaseFormatter):
                     )
                 else:
                     return type_content
+            elif "oneOf" in self.schema:
+                oneof_content = self.process_oneof(self.schema)
+                if schema_level_features and self.include_metadata:
+                    return (
+                        f"# Schema-level constraints: {schema_level_features.strip()}\n"
+                        f"{oneof_content}"
+                    )
+                else:
+                    return oneof_content
+            elif "anyOf" in self.schema:
+                anyof_content = self.process_anyof(self.schema)
+                if schema_level_features and self.include_metadata:
+                    return (
+                        f"# Schema-level constraints: {schema_level_features.strip()}\n"
+                        f"{anyof_content}"
+                    )
+                else:
+                    return anyof_content
+            elif "allOf" in self.schema:
+                allof_content = self.process_allof(self.schema)
+                if schema_level_features and self.include_metadata:
+                    return (
+                        f"# Schema-level constraints: {schema_level_features.strip()}\n"
+                        f"{allof_content}"
+                    )
+                else:
+                    return allof_content
 
             # Return schema-level features as comments if present
             if schema_level_features and self.include_metadata:
@@ -288,13 +347,13 @@ class YAMLFormatter(BaseFormatter):
                 nested_required = set(def_schema.get("required", []))
 
                 for prop_name, prop_def in nested_props.items():
+                    # process_property() already includes metadata, no need to add it again
                     prop_type = self.process_property(prop_def)
-                    prop_with_metadata = self.add_metadata(prop_type, prop_def)
                     # Format field name with required indicator for nested definitions
                     formatted_prop_name = (
                         f"{prop_name}*" if prop_name in nested_required else prop_name
                     )
-                    nested_output.write(f"{def_name}.{formatted_prop_name}: {prop_with_metadata}\n")
+                    nested_output.write(f"{def_name}.{formatted_prop_name}: {prop_type}\n")
 
                 all_sections.append(nested_output.getvalue().rstrip())
 
@@ -309,10 +368,9 @@ class YAMLFormatter(BaseFormatter):
         processed_properties = self.process_properties(self.properties)
 
         for name, prop_type in processed_properties.items():
-            # Get original field name (without asterisk) for metadata lookup
-            original_name = name.rstrip("*")
-            prop_with_metadata = self.add_metadata(prop_type, self.properties[original_name])
-            main_output.write(f"{name}: {prop_with_metadata}\n")
+            # process_properties() already includes metadata via process_property()
+            # so we don't need to add it again
+            main_output.write(f"{name}: {prop_type}\n")
 
         # Add schema-level features as comments if present
         if schema_level_features and self.include_metadata:

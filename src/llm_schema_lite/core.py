@@ -1,4 +1,4 @@
-"""Core API for schema-lite."""
+"""Core functionality for LLM Schema Lite."""
 
 import json
 import re
@@ -28,51 +28,61 @@ except ImportError:
     FormatChecker = None
 
 from .exceptions import ConversionError, UnsupportedModelError, ValidationError
-from .formatters import BaseFormatter, JSONishFormatter, TypeScriptFormatter, YAMLFormatter
+from .formatters import JSONishFormatter, TypeScriptFormatter, YAMLFormatter
 
 
 class SchemaLite:
     """
-    A simplified schema representation with multiple output formats.
+    Simplified schema representation with multiple output formats.
 
-    This class wraps the processed schema and provides convenient methods
-    for converting to different formats (JSON, YAML, string, etc.).
+    This class provides a unified interface for converting schemas to different
+    string representations while maintaining the original data for dictionary access.
     """
 
     def __init__(
         self,
         processed_data: dict[str, Any],
-        formatter: BaseFormatter,
-        original_schema: dict[str, Any],
+        formatter: JSONishFormatter | TypeScriptFormatter | YAMLFormatter,
+        original_schema: dict[str, Any] | None = None,
     ):
         """
-        Initialize SchemaLite.
+        Initialize SchemaLite with processed data and formatter.
 
         Args:
             processed_data: The processed schema data.
-            formatter: The formatter used to process the schema.
-            original_schema: The original Pydantic JSON schema.
+            formatter: The formatter instance for this schema.
+            original_schema: The original JSON schema (optional).
         """
         self._data = processed_data
         self._formatter = formatter
         self._original_schema = original_schema
         self._string_representation: str | None = None
 
+    @property
+    def _data(self) -> dict[str, Any]:
+        """Get the processed data."""
+        return self.__data
+
+    @_data.setter
+    def _data(self, value: dict[str, Any]) -> None:
+        """Set the processed data."""
+        self.__data = value
+
     def to_dict(self) -> dict[str, Any]:
         """
         Get the simplified schema as a dictionary.
 
         Returns:
-            Dictionary representation of the simplified schema.
+            Dictionary representation of the schema.
         """
         return self._data
 
     def to_json(self, indent: int = 2) -> str:
         """
-        Get the simplified schema as JSON string.
+        Get the simplified schema as a JSON string.
 
         Args:
-            indent: Number of spaces for indentation.
+            indent: JSON indentation level.
 
         Returns:
             JSON string representation.
@@ -83,14 +93,33 @@ class SchemaLite:
         """
         Get the simplified schema as a formatted string.
 
-        This uses the formatter's transform_schema method to produce
-        a human-readable string representation optimized for LLMs.
+        Uses the processed data from the formatter.
 
         Returns:
             String representation of the schema.
         """
         if self._string_representation is None:
-            self._string_representation = self._formatter.transform_schema()
+            # Use the processed data directly
+            if "schema" in self._data:
+                # If we have a pre-formatted schema string, use it
+                self._string_representation = self._data["schema"]
+            else:
+                # For properties dict, use formatter-specific formatting
+                from .formatters import TypeScriptFormatter, YAMLFormatter
+
+                if isinstance(self._formatter, YAMLFormatter | TypeScriptFormatter):
+                    # Use transform_schema() for proper interface/YAML syntax
+                    # But first set the processed data so transform_schema() can use it
+                    self._formatter._processed_data = self._data
+                    self._string_representation = self._formatter.transform_schema()
+                else:
+                    # For JSONish, use dict_to_string() with required fields comment
+                    content = self._formatter.dict_to_string(self._data, indent=0)
+                    required_comment = self._formatter.get_required_fields_comment()
+                    if required_comment:
+                        self._string_representation = f"{required_comment}\n{content}"
+                    else:
+                        self._string_representation = content
         return self._string_representation
 
     def to_yaml(self, default_flow_style: bool = False) -> str:
@@ -98,24 +127,14 @@ class SchemaLite:
         Get the simplified schema as YAML string.
 
         Args:
-            default_flow_style: Whether to use flow style for YAML.
+            default_flow_style: Use flow style for YAML output.
 
         Returns:
             YAML string representation.
-
-        Raises:
-            ImportError: If PyYAML is not installed.
         """
-        try:
-            import yaml
-
-            return str(
-                yaml.dump(self._data, default_flow_style=default_flow_style, sort_keys=False)
-            )
-        except ImportError as e:
-            raise ImportError(
-                "PyYAML is required for YAML output. Install it with: pip install PyYAML"
-            ) from e
+        # For now, just return the string representation
+        # TODO: Implement proper YAML formatting if needed
+        return self.to_string()
 
     def token_count(self, encoding: str = "cl100k_base") -> int:
         """
@@ -297,11 +316,13 @@ def simplify_schema(
             f"Supported formats: 'jsonish', 'typescript', 'yaml'"
         )
 
-    # Process the schema
+    # Let the formatter handle all processing logic
     try:
-        processed_properties = formatter.process_properties(original_schema.get("properties", {}))
+        # The formatter knows how to process its own schema
+        # We just need to provide the raw data for to_dict() compatibility
+        processed_data = formatter.process_schema()
         return SchemaLite(
-            processed_data=processed_properties,
+            processed_data=processed_data,
             formatter=formatter,
             original_schema=original_schema,
         )

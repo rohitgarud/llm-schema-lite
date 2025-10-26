@@ -15,7 +15,8 @@ class BaseFormatter(ABC):
     """
 
     # Common regex pattern for $ref processing
-    REF_PATTERN = re.compile(r"#/\$defs/(.+)$", re.IGNORECASE)
+    # REF_PATTERN = re.compile(r"#/\$defs/(.+)$", re.IGNORECASE)
+    REF_PATTERN = re.compile(r"#/(?:definitions|\$defs)/(.+)$", re.IGNORECASE)
 
     # Common metadata mapping for all formatters
     METADATA_MAP: dict[str, Callable[[Any], str]] = {
@@ -57,12 +58,112 @@ class BaseFormatter(ABC):
         """
         self.schema = schema
         self.include_metadata = include_metadata
-        self.defs = schema.get("$defs", {})
+        self.defs = schema.get("$defs", schema.get("definitions", {}))
         self.properties = schema.get("properties", {})
         self.required_fields = set(schema.get("required", []))
         self._ref_cache: dict[str, str] = {}
         self._recursion_depth: dict[str, int] = {}
-        self._max_recursion_depth = 10
+        self._max_recursion_depth = 3  # Further reduced to prevent infinite expansion
+        self._processed_refs: set[str] = set()  # Track processed refs to prevent cycles
+        self._expansion_count: dict[str, int] = {}  # Track expansion count per ref
+        self._max_expansions = 3  # Further reduced to prevent excessive expansion
+        self._ref_depth_tracker: dict[str, int] = {}  # Track depth per ref path
+        self._processed_data: dict[str, Any] | None = None  # Set by core.py for transform_schema()
+        self._max_ref_depth = 2  # Maximum depth for $ref resolution
+
+        # Priority 1: Global expansion budget to prevent extreme expansion
+        self._global_expansion_budget = 150  # Max total $ref expansions across entire schema
+        self._global_expansion_count = 0  # Track total expansions
+        self._ref_expansion_path: list[str] = []  # Track current expansion path for cycle detection
+        self._expansion_fingerprints: set[str] = set()  # Track expansion patterns to detect cycles
+
+        # Pre-warm cache for common patterns
+
+    def process_schema(self) -> dict[str, Any]:
+        """
+        Process the schema and return the appropriate data structure.
+
+        This method handles all schema processing logic that was previously in core.py.
+        It determines the appropriate processing method based on the schema structure.
+
+        Returns:
+            Dictionary containing processed schema data.
+        """
+        # Handle different top-level schema types
+        if "$ref" in self.schema and not self.schema.get("properties"):
+            # Handle $ref at top level
+            ref_result = self.process_ref(self.schema)
+            if ref_result == "object" or not ref_result:
+                # Fallback for failed ref resolution
+                ref_path = self.schema.get("$ref", "")
+                if ref_path:
+                    ref_match = self.REF_PATTERN.search(ref_path)
+                    if ref_match:
+                        ref_key = ref_match.group(1)
+                        ref_def = self.defs.get(ref_key)
+                        if ref_def and isinstance(ref_def, dict):
+                            if "properties" in ref_def:
+                                # Process properties from resolved definition
+                                processed_props = self.process_properties(ref_def["properties"])
+                                return {"schema": self.dict_to_string(processed_props, indent=0)}
+                            elif "enum" in ref_def:
+                                # Handle enum in resolved definition
+                                return {"schema": self.process_enum(ref_def)}
+                            elif "oneOf" in ref_def:
+                                return {"schema": self.process_oneof(ref_def)}
+                            elif "anyOf" in ref_def:
+                                return {"schema": self.process_anyof(ref_def)}
+                            elif "allOf" in ref_def:
+                                return {"schema": self.process_allof(ref_def)}
+                            elif "type" in ref_def:
+                                return {"schema": self.process_type_value(ref_def)}
+                        return {"schema": f"object  {self.comment_prefix}$ref: {ref_path}"}
+                    return {"schema": f"object  {self.comment_prefix}$ref resolution failed"}
+                return {"schema": "object"}
+            else:
+                return {"schema": ref_result}
+        elif "properties" in self.schema and self.schema.get("properties"):
+            # Handle object schemas with properties
+            schema_type = self.schema.get("type")
+            if schema_type in ("array", "string", "number", "integer", "boolean", "null"):
+                # Let type handling take precedence for non-object types
+                return {"schema": self.process_type_value(self.schema)}
+            else:
+                # Check if we have schema-level features that need to be included
+                has_schema_features = any(
+                    key in self.schema
+                    for key in [
+                        "dependencies",
+                        "if",
+                        "then",
+                        "else",
+                        "patternProperties",
+                        "propertyNames",
+                        "unevaluatedProperties",
+                    ]
+                )
+
+                if has_schema_features:
+                    # Use transform_schema() to include schema-level features
+                    return {"schema": self.transform_schema()}
+                else:
+                    # Return processed properties dict for to_dict() compatibility
+                    return self.process_properties(self.schema.get("properties", {}))
+        elif "type" in self.schema:
+            # Handle schemas with type but no properties
+            if self.schema.get("type") == "object":
+                return {"schema": self.transform_schema()}
+            else:
+                return {"schema": self.process_type_value(self.schema)}
+        elif "oneOf" in self.schema:
+            return {"schema": self.process_oneof(self.schema)}
+        elif "anyOf" in self.schema:
+            return {"schema": self.process_anyof(self.schema)}
+        elif "allOf" in self.schema:
+            return {"schema": self.process_allof(self.schema)}
+        else:
+            # Fallback for unknown schema types
+            return {"schema": "object"}
 
         # Pre-warm cache for common patterns
         self._warm_cache()
@@ -78,6 +179,69 @@ class BaseFormatter(ABC):
             ):
                 self._ref_cache[ref_key] = self.TYPE_MAP.get(ref_def["type"], ref_def["type"])
 
+    def _is_problematic_schema(self, schema: dict[str, Any]) -> bool:
+        """Detect schemas that are likely to cause issues."""
+        # Check for very large schemas
+        if len(str(schema)) > 50000:  # Very large schemas
+            return True
+
+        # Check for schemas with many definitions
+        defs = schema.get("$defs", schema.get("definitions", {}))
+        if len(defs) > 100:  # Too many definitions
+            return True
+
+        # Check for schemas with deep nesting
+        def _check_depth(obj: Any, current_depth: int = 0, max_depth: int = 10) -> bool:
+            if current_depth > max_depth:
+                return True
+            if isinstance(obj, dict):
+                for value in obj.values():
+                    if _check_depth(value, current_depth + 1, max_depth):
+                        return True
+            elif isinstance(obj, list):
+                for item in obj:
+                    if _check_depth(item, current_depth + 1, max_depth):
+                        return True
+            return False
+
+        return _check_depth(schema)
+
+    def _resolve_nested_definition_path(self, ref_path: str) -> dict[str, Any] | None:
+        """
+        Priority 2: Resolve nested definition paths like #/definitions/636d/full.
+
+        Args:
+            ref_path: The $ref path (e.g., "#/definitions/636d/full")
+
+        Returns:
+            The resolved definition or None if not found
+        """
+        # Remove the leading #/ if present
+        if ref_path.startswith("#/"):
+            ref_path = ref_path[2:]
+
+        # Split the path into parts
+        parts = ref_path.split("/")
+
+        # Start with the root definitions
+        current = None
+        if parts[0] in ("definitions", "$defs"):
+            current = self.defs
+            parts = parts[1:]  # Skip the definitions/$defs part
+        else:
+            return None
+
+        # Navigate through the path
+        for part in parts:
+            if current is None:
+                return None
+            if isinstance(current, dict):
+                current = current.get(part)
+            else:
+                return None
+
+        return current if isinstance(current, dict) else None
+
     def get_available_metadata(self, value: dict[str, Any]) -> list[str]:
         """
         Get available metadata keys for a property.
@@ -88,11 +252,19 @@ class BaseFormatter(ABC):
         Returns:
             List of available metadata keys.
         """
-        return [
+        available = [
             k
             for k in self.METADATA_MAP.keys()
             if k in value and not (k == "default" and value[k] is None)
         ]
+
+        # Also check for underscore-prefixed versions (e.g., _format, _uniqueItems)
+        for k in self.METADATA_MAP.keys():
+            underscore_key = f"_{k}"
+            if underscore_key in value and k not in available:
+                available.append(k)  # Add without underscore for processing
+
+        return available
 
     def format_metadata_parts(self, value: dict[str, Any]) -> list[str]:
         """
@@ -108,11 +280,16 @@ class BaseFormatter(ABC):
         formatted_parts = []
 
         for k in available_metadata:
+            # Check both regular and underscore-prefixed keys
+            actual_key = k if k in value else f"_{k}"
+
             if k == "contains":
-                formatted_parts.append(f"contains: {self._format_contains(value[k])}")
+                formatted_parts.append(f"contains: {self._format_contains(value[actual_key])}")
             elif k == "additionalItems":
-                formatted_parts.append(f"additionalItems: {self._format_type_simple(value[k])}")
-            elif k == "if" and "then" in value:
+                formatted_parts.append(
+                    f"additionalItems: {self._format_type_simple(value[actual_key])}"
+                )
+            elif k == "if" and ("then" in value or "_then" in value):
                 # Handle conditional logic as a single unit
                 if_schema = value.get("if", {})
                 then_schema = value.get("then", {})
@@ -123,7 +300,7 @@ class BaseFormatter(ABC):
                     )
                 else:
                     formatted_parts.append(self._format_conditional(if_schema, then_schema))
-            elif k in ["then", "else"] and "if" in value:
+            elif k in ["then", "else"] and ("if" in value or "_if" in value):
                 # Skip these as they're handled with "if"
                 continue
             elif (
@@ -144,7 +321,7 @@ class BaseFormatter(ABC):
                 # Skip these for numbers as they're integrated into the type description
                 continue
             else:
-                formatted_parts.append(self.METADATA_MAP[k](value[k]))
+                formatted_parts.append(self.METADATA_MAP[k](value[actual_key]))
 
         return formatted_parts
 
@@ -171,12 +348,18 @@ class BaseFormatter(ABC):
         """
         if not self.required_fields:
             return ""
-        return "// Fields marked with * are required"
+        return f"{self.comment_prefix} Fields marked with * are required"
 
     @property
     @abstractmethod
     def TYPE_MAP(self) -> dict[str, str]:
         """Type mapping dictionary for the formatter."""
+        pass
+
+    @property
+    @abstractmethod
+    def comment_prefix(self) -> str:
+        """Comment prefix for the formatter (e.g., '//' for JSONish/TypeScript, '#' for YAML)."""
         pass
 
     def process_ref(self, ref: dict[str, Any]) -> str:
@@ -199,39 +382,124 @@ class BaseFormatter(ABC):
             return "object"  # Fallback for invalid ref
 
         ref_key = ref_match.group(1)
-        if ref_key in self._ref_cache:
-            return self._ref_cache[ref_key]
+
+        # Priority 1: Check global expansion budget first
+        if self._global_expansion_count >= self._global_expansion_budget:
+            return "object"  # Hit global budget limit
+
+        # Create expansion fingerprint to detect circular patterns
+        expansion_fingerprint = "->".join(self._ref_expansion_path + [ref_key])
+        if expansion_fingerprint in self._expansion_fingerprints:
+            return "object"  # Detected circular expansion pattern
+
+        # Check if we've already processed this ref in this cycle
+        if ref_key in self._processed_refs:
+            return "object"  # Prevent circular references
+
+        # Check expansion count
+        expansion_count = self._expansion_count.get(ref_key, 0)
+        if expansion_count >= self._max_expansions:
+            return "object"  # Prevent infinite expansion
 
         # Check recursion depth
         current_depth = self._recursion_depth.get(ref_key, 0)
         if current_depth >= self._max_recursion_depth:
             return "object"  # Prevent infinite recursion
 
-        # Increment recursion depth
+        # Check ref depth to prevent deep nesting
+        ref_depth = self._ref_depth_tracker.get(ref_key, 0)
+        if ref_depth >= self._max_ref_depth:
+            return "object"  # Prevent deep ref resolution
+
+        # Check cache first
+        if ref_key in self._ref_cache:
+            return self._ref_cache[ref_key]
+
+        # Mark as being processed
+        self._processed_refs.add(ref_key)
         self._recursion_depth[ref_key] = current_depth + 1
+        self._expansion_count[ref_key] = expansion_count + 1
+        self._ref_depth_tracker[ref_key] = ref_depth + 1
+
+        # Priority 1: Track global expansion and path
+        self._global_expansion_count += 1
+        self._ref_expansion_path.append(ref_key)
+        self._expansion_fingerprints.add(expansion_fingerprint)
 
         try:
-            # Safely get ref definition
-            ref_def = self.defs.get(ref_key)
+            # Priority 2: Try to resolve nested definition paths first
+            ref_def = None
+            if "/" in ref_key:
+                # This might be a nested path like "636d/full"
+                ref_def = self._resolve_nested_definition_path(f"definitions/{ref_key}")
+                if not ref_def:
+                    ref_def = self._resolve_nested_definition_path(f"$defs/{ref_key}")
+
+            # Fallback to simple lookup
+            if not ref_def:
+                ref_def = self.defs.get(ref_key)
+
             if not ref_def:
                 return "object"  # Fallback for missing definition
 
-            if "enum" in ref_def:
-                # Handle enum definitions
-                ref_str = self.process_enum(ref_def)
-            elif "properties" in ref_def:
+            # Handle different definition types with better structure preservation
+            # Prioritize properties when present, as it gives more concrete structure
+            if "properties" in ref_def and ref_def["properties"]:
+                # Handle object definitions with properties
                 processed_properties = self.process_properties(ref_def["properties"])
                 ref_str = self.dict_to_string(processed_properties, indent=2)
+            elif "enum" in ref_def:
+                # Handle enum definitions
+                ref_str = self.process_enum(ref_def)
+            elif "oneOf" in ref_def:
+                # Handle oneOf definitions - preserve structure
+                ref_str = self.process_oneof(ref_def)
+            elif "anyOf" in ref_def:
+                # Handle anyOf definitions - preserve structure
+                ref_str = self.process_anyof(ref_def)
+            elif "allOf" in ref_def:
+                # Handle allOf definitions - preserve structure
+                ref_str = self.process_allof(ref_def)
             elif "type" in ref_def:
+                # Handle type definitions with constraints
                 ref_str = self.process_type_value(ref_def)
+            elif "$ref" in ref_def:
+                # Handle nested $ref references
+                ref_str = self.process_ref(ref_def)
+            elif "const" in ref_def:
+                # Handle const definitions
+                ref_str = str(ref_def["const"])
+            elif "pattern" in ref_def:
+                # Handle pattern-only definitions (like regex patterns)
+                ref_str = f"string (pattern: {ref_def['pattern']})"
+            elif "format" in ref_def:
+                # Handle format-only definitions
+                ref_str = f"string (format: {ref_def['format']})"
             else:
-                ref_str = "object"
+                # For complex definitions that don't match patterns, try to preserve some structure
+                if isinstance(ref_def, dict) and len(ref_def) > 0:
+                    # Try to extract meaningful information
+                    if "description" in ref_def:
+                        ref_str = f"object //{ref_def['description']}"
+                    elif "title" in ref_def:
+                        ref_str = f"object //{ref_def['title']}"
+                    else:
+                        ref_str = "object"
+                else:
+                    ref_str = "object"
 
+            # Cache the result
             self._ref_cache[ref_key] = ref_str
             return ref_str
         finally:
-            # Decrement recursion depth
+            # Clean up tracking
+            self._processed_refs.discard(ref_key)
             self._recursion_depth[ref_key] = current_depth
+            self._ref_depth_tracker[ref_key] = ref_depth
+
+            # Priority 1: Clean up expansion path
+            if self._ref_expansion_path and self._ref_expansion_path[-1] == ref_key:
+                self._ref_expansion_path.pop()
 
     def process_enum(self, enum_value: dict[str, Any]) -> str:
         """
@@ -302,18 +570,38 @@ class BaseFormatter(ABC):
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
-        # Add validation constraints to type description
-        if type_name == "string":
-            length_range = self._format_validation_range(
-                type_value, "minLength", "maxLength", " chars"
-            )
-            if length_range:
-                type_str = f"{type_str} ({length_range})"
-        elif type_name in ["number", "integer"]:
-            range_info = self._format_validation_range(type_value, "minimum", "maximum")
-            if range_info:
-                type_str = f"{type_str} ({range_info})"
-        elif type_str == "array":
+        # Add validation constraints to type description (only if metadata is enabled)
+        if self.include_metadata:
+            if type_name == "string":
+                constraints = []
+
+                # Add length constraints
+                length_range = self._format_validation_range(
+                    type_value, "minLength", "maxLength", " chars"
+                )
+                if length_range:
+                    constraints.append(length_range)
+
+                # Add pattern constraints
+                if "pattern" in type_value:
+                    pattern = type_value["pattern"]
+                    # Truncate very long patterns for readability
+                    if len(pattern) > 50:
+                        pattern = pattern[:47] + "..."
+                    constraints.append(f"pattern: {pattern}")
+
+                # Add format constraints
+                if "format" in type_value:
+                    constraints.append(f"format: {type_value['format']}")
+
+                if constraints:
+                    type_str = f"{type_str} ({', '.join(constraints)})"
+            elif type_name in ["number", "integer"]:
+                range_info = self._format_validation_range(type_value, "minimum", "maximum")
+                if range_info:
+                    type_str = f"{type_str} ({range_info})"
+
+        if type_str == "array":
             # Safely handle array items
             items = type_value.get("items")
             if not items:
@@ -322,13 +610,25 @@ class BaseFormatter(ABC):
                 # Handle boolean items (true means any type, false means no items)
                 type_str = "array" if items else "array"
             elif isinstance(items, dict) and "type" in items:
-                items_type = self.process_type_value(items)
-                type_str = f"{items_type}[]"
+                # For object items, process the full structure
+                if items["type"] == "object" and "properties" in items:
+                    processed_properties = self.process_properties(items["properties"])
+                    items_structure = self.dict_to_string(processed_properties, indent=2)
+                    type_str = f"[\n{items_structure}\n]"
+                else:
+                    items_type = self.process_type_value(items)
+                    type_str = f"{items_type}[]"
             elif isinstance(items, dict) and "$ref" in items:
                 items_type = self.process_ref(items)
                 type_str = f"[{items_type}]"
             elif isinstance(items, dict) and "anyOf" in items:
                 items_type = self.process_anyof(items)
+                type_str = f"[{items_type}]"
+            elif isinstance(items, dict) and "allOf" in items:
+                items_type = self.process_allof(items)
+                type_str = f"[{items_type}]"
+            elif isinstance(items, dict) and "oneOf" in items:
+                items_type = self.process_oneof(items)
                 type_str = f"[{items_type}]"
             else:
                 type_str = "array"  # Fallback for unknown array item type
@@ -391,11 +691,30 @@ class BaseFormatter(ABC):
                     item_types.append("[]")
                 else:
                     item_types.append(self.process_type_value(item))
+            elif "properties" in item:
+                # Handle object schemas in anyOf
+                processed_props = self.process_properties(item["properties"])
+                items_structure = self.dict_to_string(processed_props, indent=2)
+                item_types.append(f"{{\n{items_structure}\n}}")
             else:
                 # Unknown anyOf item, skip it
                 continue
 
-        return " or ".join(item_types) if item_types else "string"
+        # Limit the number of union types to prevent excessive expansion
+        # Be very aggressive to prevent recursive anyOf explosion
+        if self._global_expansion_count > 100:
+            max_items = 2  # Very aggressive for deep recursion
+        elif self._global_expansion_count > 30:
+            max_items = 3  # Aggressive (lowered threshold from 50)
+        elif self._global_expansion_count > 10:
+            max_items = 4  # Moderate (new tier)
+        else:
+            max_items = 5  # Conservative start (reduced from 6)
+
+        if len(item_types) > max_items:
+            return f"anyOf: {len(item_types)} options"
+        else:
+            return " or ".join(item_types) if item_types else "string"
 
     def process_oneof(self, oneof: dict[str, Any]) -> str:
         """Process oneOf (exclusive choice) schemas."""
@@ -409,14 +728,44 @@ class BaseFormatter(ABC):
             if not isinstance(item, dict):
                 continue
 
-            if "type" in item:
+            if "allOf" in item:
+                # Handle allOf inside oneOf
+                item_types.append(self.process_allof(item))
+            elif "anyOf" in item:
+                # Handle anyOf inside oneOf
+                item_types.append(self.process_anyof(item))
+            elif "enum" in item:
+                # Check enum before type to preserve enum constraints
+                item_types.append(self.process_enum(item))
+            elif "type" in item:
                 item_types.append(self.process_type_value(item))
             elif "$ref" in item:
                 item_types.append(self.process_ref(item))
-            elif "enum" in item:
-                item_types.append(self.process_enum(item))
+            elif "properties" in item:
+                # Handle object schemas in oneOf
+                processed_props = self.process_properties(item["properties"])
+                items_structure = self.dict_to_string(processed_props, indent=2)
+                item_types.append(f"{{\n{items_structure}\n}}")
+            elif "const" in item:
+                item_types.append(str(item["const"]))
 
-        return f"oneOf: {' | '.join(item_types)}" if item_types else "string"
+        # Preserve oneOf structure but limit to reasonable number of options
+        # Be very aggressive to prevent recursive oneOf explosion
+        if self._global_expansion_count > 100:
+            max_items = 3  # Very aggressive for deep recursion
+        elif self._global_expansion_count > 30:
+            max_items = 4  # Aggressive (lowered threshold from 50)
+        elif self._global_expansion_count > 10:
+            max_items = 5  # Moderate (new tier)
+        else:
+            max_items = 6  # Conservative start (reduced from 8)
+
+        if len(item_types) > max_items:
+            return f"oneOf: {len(item_types)} options"
+        elif item_types:
+            return f"oneOf: {' | '.join(item_types)}"
+        else:
+            return "string"
 
     def process_allof(self, allof: dict[str, Any]) -> str:
         """Process allOf (intersection) schemas."""
@@ -429,7 +778,12 @@ class BaseFormatter(ABC):
         item_types = []
         for item in allof_list:
             if isinstance(item, dict):
-                if "type" in item:
+                if "type" in item and "properties" in item:
+                    # Handle object schemas with properties in allOf
+                    processed_props = self.process_properties(item["properties"])
+                    items_structure = self.dict_to_string(processed_props, indent=2)
+                    item_types.append(f"{{\n{items_structure}\n}}")
+                elif "type" in item:
                     item_types.append(self.process_type_value(item))
                 elif "$ref" in item:
                     item_types.append(self.process_ref(item))
@@ -437,10 +791,16 @@ class BaseFormatter(ABC):
                     # Handle object schemas in allOf
                     processed_props = self.process_properties(item["properties"])
                     item_types.append(self.dict_to_string(processed_props, indent=2))
+                elif "description" in item and not item.get("type"):
+                    # Skip items that only have description
+                    continue
                 else:
                     item_types.append("object")
 
-        if item_types:
+        # Limit allOf combinations to prevent excessive expansion
+        if len(item_types) > 3:  # Reduced from 5 to prevent over-expansion
+            return f"allOf: {len(item_types)} schemas"
+        elif item_types:
             return f"allOf: {' & '.join(item_types)}"
         else:
             return "object"
@@ -486,7 +846,37 @@ class BaseFormatter(ABC):
         elif "not" in _property:
             prop_str = self.process_not(_property)
         elif "type" in _property:
-            prop_str = self.process_type_value(_property)
+            # Check if this is an object with nested properties that should be expanded
+            if (
+                _property.get("type") == "object"
+                and "properties" in _property
+                and _property["properties"]
+            ):
+                # Expand nested object properties
+                nested_props = self.process_properties(_property["properties"])
+                prop_str = self.dict_to_string(nested_props, indent=1)
+            # Check if this is an object with patternProperties
+            elif _property.get("type") == "object" and "patternProperties" in _property:
+                # Process patternProperties and show the structure
+                pattern_props = _property["patternProperties"]
+                pattern_results = []
+                for pattern, pattern_def in list(pattern_props.items())[:2]:  # Limit to 2
+                    if isinstance(pattern_def, dict):
+                        if "$ref" in pattern_def:
+                            pattern_type = self.process_ref(pattern_def)
+                        elif "properties" in pattern_def:
+                            nested_props = self.process_properties(pattern_def["properties"])
+                            pattern_type = self.dict_to_string(nested_props, indent=1)
+                        elif "type" in pattern_def:
+                            pattern_type = self.process_type_value(pattern_def)
+                        else:
+                            pattern_type = "object"
+                    else:
+                        pattern_type = str(pattern_def)
+                    pattern_results.append(f"[{pattern}]: {pattern_type}")
+                prop_str = f"object  //pattern: {', '.join(pattern_results)}"
+            else:
+                prop_str = self.process_type_value(_property)
         else:
             # Fallback for properties without recognizable type
             prop_str = "string"
@@ -543,7 +933,8 @@ class BaseFormatter(ABC):
         additional_props = schema.get("additionalProperties")
         if additional_props is False:
             return " //no additional properties"
-        elif isinstance(additional_props, dict):
+        elif isinstance(additional_props, dict) and additional_props:
+            # Only process if dict is non-empty
             return f" //additional: {self.process_type_value(additional_props)}"
         return ""
 
@@ -553,7 +944,21 @@ class BaseFormatter(ABC):
         if pattern_props:
             patterns = []
             for pattern, definition in pattern_props.items():
-                patterns.append(f"{pattern}: {self.process_type_value(definition)}")
+                # Process pattern definition properly (handle $ref, properties, etc.)
+                if isinstance(definition, dict):
+                    if "$ref" in definition:
+                        pattern_type = self.process_ref(definition)
+                    elif "properties" in definition:
+                        # Expand properties for pattern
+                        nested_props = self.process_properties(definition["properties"])
+                        pattern_type = self.dict_to_string(nested_props, indent=1)
+                    elif "type" in definition:
+                        pattern_type = self.process_type_value(definition)
+                    else:
+                        pattern_type = "object"
+                else:
+                    pattern_type = str(definition)
+                patterns.append(f"{pattern}: {pattern_type}")
             return f" //patternProperties: {', '.join(patterns)}"
         return ""
 
