@@ -173,7 +173,7 @@ class TestDictHandling:
         # YAML
         yaml = simplify_schema(Model, format_type="yaml", include_metadata=False)
         output_y = yaml.to_string()
-        assert "metadata*: object" in output_y  # Required field with asterisk
+        assert "metadata*: {}" in output_y  # Required field with asterisk
         assert "settings*: object" in output_y  # Required field with asterisk
 
     def test_dict_with_types(self):

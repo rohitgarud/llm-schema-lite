@@ -316,8 +316,7 @@ class TestValidateWithJSONSchemaString:
     def test_valid_schema_string(self):
         """Test validation with JSON schema string."""
         schema_str = (
-            '{"type": "object", "properties": {"name": {"type": "string"}}, '
-            '"required": ["name"]}'
+            '{"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}'
         )
 
         is_valid, errors = validate(schema_str, {"name": "John"})

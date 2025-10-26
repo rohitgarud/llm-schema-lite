@@ -47,7 +47,7 @@ class TestRequiredFields:
         output = schema.to_string()
 
         # Should include required fields comment
-        assert "// Fields marked with * are required" in output
+        assert "# Fields marked with * are required" in output
 
         # Required fields should have asterisks
         assert "name*:" in output

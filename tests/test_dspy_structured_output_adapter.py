@@ -10,6 +10,7 @@ This test suite covers all functionality of the StructuredOutputAdapter includin
 """
 
 from typing import Literal
+from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import BaseModel, Field
@@ -29,6 +30,7 @@ except ImportError:
 from llm_schema_lite.dspy_integration.adapters.structured_output_adapter import (
     OutputMode,
     StructuredOutputAdapter,
+    _get_structured_outputs_response_format,
 )
 
 # ==================== Test Models ====================
@@ -710,3 +712,458 @@ def test_adapter_functionality_summary():
     print("=" * 60)
 
     assert all(functionality.values())
+
+
+class TestDSPyAdapterSimple:
+    """Simple tests for DSPy structured output adapter."""
+
+    def test_output_mode_enum_values(self):
+        """Test OutputMode enum values."""
+        assert OutputMode.JSON.value == "json"
+        assert OutputMode.JSONISH.value == "jsonish"
+        assert OutputMode.YAML.value == "yaml"
+
+    def test_adapter_initialization_defaults(self):
+        """Test adapter initialization with default values."""
+        adapter = StructuredOutputAdapter()
+        assert adapter.output_mode == OutputMode.JSONISH
+        assert adapter.include_input_schemas is True
+        assert adapter.use_native_function_calling is True
+
+    def test_adapter_initialization_custom_values(self):
+        """Test adapter initialization with custom values."""
+        adapter = StructuredOutputAdapter(
+            output_mode=OutputMode.YAML,
+            include_input_schemas=False,
+            use_native_function_calling=False,
+        )
+        assert adapter.output_mode == OutputMode.YAML
+        assert adapter.include_input_schemas is False
+        assert adapter.use_native_function_calling is False
+
+    def test_adapter_initialization_with_callbacks(self):
+        """Test adapter initialization with callbacks."""
+        mock_callback = Mock()
+        adapter = StructuredOutputAdapter(callbacks=[mock_callback])
+        assert adapter.callbacks == [mock_callback]
+
+    def test_parse_json_success(self):
+        """Test successful JSON parsing."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock(), "field2": Mock()}
+
+        # Mock the loads function
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = {"field1": "value1", "field2": "value2"}
+
+            # Mock parse_value
+            with patch(
+                "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.parse_value"
+            ) as mock_parse:
+                mock_parse.side_effect = lambda v, annotation: v
+
+                result = adapter._parse_json(
+                    mock_signature, '{"field1": "value1", "field2": "value2"}'
+                )
+
+                assert result == {"field1": "value1", "field2": "value2"}
+
+    def test_parse_json_missing_fields(self):
+        """Test JSON parsing with missing fields."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock(), "field2": Mock()}
+
+        # Mock the loads function
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = {"field1": "value1"}  # Missing field2
+
+            # Mock parse_value
+            with patch(
+                "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.parse_value"
+            ) as mock_parse:
+                mock_parse.side_effect = lambda v, annotation: v
+
+                with pytest.raises(AdapterParseError):
+                    adapter._parse_json(mock_signature, '{"field1": "value1"}')
+
+    def test_parse_json_extra_fields(self):
+        """Test JSON parsing with extra fields (should be filtered out)."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock()}
+
+        # Mock the loads function
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = {"field1": "value1", "extra_field": "extra_value"}
+
+            # Mock parse_value
+            with patch(
+                "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.parse_value"
+            ) as mock_parse:
+                mock_parse.side_effect = lambda v, annotation: v
+
+                # Extra fields should be filtered out, not cause an error
+                result = adapter._parse_json(
+                    mock_signature, '{"field1": "value1", "extra_field": "extra_value"}'
+                )
+                assert result == {"field1": "value1"}
+
+    def test_parse_yaml_success(self):
+        """Test successful YAML parsing."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock(), "field2": Mock()}
+
+        # Mock the loads function
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = {"field1": "value1", "field2": "value2"}
+
+            # Mock parse_value
+            with patch(
+                "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.parse_value"
+            ) as mock_parse:
+                mock_parse.side_effect = lambda v, annotation: v
+
+                result = adapter._parse_yaml(mock_signature, "field1: value1\nfield2: value2")
+
+                assert result == {"field1": "value1", "field2": "value2"}
+
+    def test_parse_yaml_not_dict(self):
+        """Test YAML parsing when result is not a dict (falls back to JSON)."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock()}
+
+        # Mock the loads function to return a list instead of dict
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = ["value1", "value2"]
+
+            # YAML parsing fails and falls back to JSON, which also fails
+            with pytest.raises(
+                AdapterParseError, match="LM response cannot be serialized to a JSON object"
+            ):
+                adapter._parse_yaml(mock_signature, "- value1\n- value2")
+
+    def test_parse_yaml_fallback_to_json(self):
+        """Test YAML parsing fallback to JSON when YAML parsing fails."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock()}
+
+        # Mock the loads function to raise exception
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.side_effect = Exception("YAML parsing failed")
+
+            # Mock _parse_json method
+            with patch.object(adapter, "_parse_json") as mock_parse_json:
+                mock_parse_json.return_value = {"field1": "value1"}
+
+                result = adapter._parse_yaml(mock_signature, "invalid yaml")
+
+                assert result == {"field1": "value1"}
+                mock_parse_json.assert_called_once_with(mock_signature, "invalid yaml")
+
+    def test_format_finetune_data_not_implemented(self):
+        """Test format_finetune_data raises NotImplementedError."""
+        adapter = StructuredOutputAdapter()
+
+        with pytest.raises(
+            NotImplementedError, match="Fine-tuning data formatting not yet implemented"
+        ):
+            adapter.format_finetune_data(Mock(), [], {}, {})
+
+    def test_parse_json_with_empty_completion(self):
+        """Test JSON parsing with empty completion."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {}
+
+        # Mock the loads function
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = {}
+
+            result = adapter._parse_json(mock_signature, "")
+
+            assert result == {}
+
+    def test_parse_yaml_with_empty_completion(self):
+        """Test YAML parsing with empty completion."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {}
+
+        # Mock the loads function
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = {}
+
+            result = adapter._parse_yaml(mock_signature, "")
+
+            assert result == {}
+
+    def test_parse_json_with_parse_value_exception(self):
+        """Test JSON parsing when parse_value raises exception."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock()}
+
+        # Mock the loads function
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = {"field1": "value1"}
+
+            # Mock parse_value to raise exception
+            with patch(
+                "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.parse_value"
+            ) as mock_parse:
+                mock_parse.side_effect = Exception("Parse value failed")
+
+                with pytest.raises(Exception, match="Parse value failed"):
+                    adapter._parse_json(mock_signature, '{"field1": "value1"}')
+
+    def test_parse_yaml_with_parse_value_exception(self):
+        """Test YAML parsing when parse_value raises exception."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock()}
+
+        # Mock the loads function
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = {"field1": "value1"}
+
+            # Mock parse_value to raise exception
+            with patch(
+                "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.parse_value"
+            ) as mock_parse:
+                mock_parse.side_effect = Exception("Parse value failed")
+
+                with pytest.raises(Exception, match="Parse value failed"):
+                    adapter._parse_yaml(mock_signature, "field1: value1")
+
+
+class TestHelperFunctions:
+    """Tests for helper functions."""
+
+    def test_get_structured_outputs_response_format_success(self):
+        """Test successful structured outputs response format creation."""
+        # Mock signature
+        mock_signature = Mock()
+        mock_field1 = Mock()
+        mock_field1.annotation = str
+        mock_field1.default = "default1"
+        mock_field2 = Mock()
+        mock_field2.annotation = int
+        mock_field2.default = 42
+
+        mock_signature.output_fields = {"field1": mock_field1, "field2": mock_field2}
+
+        # Mock pydantic.create_model
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.pydantic.create_model"
+        ) as mock_create_model:
+            mock_model = Mock()
+            mock_model.model_json_schema.return_value = {
+                "properties": {
+                    "field1": {"type": "string", "json_schema_extra": "extra"},
+                    "field2": {"type": "integer", "json_schema_extra": "extra"},
+                }
+            }
+            mock_create_model.return_value = mock_model
+
+            result = _get_structured_outputs_response_format(mock_signature, True)
+
+            assert result == mock_model
+            mock_create_model.assert_called_once()
+
+    def test_get_structured_outputs_response_format_tool_calls_skipped(self):
+        """Test structured outputs response format skips ToolCalls when using native
+        function calling."""
+        from dspy.adapters.types.tool import ToolCalls
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_field1 = Mock()
+        mock_field1.annotation = str
+        mock_field1.default = "default1"
+        mock_field2 = Mock()
+        mock_field2.annotation = ToolCalls
+        mock_field2.default = None
+
+        mock_signature.output_fields = {"field1": mock_field1, "field2": mock_field2}
+
+        # Mock pydantic.create_model
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.pydantic.create_model"
+        ) as mock_create_model:
+            mock_model = Mock()
+            mock_model.model_json_schema.return_value = {
+                "properties": {"field1": {"type": "string"}}
+            }
+            mock_create_model.return_value = mock_model
+
+            result = _get_structured_outputs_response_format(mock_signature, True)
+
+            assert result == mock_model
+            # Should only include field1, not field2 (ToolCalls)
+            call_args = mock_create_model.call_args
+            assert "field1" in call_args[1]
+            assert "field2" not in call_args[1]
+
+    def test_get_structured_outputs_response_format_no_default(self):
+        """Test structured outputs response format with field that has no default."""
+        # Mock signature
+        mock_signature = Mock()
+        mock_field = Mock()
+        mock_field.annotation = str
+        # Remove default attribute
+        del mock_field.default
+
+        mock_signature.output_fields = {"field1": mock_field}
+
+        # Mock pydantic.create_model
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.pydantic.create_model"
+        ) as mock_create_model:
+            mock_model = Mock()
+            mock_model.model_json_schema.return_value = {
+                "properties": {"field1": {"type": "string"}}
+            }
+            mock_create_model.return_value = mock_model
+
+            result = _get_structured_outputs_response_format(mock_signature, True)
+
+            assert result == mock_model
+            # Should use ... as default when no default is available
+            call_args = mock_create_model.call_args
+            assert call_args[1]["field1"][1] == ...
+
+    def test_get_structured_outputs_response_format_with_dict_type(self):
+        """Test structured outputs response format with dict type (should not raise error)."""
+        # Mock signature with dict type
+        mock_signature = Mock()
+        mock_field = Mock()
+        mock_field.annotation = dict
+
+        mock_signature.output_fields = {"field1": mock_field}
+
+        # Mock pydantic.create_model
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.pydantic.create_model"
+        ) as mock_create_model:
+            mock_model = Mock()
+            mock_model.model_json_schema.return_value = {
+                "properties": {"field1": {"type": "object"}}
+            }
+            mock_create_model.return_value = mock_model
+
+            result = _get_structured_outputs_response_format(mock_signature, True)
+
+            assert result == mock_model
+            mock_create_model.assert_called_once()
+
+
+class TestDSPyAdapterEdgeCases:
+    """Test edge cases for DSPy adapter."""
+
+    def test_adapter_with_none_callbacks(self):
+        """Test adapter with None callbacks."""
+        adapter = StructuredOutputAdapter(callbacks=None)
+        # The parent class initializes callbacks as an empty list
+        assert adapter.callbacks == []
+
+    def test_adapter_with_empty_callbacks(self):
+        """Test adapter with empty callbacks list."""
+        adapter = StructuredOutputAdapter(callbacks=[])
+        assert adapter.callbacks == []
+
+    def test_adapter_with_multiple_callbacks(self):
+        """Test adapter with multiple callbacks."""
+        mock_callback1 = Mock()
+        mock_callback2 = Mock()
+        adapter = StructuredOutputAdapter(callbacks=[mock_callback1, mock_callback2])
+        assert adapter.callbacks == [mock_callback1, mock_callback2]
+
+    def test_parse_json_with_non_dict_result(self):
+        """Test JSON parsing when loads returns non-dict."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock()}
+
+        # Mock the loads function to return a list
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = ["value1", "value2"]
+
+            with pytest.raises(
+                AdapterParseError, match="LM response cannot be serialized to a JSON object"
+            ):
+                adapter._parse_json(mock_signature, '["value1", "value2"]')
+
+    def test_parse_yaml_with_non_dict_result_fallback(self):
+        """Test YAML parsing with non-dict result that falls back to JSON."""
+        adapter = StructuredOutputAdapter()
+
+        # Mock signature
+        mock_signature = Mock()
+        mock_signature.output_fields = {"field1": Mock()}
+
+        # Mock the loads function to return a list
+        with patch(
+            "llm_schema_lite.dspy_integration.adapters.structured_output_adapter.loads"
+        ) as mock_loads:
+            mock_loads.return_value = ["value1", "value2"]
+
+            # Mock _parse_json method
+            with patch.object(adapter, "_parse_json") as mock_parse_json:
+                mock_parse_json.side_effect = AdapterParseError(
+                    adapter_name="StructuredOutputAdapter",
+                    signature=mock_signature,
+                    lm_response="invalid",
+                    message="Test error",
+                )
+
+                with pytest.raises(AdapterParseError):
+                    adapter._parse_yaml(mock_signature, "- value1\n- value2")
