@@ -231,6 +231,7 @@ class TypeScriptFormatter(BaseFormatter):
         # Check if we have processed data to use instead of re-processing
         if hasattr(self, "_processed_data") and self._processed_data:
             # Use the processed data to build proper TypeScript interface
+            schema_info_comment = self.get_schema_info_comment()
             required_comment = self.get_required_fields_comment()
             interface_lines = ["interface Schema {"]
 
@@ -240,10 +241,16 @@ class TypeScriptFormatter(BaseFormatter):
             interface_lines.append("}")
 
             content = "\n".join(interface_lines)
+
+            # Add required fields comment if there are required fields
             if required_comment:
-                return f"{required_comment}\n{content}"
-            else:
-                return content
+                content = f"{required_comment}\n{content}"
+
+            # Add schema info comment if present (add last so it appears first)
+            if schema_info_comment:
+                content = f"{schema_info_comment}\n{content}"
+
+            return content
 
         # Handle non-object schemas
         if not self.properties:
@@ -292,6 +299,11 @@ class TypeScriptFormatter(BaseFormatter):
 
         # Process main interface
         main_output = StringIO()
+
+        # Add schema info comment if present
+        schema_info_comment = self.get_schema_info_comment()
+        if schema_info_comment:
+            main_output.write(f"{schema_info_comment}\n")
 
         # Add required fields comment if there are required fields
         required_comment = self.get_required_fields_comment()

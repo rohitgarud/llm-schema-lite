@@ -350,6 +350,28 @@ class BaseFormatter(ABC):
             return ""
         return f"{self.comment_prefix} Fields marked with * are required"
 
+    def get_schema_info_comment(self) -> str:
+        """
+        Get a comment containing schema title and description if present.
+
+        Returns:
+            Comment string with schema title and description, or empty string if neither present.
+        """
+        if not self.include_metadata:
+            return ""
+
+        comments = []
+
+        if "title" in self.schema and self.schema["title"]:
+            comments.append(f"Title: {self.schema['title']}")
+
+        if "description" in self.schema and self.schema["description"]:
+            comments.append(f"Description: {self.schema['description']}")
+
+        if comments:
+            return f"{self.comment_prefix} {', '.join(comments)}"
+        return ""
+
     @property
     @abstractmethod
     def TYPE_MAP(self) -> dict[str, str]:

@@ -113,13 +113,21 @@ class SchemaLite:
                     self._formatter._processed_data = self._data
                     self._string_representation = self._formatter.transform_schema()
                 else:
-                    # For JSONish, use dict_to_string() with required fields comment
+                    # For JSONish, use dict_to_string() with schema info and
+                    # required fields comments
                     content = self._formatter.dict_to_string(self._data, indent=0)
+
+                    # Add required fields comment if there are required fields
                     required_comment = self._formatter.get_required_fields_comment()
                     if required_comment:
-                        self._string_representation = f"{required_comment}\n{content}"
-                    else:
-                        self._string_representation = content
+                        content = f"{required_comment}\n{content}"
+
+                    # Add schema info comment if present (add last so it appears first)
+                    schema_info_comment = self._formatter.get_schema_info_comment()
+                    if schema_info_comment:
+                        content = f"{schema_info_comment}\n{content}"
+
+                    self._string_representation = content
         return self._string_representation
 
     def to_yaml(self, default_flow_style: bool = False) -> str:

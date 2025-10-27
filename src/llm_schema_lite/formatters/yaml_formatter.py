@@ -240,11 +240,18 @@ class YAMLFormatter(BaseFormatter):
         if hasattr(self, "_processed_data") and self._processed_data:
             # Use the processed data directly
             content = self.dict_to_string(self._processed_data, indent=0)
+
+            # Add required fields comment if there are required fields
             required_comment = self.get_required_fields_comment()
             if required_comment:
-                return f"{required_comment}\n{content}"
-            else:
-                return content
+                content = f"{required_comment}\n{content}"
+
+            # Add schema info comment if present (add last so it appears first)
+            schema_info_comment = self.get_schema_info_comment()
+            if schema_info_comment:
+                content = f"{schema_info_comment}\n{content}"
+
+            return content
 
         if not self.properties:
             # Handle schema-level features even when there are no properties
@@ -359,6 +366,11 @@ class YAMLFormatter(BaseFormatter):
 
         # Process main schema
         main_output = StringIO()
+
+        # Add schema info comment if present
+        schema_info_comment = self.get_schema_info_comment()
+        if schema_info_comment:
+            main_output.write(f"{schema_info_comment}\n")
 
         # Add required fields comment if there are required fields
         required_comment = self.get_required_fields_comment()
