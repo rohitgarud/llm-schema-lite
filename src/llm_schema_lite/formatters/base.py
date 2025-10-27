@@ -442,6 +442,12 @@ class BaseFormatter(ABC):
             if not ref_def:
                 return "object"  # Fallback for missing definition
 
+            if isinstance(ref_def, bool):
+                # Handle boolean values in JSON Schema: true means any value, false means no value
+                ref_str = "any" if ref_def else "never"
+                self._ref_cache[ref_key] = ref_str
+                return ref_str
+
             # Handle different definition types with better structure preservation
             # Prioritize properties when present, as it gives more concrete structure
             if "properties" in ref_def and ref_def["properties"]:
