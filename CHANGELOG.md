@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- insertion marker -->
+## [v0.6.1](https://github.com-personal/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27
+
+<small>[Compare with v0.6.0](https://github.com-personal/rohitgarud/llm-schema-lite/compare/v0.6.0...v0.6.1)</small>
+
+### Bug Fixes
+
+- issue due to boolean ref definition ([fd00aba](https://github.com-personal/rohitgarud/llm-schema-lite/commit/fd00aba1b9a0522cc8cf4285251416d6fbad9874) by Rohit Garud).
+
+### Chore
+
+- Handle edge cases ([aea4ff1](https://github.com-personal/rohitgarud/llm-schema-lite/commit/aea4ff16a3e8af6e25924bd9debd4ff530183010) by Rohit Garud).
+
+### Tests
+
+- Improve test coverage ([a58a5c0](https://github.com-personal/rohitgarud/llm-schema-lite/commit/a58a5c047622072a248563dd31f092287e14fdef) by Rohit Garud).
+
 ## [v0.6.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.0) - 2025-10-25
 
 <small>[Compare with v0.5.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.5.0...v0.6.0)</small>
