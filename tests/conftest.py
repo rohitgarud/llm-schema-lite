@@ -121,8 +121,8 @@ class Profile(BaseModel):
     profession: str = Field(..., description="User's profession")
     is_active: bool = True
     tags: list[str] | None = None
+    locations: Location | None = None
     ids: list[int] | None = None
-    location: Location | None = None
 
 
 # Model with various field types
@@ -144,8 +144,12 @@ class ComplexTypes(BaseModel):
     optional_int: int | None = None
 
     # Nested
-    address: Address
-    addresses: list[Address] = Field(default_factory=list)
+    address: Address = Field(default_factory=Address, description="Address of the user")
+    addresses: list[Address] | None = Field(
+        default_factory=list,
+        description="Addresses of the user",
+        nullable=True,
+    )
 
     # Enums
     role: Role = Role.USER
@@ -169,7 +173,7 @@ class ComplexOrder(BaseModel):
 
     order_id: str = Field(..., description="Unique order identifier")
     customer: User = Field(..., description="Customer information")
-    items: list[dict[str, Any]] = Field(..., description="Order items")
+    items: list[Product] = Field(..., description="Order items")
     total: float = Field(..., ge=0, description="Total order amount")
     status: str = Field("pending", enum=["pending", "confirmed", "shipped", "delivered"])
 
