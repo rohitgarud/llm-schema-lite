@@ -12,6 +12,19 @@ class BaseFormatter(ABC):
 
     All schema formatters must inherit from this class and implement
     the required methods.
+
+    Usage:
+        There are two common patterns for implementing formatters:
+
+        Pattern A (TypeScript/YAML formatters):
+            Subclasses may call process_schema() and use its return value,
+            then implement transform_schema() to format the processed data.
+            This pattern leverages the shared processing logic in the base class.
+
+        Pattern B (JSONish formatter):
+            Subclasses may ignore process_schema() and implement transform_schema()
+            entirely with their own logic. This pattern is useful when the formatter
+            requires fundamentally different processing approach.
     """
 
     # Common regex pattern for $ref processing
@@ -68,7 +81,9 @@ class BaseFormatter(ABC):
         self._expansion_count: dict[str, int] = {}  # Track expansion count per ref
         self._max_expansions = 3  # Further reduced to prevent excessive expansion
         self._ref_depth_tracker: dict[str, int] = {}  # Track depth per ref path
-        self._processed_data: dict[str, Any] | None = None  # Set by core.py for transform_schema()
+        # Optional cache of processed schema data; may be set by subclasses in
+        # transform_schema() for reuse. TypeScript/YAML check this before re-processing.
+        self._processed_data: dict[str, Any] | None = None
         self._max_ref_depth = 2  # Maximum depth for $ref resolution
 
         # Priority 1: Global expansion budget to prevent extreme expansion
@@ -83,8 +98,8 @@ class BaseFormatter(ABC):
         """
         Process the schema and return the appropriate data structure.
 
-        This method handles all schema processing logic that was previously in core.py.
-        It determines the appropriate processing method based on the schema structure.
+        This method handles schema processing logic. It determines the appropriate
+        processing method based on the schema structure.
 
         Returns:
             Dictionary containing processed schema data.
@@ -165,19 +180,19 @@ class BaseFormatter(ABC):
             # Fallback for unknown schema types
             return {"schema": "object"}
 
-        # Pre-warm cache for common patterns
-        self._warm_cache()
+    #     # Pre-warm cache for common patterns
+    #     self._warm_cache()
 
-    def _warm_cache(self) -> None:
-        """Pre-process common reference patterns."""
-        for ref_key, ref_def in self.defs.items():
-            # Only cache simple types that are NOT enums
-            if (
-                "type" in ref_def
-                and ref_def["type"] in ["string", "integer", "number", "boolean"]
-                and "enum" not in ref_def
-            ):
-                self._ref_cache[ref_key] = self.TYPE_MAP.get(ref_def["type"], ref_def["type"])
+    # def _warm_cache(self) -> None:
+    #     """Pre-process common reference patterns."""
+    #     for ref_key, ref_def in self.defs.items():
+    #         # Only cache simple types that are NOT enums
+    #         if (
+    #             "type" in ref_def
+    #             and ref_def["type"] in ["string", "integer", "number", "boolean"]
+    #             and "enum" not in ref_def
+    #         ):
+    #             self._ref_cache[ref_key] = self.TYPE_MAP.get(ref_def["type"], ref_def["type"])
 
     def _is_problematic_schema(self, schema: dict[str, Any]) -> bool:
         """Detect schemas that are likely to cause issues."""

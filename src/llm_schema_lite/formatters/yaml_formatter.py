@@ -1,6 +1,12 @@
-"""YAML-style formatter for transforming Pydantic schemas."""
+"""YAML-style formatter for transforming Pydantic schemas.
+
+This formatter creates a clean YAML-like representation with Python-style
+type hints, optionally including metadata as inline comments.
+"""
 
 from typing import Any
+
+import yaml
 
 from .base import BaseFormatter
 
@@ -36,6 +42,24 @@ class YAMLFormatter(BaseFormatter):
         """Comment prefix for YAML format."""
         return "#"
 
+    def _dump_yaml(self, data: dict[str, Any]) -> str:
+        """
+        Dump a dictionary to YAML format.
+
+        Args:
+            data: Dictionary to serialize to YAML.
+
+        Returns:
+            YAML string representation.
+        """
+        result = yaml.dump(
+            data,
+            default_flow_style=False,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+        return str(result).rstrip()
+
     def process_anyof(self, anyof: dict[str, Any]) -> str:
         """
         Process an anyOf field (union types) for YAML.
@@ -44,7 +68,7 @@ class YAMLFormatter(BaseFormatter):
             anyof: Dictionary containing anyOf definition.
 
         Returns:
-            Formatted union type representation.
+            Formatted union type representation with | separator.
         """
         anyof_list = anyof.get("anyOf", [])
         if not anyof_list:
@@ -92,7 +116,7 @@ class YAMLFormatter(BaseFormatter):
             type_value: Dictionary containing type definition.
 
         Returns:
-            Formatted type representation.
+            Formatted type representation with list[...] and str | None style.
         """
         type_name = type_value.get("type", "string")
 
@@ -186,7 +210,7 @@ class YAMLFormatter(BaseFormatter):
             value: The field definition containing metadata.
 
         Returns:
-            Field representation with metadata comments.
+            Field representation with metadata comments using # prefix.
         """
         if not self.include_metadata:
             return representation
@@ -200,22 +224,22 @@ class YAMLFormatter(BaseFormatter):
 
     def dict_to_string(self, value: Any, indent: int = 1) -> str:
         """
-        Convert a dictionary or list to a formatted string representation.
+        Convert a dictionary to YAML-style key: value lines.
 
-        This is used for processed properties dict or nested objects.
+        This is used for formatting processed properties dict.
 
         Args:
             value: The value to convert (dict, list, or primitive).
-            indent: Current indentation level.
+            indent: Current indentation level (unused, kept for signature compatibility).
 
         Returns:
-            Formatted string representation.
+            Formatted string representation as YAML key: value lines.
         """
         if isinstance(value, dict):
             if not value:  # Empty dict
                 return "{}"
 
-            # Format as YAML key: value pairs (similar to transform_schema output)
+            # Format as YAML key: value pairs
             lines = []
             for k, v in value.items():
                 lines.append(f"{k}: {v}")
@@ -236,23 +260,58 @@ class YAMLFormatter(BaseFormatter):
         Returns:
             YAML-style schema definition as a string.
         """
-        # Check if we have processed data to use instead of re-processing
+        # First branch: if _processed_data is set, build from cache
         if hasattr(self, "_processed_data") and self._processed_data:
-            # Use the processed data directly
-            content = self.dict_to_string(self._processed_data, indent=0)
+            all_sections = []
+
+            # Process nested definitions first (from $defs) - same as main flow
+            for def_name, def_schema in self.defs.items():
+                if "properties" in def_schema:
+                    nested_props = def_schema["properties"]
+                    nested_required = set(def_schema.get("required", []))
+
+                    # Build dict for this $def
+                    def_dict = {}
+                    for prop_name, prop_def in nested_props.items():
+                        # Use process_property to get the type representation
+                        prop_type = self.process_property(prop_def)
+                        # Format field name with required indicator for nested definitions
+                        formatted_prop_name = (
+                            f"{prop_name}*" if prop_name in nested_required else prop_name
+                        )
+                        def_dict[f"{def_name}.{formatted_prop_name}"] = prop_type
+
+                    # Dump to YAML and optionally prepend section header
+                    section_str = self._dump_yaml(def_dict)
+                    if self.include_metadata:
+                        section_str = f"# {def_name}\n{section_str}"
+
+                    all_sections.append(section_str)
+
+            # Build main content from cached processed data
+            main_parts = []
+
+            # Add schema info comment if present
+            schema_info_comment = self.get_schema_info_comment()
+            if schema_info_comment:
+                main_parts.append(schema_info_comment)
 
             # Add required fields comment if there are required fields
             required_comment = self.get_required_fields_comment()
             if required_comment:
-                content = f"{required_comment}\n{content}"
+                main_parts.append(required_comment)
 
-            # Add schema info comment if present (add last so it appears first)
-            schema_info_comment = self.get_schema_info_comment()
-            if schema_info_comment:
-                content = f"{schema_info_comment}\n{content}"
+            # Use cached processed data for main content
+            main_parts.append(self._dump_yaml(self._processed_data))
 
-            return content
+            # Combine nested sections with main content
+            if all_sections:
+                all_sections.append("\n".join(main_parts))
+                return "\n\n".join(all_sections)
 
+            return "\n".join(main_parts)
+
+        # Second branch: no properties - handle schema-level-only cases
         if not self.properties:
             # Handle schema-level features even when there are no properties
             schema_level_features = ""
@@ -320,76 +379,58 @@ class YAMLFormatter(BaseFormatter):
             else:
                 return "{}"
 
-        from io import StringIO
-
+        # Third branch: main flow with properties
         all_sections = []
-        schema_level_features = ""
-
-        # Handle schema-level features first
-        if "patternProperties" in self.schema:
-            schema_level_features += self.process_pattern_properties(self.schema)
-
-        if "dependencies" in self.schema:
-            schema_level_features += self.process_dependencies(self.schema)
-
-        if "if" in self.schema or "then" in self.schema or "else" in self.schema:
-            schema_level_features += self.process_conditional(self.schema)
-
-        if "propertyNames" in self.schema:
-            schema_level_features += self.process_property_names(self.schema)
-
-        if "unevaluatedProperties" in self.schema:
-            schema_level_features += self.process_unevaluated_properties(self.schema)
 
         # Process nested definitions first (from $defs)
         for def_name, def_schema in self.defs.items():
             if "properties" in def_schema:
-                nested_output = StringIO()
-
-                # Only add section header if metadata is included
-                if self.include_metadata:
-                    nested_output.write(f"# {def_name}\n")
-
                 nested_props = def_schema["properties"]
                 nested_required = set(def_schema.get("required", []))
 
+                # Build dict for this $def
+                def_dict = {}
                 for prop_name, prop_def in nested_props.items():
-                    # process_property() already includes metadata, no need to add it again
+                    # Use process_property to get the type representation
                     prop_type = self.process_property(prop_def)
                     # Format field name with required indicator for nested definitions
                     formatted_prop_name = (
                         f"{prop_name}*" if prop_name in nested_required else prop_name
                     )
-                    nested_output.write(f"{def_name}.{formatted_prop_name}: {prop_type}\n")
+                    def_dict[f"{def_name}.{formatted_prop_name}"] = prop_type
 
-                all_sections.append(nested_output.getvalue().rstrip())
+                # Dump to YAML and optionally prepend section header
+                section_str = self._dump_yaml(def_dict)
+                if self.include_metadata:
+                    section_str = f"# {def_name}\n{section_str}"
 
-        # Process main schema
-        main_output = StringIO()
+                all_sections.append(section_str)
+
+        # Build main content parts
+        main_parts = []
 
         # Add schema info comment if present
         schema_info_comment = self.get_schema_info_comment()
         if schema_info_comment:
-            main_output.write(f"{schema_info_comment}\n")
+            main_parts.append(schema_info_comment)
 
         # Add required fields comment if there are required fields
         required_comment = self.get_required_fields_comment()
         if required_comment:
-            main_output.write(f"{required_comment}\n")
+            main_parts.append(required_comment)
 
+        # Process properties and cache the result
         processed_properties = self.process_properties(self.properties)
 
-        for name, prop_type in processed_properties.items():
-            # process_properties() already includes metadata via process_property()
-            # so we don't need to add it again
-            main_output.write(f"{name}: {prop_type}\n")
+        # Dump processed properties to YAML
+        main_parts.append(self._dump_yaml(processed_properties))
 
-        # Add schema-level features as comments if present
-        if schema_level_features and self.include_metadata:
-            main_output.write(f"# Schema-level constraints: {schema_level_features.strip()}\n")
+        # Set _processed_data for future calls (caching)
+        self._processed_data = processed_properties
 
+        # If there are nested sections, combine them
         if all_sections:
-            all_sections.append(main_output.getvalue().rstrip())
+            all_sections.append("\n".join(main_parts))
             return "\n\n".join(all_sections)
 
-        return main_output.getvalue().rstrip()
+        return "\n".join(main_parts)

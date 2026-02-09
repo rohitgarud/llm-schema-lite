@@ -22,7 +22,7 @@ from dspy.utils.exceptions import AdapterParseError
 from pydantic import TypeAdapter
 from pydantic.fields import FieldInfo
 
-# Import your schema-lite formatters
+# Use llm_schema_lite for schema simplification and robust parsing
 from llm_schema_lite import loads, simplify_schema
 
 logger = logging.getLogger(__name__)
@@ -394,7 +394,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         """Parse JSON completion (used for both JSON and JSONish modes)."""
         # Parse with llm-schema-lite for robustness
         # (includes markdown extraction and JSON object extraction)
-        fields = loads(completion, mode="json")
+        fields = loads(completion, mode="json", repair=True)
 
         if not isinstance(fields, dict):
             raise AdapterParseError(
@@ -430,7 +430,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         """
         try:
             # Use llm-schema-lite for robust YAML parsing with markdown extraction
-            fields = loads(completion, mode="yaml")
+            fields = loads(completion, mode="yaml", repair=True)
 
             if not isinstance(fields, dict):
                 raise ValueError("YAML did not parse to a dictionary")

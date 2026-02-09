@@ -7,8 +7,9 @@ This module provides a unified adapter for integrating llm-schema-lite with DSPy
 - **Multiple Output Modes**: Support for JSON, JSONish (BAML-like), and YAML output formats
 - **Token Efficiency**: 60-85% reduction in schema token usage with JSONish mode
 - **Input Schema Simplification**: Automatically simplifies complex Pydantic models in input fields
-- **Robust Parsing**: Handles malformed outputs with automatic fallback mechanisms
+- **Robust Parsing**: Handles malformed outputs with automatic repair (`repair=True`) and fallback mechanisms
 - **Full DSPy Compatibility**: Works with all DSPy modules (Predict, ChainOfThought, etc.)
+- **Clean API Integration**: Uses llm-schema-lite's public API (`simplify_schema()`, `loads()`) for maintainability
 
 ## Installation
 
@@ -227,15 +228,30 @@ result = predictor(question="What is AI?", demos=demos)
 
 ### Error Handling
 
-The adapter includes robust error handling with automatic fallbacks:
+The adapter includes robust error handling with automatic fallbacks powered by llm-schema-lite:
 
 ```python
 # YAML mode automatically falls back to JSON parsing if YAML fails
 adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
 
-# Malformed JSON is automatically repaired using json_repair
-adapter = StructuredOutputAdapter(output_mode=OutputMode.JSON)
+# Malformed JSON/YAML is automatically repaired (repair=True by default)
+# Uses llm-schema-lite's loads() with json_repair integration
+adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
+
+# Parsing handles:
+# - Markdown code blocks extraction
+# - Embedded JSON/YAML in text
+# - Malformed JSON repair
+# - Automatic content type detection
 ```
+
+**Parsing Pipeline:**
+
+1. Extract content from markdown blocks (if present)
+2. Repair malformed JSON/YAML (using `json_repair` library)
+3. Parse to dictionary with type validation
+4. Cast values to expected Pydantic types
+5. Validate all required fields are present
 
 ## Architecture
 
@@ -251,13 +267,53 @@ JSONAdapter (DSPy)
 StructuredOutputAdapter (llm-schema-lite)
 ```
 
+### Integration with llm-schema-lite
+
+The adapter uses llm-schema-lite's public API for schema simplification and robust parsing:
+
+**Schema Simplification** (via `simplify_schema()`):
+- Converts Pydantic models to token-efficient schemas
+- Supports multiple format types: `"jsonish"`, `"typescript"`, `"yaml"`
+- Controlled by the `output_mode` parameter
+- Returns `SchemaLite` objects with `.to_string()` for formatted output
+
+```python
+# Example: How the adapter uses simplify_schema()
+from llm_schema_lite import simplify_schema
+
+simplified = simplify_schema(
+    field_type,
+    format_type="jsonish",  # or "typescript", "yaml"
+    include_metadata=False
+)
+schema_str = simplified.to_string()
+```
+
+**Robust Parsing** (via `loads()`):
+- Parses JSON/YAML with automatic repair (`repair=True`)
+- Handles markdown code blocks and embedded structures
+- Provides fallback mechanisms for malformed outputs
+
+```python
+# Example: How the adapter uses loads()
+from llm_schema_lite import loads
+
+# JSON parsing with repair
+data = loads(completion, mode="json", repair=True)
+
+# YAML parsing with repair (auto-fallback to JSON)
+data = loads(completion, mode="yaml", repair=True)
+```
+
 ### Key Methods
 
 - `__call__()` / `acall()`: Main execution methods (sync/async)
 - `format_field_structure()`: Formats input/output structure for LLM
 - `parse()`: Parses LLM responses into structured data
+  - Uses `loads()` from llm-schema-lite for robust parsing
 - `_translate_field_type()`: Translates field types with mode-specific schemas
 - `_get_complex_type_description()`: Generates simplified schemas for complex types
+  - Uses `simplify_schema()` from llm-schema-lite for token-efficient representations
 
 ## Token Efficiency Comparison
 

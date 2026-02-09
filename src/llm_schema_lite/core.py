@@ -29,6 +29,7 @@ except ImportError:
 
 from .exceptions import ConversionError, UnsupportedModelError, ValidationError
 from .formatters import JSONishFormatter, TypeScriptFormatter, YAMLFormatter
+from .formatters.base import BaseFormatter
 
 
 class SchemaLite:
@@ -41,53 +42,22 @@ class SchemaLite:
 
     def __init__(
         self,
-        processed_data: dict[str, Any],
-        formatter: JSONishFormatter | TypeScriptFormatter | YAMLFormatter,
-        original_schema: dict[str, Any] | None = None,
+        formatter: BaseFormatter,
+        original_schema: dict[str, Any],
     ):
         """
         Initialize SchemaLite with processed data and formatter.
 
         Args:
-            processed_data: The processed schema data.
             formatter: The formatter instance for this schema.
-            original_schema: The original JSON schema (optional).
+            original_schema: The original JSON schema.
         """
-        self._data = processed_data
+        self._data: dict[str, Any] = {}
         self._formatter = formatter
         self._original_schema = original_schema
         self._string_representation: str | None = None
-
-    @property
-    def _data(self) -> dict[str, Any]:
-        """Get the processed data."""
-        return self.__data
-
-    @_data.setter
-    def _data(self, value: dict[str, Any]) -> None:
-        """Set the processed data."""
-        self.__data = value
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Get the simplified schema as a dictionary.
-
-        Returns:
-            Dictionary representation of the schema.
-        """
-        return self._data
-
-    def to_json(self, indent: int = 2) -> str:
-        """
-        Get the simplified schema as a JSON string.
-
-        Args:
-            indent: JSON indentation level.
-
-        Returns:
-            JSON string representation.
-        """
-        return json.dumps(self._data, indent=indent)
+        self._original_token_count: int | None = None
+        self._simplified_token_count: int | None = None
 
     def to_string(self) -> str:
         """
@@ -99,50 +69,9 @@ class SchemaLite:
             String representation of the schema.
         """
         if self._string_representation is None:
-            # Use the processed data directly
-            if "schema" in self._data:
-                # If we have a pre-formatted schema string, use it
-                self._string_representation = self._data["schema"]
-            else:
-                # For properties dict, use formatter-specific formatting
-                from .formatters import TypeScriptFormatter, YAMLFormatter
+            self._string_representation = self._formatter.transform_schema()
 
-                if isinstance(self._formatter, YAMLFormatter | TypeScriptFormatter):
-                    # Use transform_schema() for proper interface/YAML syntax
-                    # But first set the processed data so transform_schema() can use it
-                    self._formatter._processed_data = self._data
-                    self._string_representation = self._formatter.transform_schema()
-                else:
-                    # For JSONish, use dict_to_string() with schema info and
-                    # required fields comments
-                    content = self._formatter.dict_to_string(self._data, indent=0)
-
-                    # Add required fields comment if there are required fields
-                    required_comment = self._formatter.get_required_fields_comment()
-                    if required_comment:
-                        content = f"{required_comment}\n{content}"
-
-                    # Add schema info comment if present (add last so it appears first)
-                    schema_info_comment = self._formatter.get_schema_info_comment()
-                    if schema_info_comment:
-                        content = f"{schema_info_comment}\n{content}"
-
-                    self._string_representation = content
         return self._string_representation
-
-    def to_yaml(self, default_flow_style: bool = False) -> str:
-        """
-        Get the simplified schema as YAML string.
-
-        Args:
-            default_flow_style: Use flow style for YAML output.
-
-        Returns:
-            YAML string representation.
-        """
-        # For now, just return the string representation
-        # TODO: Implement proper YAML formatting if needed
-        return self.to_string()
 
     def token_count(self, encoding: str = "cl100k_base") -> int:
         """
@@ -157,6 +86,11 @@ class SchemaLite:
         Raises:
             ImportError: If tiktoken is not installed.
         """
+        # Delegate to formatter if it has token_count method
+        if hasattr(self._formatter, "token_count") and callable(self._formatter.token_count):
+            return self._formatter.token_count(encoding)  # type: ignore[no-any-return]
+
+        # Fallback to default implementation
         try:
             import tiktoken
 
@@ -168,18 +102,29 @@ class SchemaLite:
             ) from e
 
     def compare_tokens(
-        self, original_schema: dict[str, Any] | None = None, encoding: str = "cl100k_base"
+        self,
+        original_schema: dict[str, Any] | None = None,
+        simplified_schema: str | None = None,
+        encoding: str = "cl100k_base",
     ) -> dict[str, Any]:
         """
         Compare token counts between original and simplified schemas.
 
         Args:
             original_schema: Original schema dict (uses stored if not provided).
+            simplified_schema: Simplified schema string (uses generated if not provided).
             encoding: Tokenizer encoding to use.
 
         Returns:
             Dictionary with original, simplified, and reduction metrics.
         """
+        # Delegate to formatter if it has compare_tokens method
+        if hasattr(self._formatter, "compare_tokens") and callable(self._formatter.compare_tokens):
+            return self._formatter.compare_tokens(  # type: ignore[no-any-return]
+                original_schema or self._original_schema, simplified_schema, encoding
+            )
+
+        # Fallback to default implementation
         try:
             import tiktoken
 
@@ -187,16 +132,22 @@ class SchemaLite:
             schema_to_compare = original_schema or self._original_schema
 
             original_str = json.dumps(schema_to_compare)
-            simplified_str = self.to_string()
+            simplified_str = simplified_schema or self.to_string()
 
-            original_tokens = len(enc.encode(original_str))
-            simplified_tokens = len(enc.encode(simplified_str))
-            reduction_percent = (original_tokens - simplified_tokens) / original_tokens * 100
+            if self._original_token_count is None:
+                self._original_token_count = len(enc.encode(original_str))
+            if self._simplified_token_count is None:
+                self._simplified_token_count = len(enc.encode(simplified_str))
+            reduction_percent = (
+                (self._original_token_count - self._simplified_token_count)
+                / self._original_token_count
+                * 100
+            )
 
             return {
-                "original_tokens": original_tokens,
-                "simplified_tokens": simplified_tokens,
-                "tokens_saved": original_tokens - simplified_tokens,
+                "original_tokens": self._original_token_count,
+                "simplified_tokens": self._simplified_token_count,
+                "tokens_saved": self._original_token_count - self._simplified_token_count,
                 "reduction_percent": round(reduction_percent, 2),
             }
         except ImportError as e:
@@ -311,7 +262,7 @@ def simplify_schema(
         )
 
     # Select formatter based on format_type
-    formatter: JSONishFormatter | TypeScriptFormatter | YAMLFormatter
+    formatter: BaseFormatter
     if format_type == "jsonish":
         formatter = JSONishFormatter(original_schema, include_metadata=include_metadata)
     elif format_type == "typescript":
@@ -326,11 +277,7 @@ def simplify_schema(
 
     # Let the formatter handle all processing logic
     try:
-        # The formatter knows how to process its own schema
-        # We just need to provide the raw data for to_dict() compatibility
-        processed_data = formatter.process_schema()
         return SchemaLite(
-            processed_data=processed_data,
             formatter=formatter,
             original_schema=original_schema,
         )
@@ -342,19 +289,19 @@ def loads(
     text: str,
     mode: Literal["json", "yaml"] = "json",
     repair: bool = True,
-    extract_from_markdown: bool = True,
 ) -> dict[str, Any]:
     """
-    Parse structured text (JSON or YAML) with robust error handling and repair capabilities.
+    Parse structured text (JSON or YAML) with robust error handling and content extraction.
 
     This function provides a unified interface for parsing JSON and YAML content with
-    automatic repair, markdown extraction, and fallback mechanisms.
+    automatic repair, smart content extraction, and fallback mechanisms. It automatically
+    handles various LLM response formats including markdown code blocks, embedded JSON/YAML,
+    and text with explanatory content.
 
     Args:
         text: The text content to parse
         mode: The parsing mode - "json" or "yaml"
         repair: Whether to attempt repair for malformed content
-        extract_from_markdown: Whether to extract content from markdown code blocks
 
     Returns:
         Parsed dictionary content
@@ -363,31 +310,73 @@ def loads(
         ConversionError: If parsing fails and repair is disabled or unsuccessful
 
     Examples:
-        >>> # Parse JSON with repair
-        >>> data = loads('{"name": "John", "age": 30}', mode="json")
+        >>> # Parse JSON with automatic extraction
+        >>> data = loads('{"name": "John", "age": 30}')
 
-        >>> # Parse YAML with markdown extraction
-        >>> data = loads('```yaml\\nname: John\\nage: 30\\n```', mode="yaml")
+        >>> # Parse JSON from markdown with extra text
+        >>> data = loads('Here is the result: ```json\\n{"name": "Jane", "age": 25}\\n```')
+
+        >>> # Parse JSON embedded in explanatory text
+        >>> data = loads('The user data is: {"name": "Bob", "age": 35} and that\'s all.')
+
+        >>> # Parse YAML with automatic extraction
+        >>> data = loads('```yaml\\nname: Alice\\nage: 28\\n```', mode="yaml")
 
         >>> # Parse with repair disabled
-        >>> data = loads('{"name": "John"}', mode="json", repair=False)
+        >>> data = loads('{"name": "John"}', repair=False)
     """
     if not text or not text.strip():
         raise ConversionError("Empty or whitespace-only text provided")
 
-    # Extract from markdown code blocks if requested
-    if extract_from_markdown:
-        text = _extract_from_markdown(text, mode)
+    # Automatically extract content using smart strategies
+    extracted_text = _smart_extract_content(text, mode)
 
     # Clean and prepare text
-    text = text.strip()
+    extracted_text = extracted_text.strip()
 
     if mode == "json":
-        return _parse_json(text, repair, extract_from_markdown)
+        return _parse_json(extracted_text, repair)
     elif mode == "yaml":
-        return _parse_yaml(text, repair)
+        return _parse_yaml(extracted_text, repair)
     else:
         raise ConversionError(f"Unsupported mode: {mode}. Supported modes: 'json', 'yaml'")
+
+
+def _smart_extract_content(text: str, mode: str) -> str:
+    """
+    Intelligently extract structured content from various LLM response formats.
+
+    This function tries multiple extraction strategies in order of preference:
+    1. Markdown code blocks (```json, ```yaml, etc.)
+    2. Direct structured content detection
+    3. Embedded structured content extraction
+
+    Args:
+        text: The raw text content
+        mode: The parsing mode ("json" or "yaml")
+
+    Returns:
+        Extracted structured content
+    """
+    # Strategy 1: Try markdown code blocks first
+    markdown_extracted = _extract_from_markdown(text, mode)
+    if markdown_extracted != text:
+        return markdown_extracted
+
+    # Strategy 2: Try direct structured content detection
+    if mode == "json":
+        # Look for JSON objects/arrays directly
+        direct_json = _extract_json_content(text)
+        if direct_json != text:
+            return direct_json
+    elif mode == "yaml":
+        # Look for YAML content directly
+        direct_yaml = _extract_yaml_content(text)
+        if direct_yaml != text:
+            return direct_yaml
+
+    # Strategy 3: Fallback to original text
+    return text
 
 
 def _extract_from_markdown(text: str, mode: str) -> str:
@@ -404,6 +393,210 @@ def _extract_from_markdown(text: str, mode: str) -> str:
             return match.group(1).strip()
 
     return text
+
+
+def _extract_json_content(text: str) -> str:
+    """
+    Extract JSON content from text using multiple strategies.
+
+    Tries to find JSON objects or arrays embedded in text.
+    """
+    # First, check if the text is already valid JSON
+    # If so, return it as-is without trying to extract patterns
+    try:
+        json.loads(text.strip())
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 1: Look for complete JSON objects using brace counting
+    json_object = _extract_json_object(text)
+    if json_object != text:
+        return json_object
+
+    # Strategy 2: Look for JSON arrays
+    json_array = _extract_json_array(text)
+    if json_array != text:
+        return json_array
+
+    # Strategy 3: Look for JSON-like patterns that might be valid
+    # Only use this if no complete structures were found
+    json_pattern = _extract_json_pattern(text)
+    if json_pattern != text:
+        return json_pattern
+
+    return text
+
+
+def _extract_yaml_content(text: str) -> str:
+    """
+    Extract YAML content from text using multiple strategies.
+
+    Tries to find YAML content embedded in text.
+    """
+    lines = text.split("\n")
+
+    # Strategy 1: Look for YAML-like structure (key: value patterns)
+    yaml_start = None
+    yaml_end = None
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        # Check if this looks like a YAML key-value pair or list item
+        # Must start at beginning of line or with proper indentation
+        if (":" in line and not line.strip().startswith("{")) or stripped.startswith("- "):
+            # Check if this is a proper YAML key or list item (not part of explanatory text)
+            if _is_yaml_key_line(line) or stripped.startswith("- "):
+                if yaml_start is None:
+                    yaml_start = i
+                yaml_end = i
+            elif yaml_start is not None and not stripped:
+                # Empty line might be part of YAML structure
+                continue
+            elif yaml_start is not None and not _looks_like_yaml_line(line):
+                # This doesn't look like YAML anymore
+                break
+        elif yaml_start is not None and not stripped:
+            # Empty line might be part of YAML structure
+            continue
+        elif yaml_start is not None and not _looks_like_yaml_line(line):
+            # This doesn't look like YAML anymore
+            break
+
+    if yaml_start is not None and yaml_end is not None:
+        yaml_lines = lines[yaml_start : yaml_end + 1]
+        return "\n".join(yaml_lines)
+
+    return text
+
+
+def _is_yaml_key_line(line: str) -> bool:
+    """Check if a line looks like a YAML key line (not explanatory text)."""
+    stripped = line.strip()
+
+    # Must have a colon
+    if ":" not in stripped:
+        return False
+
+    # Must not start with common explanatory words
+    # But only reject if it's clearly explanatory text, not a valid YAML key
+    explanatory_words = [
+        "the",
+        "here",
+        "this",
+        "that",
+        "configuration",
+        "result",
+        "output",
+        "input",
+        "settings",
+        "config",
+        "value",
+        "content",
+    ]
+
+    first_word = stripped.split(":")[0].strip().lower()
+    # Only reject if it's clearly explanatory AND doesn't look like a valid key
+    if (
+        first_word in explanatory_words
+        and not first_word.replace("_", "").replace("-", "").isalnum()
+    ):
+        return False
+
+    # Must look like a proper YAML key (alphanumeric with possible underscores/dashes)
+    key_part = stripped.split(":")[0].strip()
+    if not key_part.replace("_", "").replace("-", "").isalnum():
+        return False
+
+    return True
+
+
+def _looks_like_yaml_line(line: str) -> bool:
+    """Check if a line looks like it could be part of YAML content."""
+    stripped = line.strip()
+    if not stripped:
+        return True  # Empty lines are valid in YAML
+
+    # Check for common YAML patterns
+    if ":" in stripped and not stripped.startswith("{"):
+        return True
+
+    # Check for list items
+    if stripped.startswith("- "):
+        return True
+
+    # Check for indented content (might be nested)
+    if line.startswith(" ") and any(c.isalnum() for c in stripped):
+        return True
+
+    # Check for simple values (not starting with explanatory words)
+    if not any(
+        stripped.lower().startswith(word + " ")
+        for word in ["the", "here", "this", "that", "configuration", "data", "result"]
+    ):
+        return True
+
+    return False
+
+
+def _extract_json_array(text: str) -> str:
+    """Extract JSON array from text using bracket counting."""
+    # Look for JSON array pattern - find the first complete JSON array
+    start = text.find("[")
+    if start == -1:
+        return text
+
+    # Count brackets to find the matching closing bracket
+    bracket_count = 0
+    for i, char in enumerate(text[start:], start):
+        if char == "[":
+            bracket_count += 1
+        elif char == "]":
+            bracket_count -= 1
+            if bracket_count == 0:
+                return text[start : i + 1]
+
+    # If no matching bracket found, return the original text
+    return text
+
+
+def _extract_json_pattern(text: str) -> str:
+    """
+    Extract JSON-like patterns that might be valid JSON.
+
+    This is a more aggressive approach that looks for patterns
+    that could be JSON even if they're not perfectly formatted.
+    Only used when no complete structures are found.
+    """
+    # Look for patterns like { ... } or [ ... ] that might be JSON
+    # But be more selective - prefer larger, more complete structures
+    patterns = [
+        r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}",  # Objects with nested objects
+        r"\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]",  # Arrays with nested arrays
+    ]
+
+    best_match = None
+    best_length = 0
+
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.DOTALL)
+        for match in matches:
+            # Try to parse this as JSON to see if it's valid
+            try:
+                json.loads(match)
+                # Prefer longer matches (more complete structures)
+                # Only use this if it's significantly different from the original text
+                # and represents a substantial portion of the text
+                if len(match) > best_length and len(match) >= len(text) * 0.8:
+                    best_match = match
+                    best_length = len(match)
+            except json.JSONDecodeError:
+                continue
+
+    return best_match if best_match else text
 
 
 def _extract_json_object(text: str) -> str:
@@ -423,31 +616,27 @@ def _extract_json_object(text: str) -> str:
         elif char == "}":
             brace_count -= 1
             if brace_count == 0:
-                return text[start : i + 1]
+                extracted = text[start : i + 1]
+                # If we extracted the entire text, return it
+                # If we extracted a subset, return the subset
+                return extracted
 
     # If no matching brace found, return the original text
     return text
 
 
-def _parse_json(text: str, repair: bool, extract_from_markdown: bool = True) -> dict[str, Any]:
+def _parse_json(text: str, repair: bool) -> dict[str, Any]:
     """Parse JSON text with optional repair."""
-    # Only extract JSON object if markdown extraction was disabled AND
-    # the text doesn't look like markdown code blocks
-    if not extract_from_markdown and not text.strip().startswith("```"):
-        extracted_text = _extract_json_object(text)
-    else:
-        extracted_text = text
-
     try:
         # Try standard JSON parsing first
-        return json.loads(extracted_text)  # type: ignore[no-any-return]
+        return json.loads(text)  # type: ignore[no-any-return]
     except json.JSONDecodeError as e:
         if not repair or json_repair is None:
-            raise ConversionError(f"Failed to parse JSON: {extracted_text[:100]}...") from e
+            raise ConversionError(f"Failed to parse JSON: {text[:100]}...") from e
 
         try:
             # Try json_repair for malformed JSON
-            repaired = json_repair.repair_json(extracted_text)
+            repaired = json_repair.repair_json(text)
             return json.loads(repaired)  # type: ignore[no-any-return]
         except Exception as e:
             raise ConversionError(f"Failed to repair and parse JSON: {e}") from e
