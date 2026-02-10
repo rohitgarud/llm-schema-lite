@@ -1,0 +1,88 @@
+# AGENTS.md
+
+## Quick Start
+- **Package**: `llm-schema-lite` — LLM-ify JSON schemas (Pydantic, token-optimized formats)
+- **Dependency manager**: `uv` with `pyproject.toml` (build: hatchling)
+- **Common commands**: See `Makefile` for all available commands
+- **Install**: `make sync` or `uv pip install -e ".[dev]"` for development
+- **Run tests**: `make test`; **lint**: `make lint`
+
+## Package Structure
+
+- **Source**: `src/llm_schema_lite/` (installable package)
+  - `core.py` — main schema conversion/validation entrypoints
+  - `formatters/` — base formatter + JSON-ish, TypeScript, YAML formatters
+  - `dspy_integration/` — optional DSPy adapters (extra: `[dspy]`)
+  - `exceptions.py` — package-specific exceptions
+- **Tests**: `tests/` (pytest); **Benchmarks**: `benchmarking/` (optional `[benchmark]`)
+- **Examples**: `examples/` for basic usage
+
+## Key Conventions
+
+### Public API
+- Export public functions/classes from `src/llm_schema_lite/__init__.py`
+- Keep implementation details in modules; avoid leaking internals in the public API
+
+### Formatters
+- Formatters live in `formatters/` and extend the base formatter interface
+- Add new formats by implementing the base formatter contract; keep formatting logic in formatters, not in `core`
+
+### Optional Features
+- **DSPy**: Install with `make install-dspy` or `uv pip install -e ".[dspy]"`; tests: `make test-dspy`
+- **Benchmarking**: Optional `[benchmark]` deps; run with `make test-benchmarking`
+
+### Testing & Code Quality
+- **TDD**: Prefer writing failing tests first, then minimal code to pass (Red → Green → Refactor)
+- Use **pytest** and fixtures in `tests/conftest.py`; keep tests isolated and independent
+- **Type hints**: Use for function signatures, methods, and class attributes
+- **Linting**: Run `make lint` before committing (ruff, mypy, bandit, pre-commit)
+- Mark slow/integration tests with pytest markers (`@pytest.mark.slow`, `@pytest.mark.integration`)
+
+## Git Rules
+- Use **conventional commits** (type: description)
+- Add detailed bulleted descriptions to the commits, highlighting the changes in the commit
+- **Commit types**:
+  - `feat`: Major user-facing features or substantial new capabilities
+  - `chore`: Incremental improvements, internal changes, config, deps, tooling
+  - `fix`: Bug fixes and corrections
+  - `refactor`: Code restructuring without behavior changes
+  - `docs`: Documentation updates
+  - `test`: Adding or updating tests
+  - `perf`: Performance improvements
+- **Examples**:
+  - ✅ `feat: add YAML formatter for Pydantic models`
+  - ✅ `chore: add ruff rule for import sorting`
+  - ✅ `fix: handle optional fields in jsonish formatter`
+  - ❌ `feat: update pyproject` (use `chore`)
+
+## Project-Specific Rules
+
+### Do's
+✅ Follow existing patterns for similar code (formatters, core, tests)
+✅ Run `make lint` before committing
+✅ Use type hints; keep the package typed (`py.typed` present)
+✅ Prefer SOLID principles; keep formatters and core responsibilities clear
+✅ Add tests for new behavior; mock external/optional deps (e.g. DSPy) when appropriate
+
+### Don'ts
+🚫 Change public API in `__init__.py` without considering backward compatibility
+🚫 Put heavy or optional dependencies in core install (use extras: `dspy`, `benchmark`, `dev`)
+🚫 Skip tests or lint for new code
+🚫 Commit secrets or credentials
+
+## Boundaries
+✅ **Allowed**: Read files, run tests, format/lint, change `src/llm_schema_lite` and `tests`, update docs and examples
+
+⚠️ **Ask first**: Add or bump dependencies, change build/publish config, alter supported Python versions
+
+🚫 **Never**: Commit secrets, disable security or lint checks, break documented public API without a plan
+
+## Planning Mode
+- Ask clarifying questions if the goal is unclear, then produce the plan
+- Read any directly mentioned files first
+- Break down the goal into concrete steps and note assumptions to verify
+- Reference exact paths (and line ranges if helpful) for files to change
+- If the user corrects the plan, update the same plan accordingly
+- Keep the plan self-contained and list out-of-scope items to avoid scope creep
+- End with a verification step (e.g. run `make test`, `make lint`, or add/run specific tests)
+- Plan should end with a comprehensive list od structured Todo's
