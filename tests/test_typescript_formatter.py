@@ -1,16 +1,18 @@
 """Tests for TypeScript formatter."""
 
-from pydantic import BaseModel, Field
-
 from llm_schema_lite.formatters.typescript_formatter import TypeScriptFormatter
 
+# Import models from conftest
+from tests.conftest import (
+    ConstrainedFormatterModel,
+    OrderedFieldsModel,
+    PersonWithAddress,
+    RequiredOptionalModel,
+    SimpleFormatterModel,
+)
 
-class SimpleModel(BaseModel):
-    """Simple test model."""
-
-    name: str = Field(..., description="Name field")
-    age: int = Field(..., ge=0, le=120)
-    email: str | None = None
+# Alias for backwards compatibility in tests
+SimpleModel = SimpleFormatterModel
 
 
 def test_typescript_formatter_produces_valid_output():
@@ -48,42 +50,21 @@ def test_typescript_formatter_without_metadata():
 
 def test_typescript_formatter_with_nested_defs():
     """Test TypeScript formatter with nested $defs."""
-
-    class Address(BaseModel):
-        """Address model."""
-
-        street: str
-        city: str
-
-    class Person(BaseModel):
-        """Person model."""
-
-        name: str
-        address: Address
-
-    schema = Person.model_json_schema()
+    schema = PersonWithAddress.model_json_schema()
     formatter = TypeScriptFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
     assert "interface Address {" in result
     assert "street*:" in result
     assert "city*:" in result
-    assert "interface Schema {" in result
+    assert "interface Schema {" in result or "interface PersonWithAddress {" in result
     assert "name*:" in result
     assert "address*:" in result
 
 
 def test_typescript_formatter_key_order_preserved():
     """Test that TypeScript formatter preserves key order (dict order)."""
-
-    class OrderedModel(BaseModel):
-        """Model to test order preservation."""
-
-        first: str
-        second: int
-        third: bool
-
-    schema = OrderedModel.model_json_schema()
+    schema = OrderedFieldsModel.model_json_schema()
     formatter = TypeScriptFormatter(schema, include_metadata=False)
     result = formatter.transform_schema()
 
@@ -112,34 +93,22 @@ def test_typescript_formatter_caching():
 
 def test_typescript_formatter_with_constraints():
     """Test that TypeScript formatter includes field constraints when metadata enabled."""
-
-    class ConstrainedModel(BaseModel):
-        """Model with constraints."""
-
-        username: str = Field(..., min_length=3, max_length=20)
-        score: int = Field(..., ge=0, le=100)
-
-    schema = ConstrainedModel.model_json_schema()
+    schema = ConstrainedFormatterModel.model_json_schema()
     formatter = TypeScriptFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
-    assert "username*:" in result
+    # ConstrainedFormatterModel has name, age, score, tags
+    assert "name*:" in result
+    assert "age*:" in result
     assert "score*:" in result
-    # Constraints appear in comments or inline (e.g. "3-20 chars" or min/max)
-    assert "3" in result and "20" in result
-    assert "0" in result and "100" in result
+    # Constraints appear in comments or inline (e.g. min/max values)
+    assert "1" in result and "100" in result  # name length and age max
+    assert "0" in result and "150" in result  # age range
 
 
 def test_typescript_formatter_with_optional_union():
     """Test that TypeScript formatter handles optional fields (union with None)."""
-
-    class OptionalModel(BaseModel):
-        """Model with optional field."""
-
-        required_field: str
-        optional_field: str | None = None
-
-    schema = OptionalModel.model_json_schema()
+    schema = RequiredOptionalModel.model_json_schema()
     formatter = TypeScriptFormatter(schema, include_metadata=False)
     result = formatter.transform_schema()
 

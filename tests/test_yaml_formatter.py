@@ -1,17 +1,18 @@
 """Tests for YAML formatter using PyYAML."""
 
 import yaml
-from pydantic import BaseModel, Field
 
 from llm_schema_lite.formatters.yaml_formatter import YAMLFormatter
 
+# Import models from conftest
+from tests.conftest import (
+    OrderedFieldsModel,
+    PersonWithAddress,
+    SimpleFormatterModel,
+)
 
-class SimpleModel(BaseModel):
-    """Simple test model."""
-
-    name: str = Field(..., description="Name field")
-    age: int = Field(..., ge=0, le=120)
-    email: str | None = None
+# Alias for backwards compatibility in tests
+SimpleModel = SimpleFormatterModel
 
 
 def test_yaml_formatter_produces_valid_yaml():
@@ -44,20 +45,7 @@ def test_yaml_formatter_without_metadata():
 
 def test_yaml_formatter_with_nested_defs():
     """Test YAML formatter with nested $defs."""
-
-    class Address(BaseModel):
-        """Address model."""
-
-        street: str
-        city: str
-
-    class Person(BaseModel):
-        """Person model."""
-
-        name: str
-        address: Address
-
-    schema = Person.model_json_schema()
+    schema = PersonWithAddress.model_json_schema()
     formatter = YAMLFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
@@ -70,15 +58,7 @@ def test_yaml_formatter_with_nested_defs():
 
 def test_yaml_formatter_key_order_preserved():
     """Test that YAML formatter preserves key order (dict order)."""
-
-    class OrderedModel(BaseModel):
-        """Model to test order preservation."""
-
-        first: str
-        second: int
-        third: bool
-
-    schema = OrderedModel.model_json_schema()
+    schema = OrderedFieldsModel.model_json_schema()
     formatter = YAMLFormatter(schema, include_metadata=False)
     result = formatter.transform_schema()
 
