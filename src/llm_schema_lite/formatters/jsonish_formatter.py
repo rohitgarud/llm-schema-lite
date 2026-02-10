@@ -110,7 +110,9 @@ class JSONishFormatter(BaseFormatter):
         if "pattern" in value and value["pattern"]:
             pattern = f" (PATTERN: {value['pattern']})"
         if "enum" in value and value["enum"]:
-            options = f" (OPTIONS: {'| '.join(value['enum'])})"
+            # Convert enum values to strings to handle both string and numeric enums
+            enum_strs = [str(v) for v in value["enum"]]
+            options = f" (OPTIONS: {'| '.join(enum_strs)})"
         if "format" in value and value["format"]:
             format_ = f" (FORMAT: {value['format']})"
         elif "_format" in value and value["_format"]:
@@ -437,6 +439,20 @@ class JSONishFormatter(BaseFormatter):
         """
         output: dict[str, Any] = {}
         required = schema.get("required", [])
+
+        # Base-case: an empty object schema like {"type": "object"} should render as
+        # an empty object rather than recursing via process_types("object") and back here.
+        if (
+            schema.get("type") == "object"
+            and not schema.get("properties")
+            and not schema.get("anyOf")
+            and not schema.get("oneOf")
+            and not schema.get("allOf")
+            and not schema.get("enum")
+            and not schema.get("$ref")
+        ):
+            return output
+
         if "properties" in schema and schema["properties"]:
             for prop_name, value in schema["properties"].items():
                 comment = ""
