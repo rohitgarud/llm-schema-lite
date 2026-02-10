@@ -230,7 +230,8 @@ class YAMLFormatter(BaseFormatter):
 
         Args:
             value: The value to convert (dict, list, or primitive).
-            indent: Current indentation level (unused, kept for signature compatibility).
+            indent: Current indentation level (used for recursion depth
+                tracking in nested structures).
 
         Returns:
             Formatted string representation as YAML key: value lines.

@@ -162,7 +162,7 @@ class BaseFormatter(ABC):
                     # Use transform_schema() to include schema-level features
                     return {"schema": self.transform_schema()}
                 else:
-                    # Return processed properties dict for to_dict() compatibility
+                    # Return processed properties dict for internal use
                     return self.process_properties(self.schema.get("properties", {}))
         elif "type" in self.schema:
             # Handle schemas with type but no properties
