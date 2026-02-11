@@ -299,6 +299,13 @@ class TypeScriptFormatter(BaseFormatter):
                         nested_output.write(f"  {formatted_prop_name}: {prop_type};\n")
 
                     nested_output.write("}")
+
+                    # Add additionalProperties comment if present and metadata is enabled
+                    if self.include_metadata:
+                        additional_props_comment = self.process_additional_properties(def_schema)
+                        if additional_props_comment:
+                            nested_output.write(f"\n{additional_props_comment}")
+
                     all_interfaces.append(nested_output.getvalue())
 
             # Build main content from cached processed data
@@ -321,6 +328,13 @@ class TypeScriptFormatter(BaseFormatter):
                 main_output.write(f"  {name}: {prop_type};\n")
 
             main_output.write("}")
+
+            # Add additionalProperties comment if present and metadata is enabled
+            if self.include_metadata:
+                additional_props_comment = self.process_additional_properties(self.schema)
+                if additional_props_comment:
+                    main_output.write(f"\n{additional_props_comment}")
+
             all_interfaces.append(main_output.getvalue())
 
             return "\n\n".join(all_interfaces)
@@ -344,6 +358,11 @@ class TypeScriptFormatter(BaseFormatter):
 
             if "unevaluatedProperties" in self.schema:
                 schema_level_features += self.process_unevaluated_properties(self.schema)
+
+            # Add additionalProperties to schema-level features
+            additional_props = self.process_additional_properties(self.schema)
+            if additional_props:
+                schema_level_features += additional_props
 
             # Handle schema with type but no properties
             if "type" in self.schema:
@@ -416,6 +435,13 @@ class TypeScriptFormatter(BaseFormatter):
                     nested_output.write(f"  {formatted_prop_name}: {prop_type};\n")
 
                 nested_output.write("}")
+
+                # Add additionalProperties comment if present and metadata is enabled
+                if self.include_metadata:
+                    additional_props_comment = self.process_additional_properties(def_schema)
+                    if additional_props_comment:
+                        nested_output.write(f"\n{additional_props_comment}")
+
                 all_interfaces.append(nested_output.getvalue())
 
         # Process main interface
@@ -440,6 +466,13 @@ class TypeScriptFormatter(BaseFormatter):
             main_output.write(f"  {name}: {prop_type};\n")
 
         main_output.write("}")
+
+        # Add additionalProperties comment if present and metadata is enabled
+        if self.include_metadata:
+            additional_props_comment = self.process_additional_properties(self.schema)
+            if additional_props_comment:
+                main_output.write(f"\n{additional_props_comment}")
+
         all_interfaces.append(main_output.getvalue())
 
         # Set _processed_data for future calls (caching)

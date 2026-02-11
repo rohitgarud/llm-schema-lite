@@ -286,6 +286,10 @@ class YAMLFormatter(BaseFormatter):
                     section_str = self._dump_yaml(def_dict)
                     if self.include_metadata:
                         section_str = f"# {def_name}\n{section_str}"
+                        # Add additionalProperties comment if present
+                        additional_props_comment = self.process_additional_properties(def_schema)
+                        if additional_props_comment:
+                            section_str += f"\n{additional_props_comment}"
 
                     all_sections.append(section_str)
 
@@ -304,6 +308,12 @@ class YAMLFormatter(BaseFormatter):
 
             # Use cached processed data for main content
             main_parts.append(self._dump_yaml(self._processed_data))
+
+            # Add additionalProperties comment if present and metadata is enabled
+            if self.include_metadata:
+                additional_props_comment = self.process_additional_properties(self.schema)
+                if additional_props_comment:
+                    main_parts.append(additional_props_comment)
 
             # Combine nested sections with main content
             if all_sections:
@@ -331,6 +341,11 @@ class YAMLFormatter(BaseFormatter):
 
             if "unevaluatedProperties" in self.schema:
                 schema_level_features += self.process_unevaluated_properties(self.schema)
+
+            # Add additionalProperties to schema-level features
+            additional_props = self.process_additional_properties(self.schema)
+            if additional_props:
+                schema_level_features += additional_props
 
             # Handle schema with type but no properties
             if "type" in self.schema:
@@ -404,6 +419,10 @@ class YAMLFormatter(BaseFormatter):
                 section_str = self._dump_yaml(def_dict)
                 if self.include_metadata:
                     section_str = f"# {def_name}\n{section_str}"
+                    # Add additionalProperties comment if present
+                    additional_props_comment = self.process_additional_properties(def_schema)
+                    if additional_props_comment:
+                        section_str += f"\n{additional_props_comment}"
 
                 all_sections.append(section_str)
 
@@ -425,6 +444,12 @@ class YAMLFormatter(BaseFormatter):
 
         # Dump processed properties to YAML
         main_parts.append(self._dump_yaml(processed_properties))
+
+        # Add additionalProperties comment if present and metadata is enabled
+        if self.include_metadata:
+            additional_props_comment = self.process_additional_properties(self.schema)
+            if additional_props_comment:
+                main_parts.append(additional_props_comment)
 
         # Set _processed_data for future calls (caching)
         self._processed_data = processed_properties

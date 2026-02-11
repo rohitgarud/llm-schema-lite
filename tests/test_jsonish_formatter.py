@@ -638,9 +638,10 @@ def test_jsonish_formatter_with_additional_props_false():
     # Should contain name and value fields
     assert "name*:" in result
     assert "value*:" in result
-    # The formatter may not explicitly show additionalProperties constraint,
-    # but should at least render the object correctly
+    # The formatter should explicitly show additionalProperties constraint
     assert "{" in result
+    # Check that "no additional properties" constraint appears
+    assert "no additional properties" in result or "//no additional properties" in result
 
 
 # ============================================================================

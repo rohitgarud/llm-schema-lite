@@ -451,6 +451,10 @@ class JSONishFormatter(BaseFormatter):
             and not schema.get("enum")
             and not schema.get("$ref")
         ):
+            # Set additionalProperties comment for empty object if present
+            additional_props_comment = self.process_additional_properties(schema)
+            if additional_props_comment:
+                output["__additional_properties__"] = additional_props_comment
             return output
 
         if "properties" in schema and schema["properties"]:
@@ -486,6 +490,11 @@ class JSONishFormatter(BaseFormatter):
                 if (field_dependencies) and processed_prop_name not in self.pending_postfix:
                     comment = f" {self.comment_prefix}"
                     self.pending_postfix[processed_prop_name] = f"{comment}{field_dependencies}"
+
+            # Set additionalProperties comment for object with properties if present
+            additional_props_comment = self.process_additional_properties(schema)
+            if additional_props_comment:
+                output["__additional_properties__"] = additional_props_comment
 
         elif "anyOf" in schema and schema["anyOf"]:
             return self.process_anyof(schema)
@@ -547,6 +556,76 @@ class JSONishFormatter(BaseFormatter):
         if comments:
             return "\n".join(comments) + "\n"
         return ""
+
+    def _jsonish_dump(self, obj: dict[str, Any] | list[Any] | Any, indent: int = 0) -> str:
+        """
+        Custom serializer for JSONish format that handles __additional_properties__.
+
+        Args:
+            obj: Object to serialize (dict, list, or primitive).
+            indent: Current indentation level.
+
+        Returns:
+            Serialized JSONish string.
+        """
+        if isinstance(obj, dict):
+            # Extract the reserved key if present
+            additional_props_comment: str = str(obj.get("__additional_properties__", ""))
+
+            # Build the dict content (excluding the reserved key)
+            parts = []
+            for k, v in obj.items():
+                if k == "__additional_properties__":
+                    continue
+                # Recursively serialize the value
+                serialized_value = self._jsonish_dump(v, indent + 1)
+                # For multi-line values, indent properly
+                if "\n" in serialized_value:
+                    parts.append(f"{k}: {serialized_value}")
+                else:
+                    parts.append(f"{k}: {serialized_value}")
+
+            if not parts:
+                # Empty dict
+                if additional_props_comment:
+                    return "{" + additional_props_comment + "\n" + " " * indent + "}"
+                return "{}"
+
+            # Build the result
+            indent_str = " " * (indent + 1)
+            content = (",\n" + indent_str).join(parts)
+            result = "{\n" + indent_str + content + "\n" + " " * indent + "}"
+
+            # Add the comment before the closing brace if present
+            if additional_props_comment:
+                # Insert comment before the last closing brace
+                lines = result.rsplit("\n", 1)
+                if len(lines) == 2:
+                    result = lines[0] + additional_props_comment + "\n" + lines[1]
+
+            return result
+        elif isinstance(obj, list):
+            # Handle list serialization
+            if not obj:
+                return "[]"
+            serialized_items = [self._jsonish_dump(item, indent + 1) for item in obj]
+            if any("\n" in item for item in serialized_items):
+                # Multi-line items
+                indent_str = " " * (indent + 1)
+                content = (",\n" + indent_str).join(serialized_items)
+                return "[\n" + indent_str + content + "\n" + " " * indent + "]"
+            else:
+                # Single-line items
+                return "[" + ", ".join(serialized_items) + "]"
+        elif isinstance(obj, str):
+            # Don't add quotes (JSONish style)
+            return obj
+        elif obj is None:
+            return "null"
+        elif isinstance(obj, bool):
+            return "true" if obj else "false"
+        else:
+            return str(obj)
 
     def _apply_pending_postfix(self, output_string: str) -> str:
         """
@@ -658,7 +737,8 @@ class JSONishFormatter(BaseFormatter):
         output = self._process_schema_recursive(self.schema)
         output_string = ""
         if output and isinstance(output, dict):
-            output_string = json.dumps(output, indent=2).replace('"', "")
+            # Use custom serializer that handles __additional_properties__
+            output_string = self._jsonish_dump(output, indent=0).replace('"', "")
         else:
             output_string = str(output)
         output_string = f"{self.get_info_comment(self.schema)}{self.get_required_fields_comment()}{output_string}"  # noqa: E501

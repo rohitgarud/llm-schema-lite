@@ -607,13 +607,15 @@ def test_typescript_dict_fields():
 def test_typescript_additional_properties_false():
     """Test TypeScript formatter with additionalProperties: false."""
     schema = ObjectAdditionalPropsFalse.model_json_schema()
-    formatter = TypeScriptFormatter(schema, include_metadata=False)
+    formatter = TypeScriptFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
     # Fields should be present
     assert "name*:" in result
     assert "value*:" in result
+    # Check that additionalProperties constraint appears (as comment)
+    assert "no additional properties" in result or "//no additional properties" in result
 
 
 # ============================================================================
