@@ -124,14 +124,14 @@ def test_jsonish_formatter_with_constraints():
     assert_required_optional_consistent(result, schema)
 
     assert "name*:" in result
-    assert "(1-100 chars)" in result, (
-        "Expected string length constraint '(1-100 chars)' in output. " f"Snippet: {result[:300]!r}"
-    )
+    assert (
+        "(1-100 chars)" in result
+    ), f"Expected string length constraint '(1-100 chars)' in output. Snippet: {result[:300]!r}"
 
     assert "age*:" in result
-    assert "(0 to 150)" in result, (
-        "Expected integer range constraint '(0 to 150)' in output. " f"Snippet: {result[:300]!r}"
-    )
+    assert (
+        "(0 to 150)" in result
+    ), f"Expected integer range constraint '(0 to 150)' in output. Snippet: {result[:300]!r}"
 
     assert "score*:" in result
     assert re.search(r"\(0(\.0)? to 100(\.0)?\)", result), (

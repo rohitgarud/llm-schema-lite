@@ -156,9 +156,9 @@ def test_typescript_formatter_with_constraints():
     # Constraints appear inline in the type when include_metadata=True
     assert "name*: string (1-100 chars)" in result
     assert "age*: number (0-150)" in result
-    assert re.search(r"score\*:\s*number\s*\(0(\.0)?-100(\.0)?\)", result), (
-        "Expected score range constraint in output. " f"Snippet: {result[:350]!r}"
-    )
+    assert re.search(
+        r"score\*:\s*number\s*\(0(\.0)?-100(\.0)?\)", result
+    ), f"Expected score range constraint in output. Snippet: {result[:350]!r}"
 
 
 def test_typescript_formatter_with_optional_union():

@@ -977,8 +977,21 @@ class BaseFormatter(ABC):
         if additional_props is False:
             return " //no additional properties"
         elif isinstance(additional_props, dict) and additional_props:
-            # Only process if dict is non-empty
-            return f" //additional: {self.process_type_value(additional_props)}"
+            type_str = self.process_type_value(additional_props)
+            required = additional_props.get("required", [])
+            props = additional_props.get("properties", {})
+            if isinstance(props, dict):
+                prop_names = list(props.keys())
+            else:
+                prop_names = []
+            if required or prop_names:
+                extra = []
+                if required:
+                    extra.append(f"required {', '.join(required)}")
+                if prop_names:
+                    extra.append(f"properties: {', '.join(prop_names)}")
+                return f" //additional: {type_str} with {'; '.join(extra)}"
+            return f" //additional: {type_str}"
         return ""
 
     def process_pattern_properties(self, schema: dict[str, Any]) -> str:

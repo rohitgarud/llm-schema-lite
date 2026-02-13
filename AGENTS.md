@@ -77,12 +77,19 @@
 
 🚫 **Never**: Commit secrets, disable security or lint checks, break documented public API without a plan
 
-## Planning Mode
-- Ask clarifying questions if the goal is unclear, then produce the plan
+### When in the Planning Mode
+- Ask clarifying questions if not clear and then make the plan
 - Read any directly mentioned files first
-- Break down the goal into concrete steps and note assumptions to verify
-- Reference exact paths (and line ranges if helpful) for files to change
-- If the user corrects the plan, update the same plan accordingly
-- Keep the plan self-contained and list out-of-scope items to avoid scope creep
-- End with a verification step (e.g. run `make test`, `make lint`, or add/run specific tests)
-- Plan should end with a comprehensive list od structured Todo's
+- Analyze and decompose the planning goal provided by user
+- Identify any discrepancies or misunderstandings
+- Note assumptions that need verification
+- Identify specific components, patterns, or concepts and their connections to investigate, add to plan file
+- Add exact paths in the plan to files the implementation of the plan will be touching, including line numbers/ranges
+- If User provides some corrections, update the same plan accordingly
+- Plan should be self-contained with all the research and necessary context, so that implementation agent should not have to open any files other than mentioned in the plan
+- Explicitly list out-of-scope items to prevent scope creep
+- Add verification step at the end which can include writing temporary or persistent tests, running relevant make commands
+
+### When in the Agent Implementation Mode
+- You should not to open any files other than mentioned in the plan as plan is comprehensive enough
+- Follow existing patterns as per plan rather than creating new patterns wherever possible

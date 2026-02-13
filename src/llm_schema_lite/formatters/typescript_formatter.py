@@ -374,8 +374,7 @@ class TypeScriptFormatter(BaseFormatter):
                 # Add schema-level features as comments if present
                 if schema_level_features and self.include_metadata:
                     result = (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n"
-                        f"{result}"
+                        f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
                     )
                 return result
             elif "oneOf" in self.schema:
@@ -383,8 +382,7 @@ class TypeScriptFormatter(BaseFormatter):
                 result = f"type Schema = {oneof_content};"
                 if schema_level_features and self.include_metadata:
                     result = (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n"
-                        f"{result}"
+                        f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
                     )
                 return result
             elif "anyOf" in self.schema:
@@ -392,8 +390,7 @@ class TypeScriptFormatter(BaseFormatter):
                 result = f"type Schema = {anyof_content};"
                 if schema_level_features and self.include_metadata:
                     result = (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n"
-                        f"{result}"
+                        f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
                     )
                 return result
             elif "allOf" in self.schema:
@@ -401,8 +398,7 @@ class TypeScriptFormatter(BaseFormatter):
                 result = f"type Schema = {allof_content};"
                 if schema_level_features and self.include_metadata:
                     result = (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n"
-                        f"{result}"
+                        f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
                     )
                 return result
             else:

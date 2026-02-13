@@ -159,7 +159,9 @@ class JSONishFormatter(BaseFormatter):
                 output = output + f" (default='{value['default']}')"
         return str(output) if not isinstance(output, str) else output
 
-    def process_anyof(self, value: dict[str, Any], key: str | None = None) -> str:
+    def process_anyof(  # type: ignore[override]
+        self, value: dict[str, Any], key: str | None = None
+    ) -> str | dict[str, Any]:
         """
         Process anyOf union types.
 
@@ -168,12 +170,14 @@ class JSONishFormatter(BaseFormatter):
             key: Optional property key for postfix tracking.
 
         Returns:
-            Formatted union type representation.
+            Formatted union type representation (string or dict for nested serialization).
         """
         comment = ""
         title, description, default_value, example = self._get_title_description_default_value(
             value
         )
+        if self._is_root_schema(value):
+            title, description = "", ""
         anyof_list = value.get("anyOf", [])
         items: list[dict[str, Any] | str] = []
         for item in anyof_list:
@@ -186,21 +190,22 @@ class JSONishFormatter(BaseFormatter):
                 self.pending_postfix[key] = (
                     f"OR null {comment}{title}{description}{default_value}{example}"
                 )
-            # Return the first item as string
             first_item = items[0]
             if isinstance(first_item, dict):
-                return json.dumps(first_item, indent=2)
+                return first_item
             return str(first_item)
         else:
             str_items = [
-                json.dumps(item, indent=2) if isinstance(item, dict | list) else str(item)
+                self._jsonish_dump(item, 0) if isinstance(item, dict | list) else str(item)
                 for item in items
             ]
             output = " OR ".join(str_items) if len(str_items) > 1 else str_items[0]
 
         return f"{output}{comment}{title}{description}{default_value}{example}"
 
-    def process_oneof(self, value: dict[str, Any], key: str | None = None) -> str:
+    def process_oneof(  # type: ignore[override]
+        self, value: dict[str, Any], key: str | None = None
+    ) -> str | dict[str, Any]:
         """
         Process oneOf exclusive choice types.
 
@@ -209,12 +214,14 @@ class JSONishFormatter(BaseFormatter):
             key: Optional property key for postfix tracking.
 
         Returns:
-            Formatted exclusive choice representation.
+            Formatted exclusive choice representation (string or dict).
         """
         comment = ""
         title, description, default_value, example = self._get_title_description_default_value(
             value
         )
+        if self._is_root_schema(value):
+            title, description = "", ""
         oneof_list = value.get("oneOf", [])
         items: list[dict[str, Any] | str] = []
         for item in oneof_list:
@@ -227,21 +234,36 @@ class JSONishFormatter(BaseFormatter):
                 self.pending_postfix[key] = (
                     f"ONE OF: {comment}{title}{description}{default_value}{example}"
                 )
-            # Return the first item as string
             first_item = items[0]
             if isinstance(first_item, dict):
-                return json.dumps(first_item, indent=2)
+                return first_item
             return str(first_item)
         else:
             str_items = [
-                json.dumps(item, indent=2) if isinstance(item, dict | list) else str(item)
+                self._jsonish_dump(item, 0) if isinstance(item, dict | list) else str(item)
                 for item in items
             ]
             output = "ONE OF: " + " OR ".join(str_items) if len(str_items) > 1 else str_items[0]
 
         return f"{output}{comment}{title}{description}{default_value}{example}"
 
-    def process_allof(self, value: dict[str, Any], key: str | None = None) -> str:
+    def _merge_allof_objects(self, items: list[dict[str, Any] | str]) -> dict[str, Any] | None:
+        """If all items are dicts, merge them by key (shallow merge). Otherwise return None."""
+        dicts = [x for x in items if isinstance(x, dict)]
+        if len(dicts) != len(items):
+            return None
+        merged: dict[str, Any] = {}
+        for d in dicts:
+            for k, v in d.items():
+                if k == "__additional_properties__":
+                    merged[k] = v
+                else:
+                    merged[k] = v
+        return merged
+
+    def process_allof(  # type: ignore[override]
+        self, value: dict[str, Any], key: str | None = None
+    ) -> str | dict[str, Any]:
         """
         Process allOf intersection types.
 
@@ -250,12 +272,14 @@ class JSONishFormatter(BaseFormatter):
             key: Optional property key for postfix tracking.
 
         Returns:
-            Formatted intersection representation.
+            Formatted intersection representation (string or merged dict).
         """
         comment = ""
         title, description, default_value, example = self._get_title_description_default_value(
             value
         )
+        if self._is_root_schema(value):
+            title, description = "", ""
         allof_list = value.get("allOf", [])
         items: list[dict[str, Any] | str] = []
         for item in allof_list:
@@ -268,14 +292,16 @@ class JSONishFormatter(BaseFormatter):
                 self.pending_postfix[key] = (
                     f"AND null {comment}{title}{description}{default_value}{example}"
                 )
-            # Return the first item as string
             first_item = items[0]
             if isinstance(first_item, dict):
-                return json.dumps(first_item, indent=2)
+                return first_item
             return str(first_item)
         else:
+            merged = self._merge_allof_objects(items)
+            if merged is not None:
+                return merged
             str_items = [
-                json.dumps(item, indent=2) if isinstance(item, dict | list) else str(item)
+                self._jsonish_dump(item, 0) if isinstance(item, dict | list) else str(item)
                 for item in items
             ]
             output = " AND ".join(str_items) if len(str_items) > 1 else str_items[0]
@@ -305,7 +331,11 @@ class JSONishFormatter(BaseFormatter):
         else:
             return f"OPTIONS: {'| '.join(enum_list)}{comment}{title}{description}{default_value}{example}"  # noqa: E501
 
-    def process_types(self, value: dict[str, Any], key: str | None = None) -> str | list[str]:
+    def _is_root_schema(self, value: dict[str, Any]) -> bool:
+        """Return True if value is the root schema (skip duplicating title/description)."""
+        return value is self.schema
+
+    def process_types(self, value: dict[str, Any], key: str | None = None) -> str | dict[str, Any]:
         """
         Process type fields with constraints.
 
@@ -314,12 +344,14 @@ class JSONishFormatter(BaseFormatter):
             key: Optional property key for postfix tracking.
 
         Returns:
-            Formatted type representation (string or list for arrays).
+            Formatted type representation (string, list for arrays, or dict for object).
         """
         comment = ""
         title, description, default_value, example = self._get_title_description_default_value(
             value
         )
+        if self._is_root_schema(value):
+            title, description = "", ""
         options, format_, pattern = self._get_options_format_pattern(value)
 
         if "type" in value:
@@ -395,7 +427,7 @@ class JSONishFormatter(BaseFormatter):
                             f"{comment}{title}{description}{default_value}{example}"
                         )
                 result = self._process_schema_recursive(value)
-                return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
+                return result if isinstance(result, dict) else str(result)
             elif value["type"] == "null":
                 return "null"
             elif isinstance(value["type"], list):
@@ -468,14 +500,19 @@ class JSONishFormatter(BaseFormatter):
                 if "$ref" in value and value["$ref"]:
                     output[processed_prop_name] = self.process_ref(value, processed_prop_name)
                 elif "anyOf" in value and value["anyOf"]:
-                    output[processed_prop_name] = self.process_anyof(value, processed_prop_name)
+                    result = self.process_anyof(value, processed_prop_name)
+                    output[processed_prop_name] = result
                 elif "oneOf" in value and value["oneOf"]:
-                    output[processed_prop_name] = self.process_oneof(value, processed_prop_name)
+                    result = self.process_oneof(value, processed_prop_name)
+                    output[processed_prop_name] = result
                 elif "allOf" in value and value["allOf"]:
-                    output[processed_prop_name] = self.process_allof(value, processed_prop_name)
+                    result = self.process_allof(value, processed_prop_name)
+                    output[processed_prop_name] = result
                 elif "type" in value:
                     result = self.process_types(value, processed_prop_name)
-                    if isinstance(result, str):
+                    if isinstance(result, dict):
+                        output[processed_prop_name] = result
+                    elif isinstance(result, str):
                         output[processed_prop_name] = result
                     else:
                         output[processed_prop_name] = str(result)
@@ -485,7 +522,18 @@ class JSONishFormatter(BaseFormatter):
                     nested = self._process_schema_recursive(value)
                     output[processed_prop_name] = nested
                 else:
-                    output[processed_prop_name] = str(value)
+                    title, description, default_value, example = (
+                        self._get_title_description_default_value(value)
+                    )
+                    if description or title or default_value or example:
+                        comment_part = (
+                            f" {self.comment_prefix}{title}{description}{default_value}{example}"
+                        ).strip()
+                        output[processed_prop_name] = (
+                            f"any {comment_part}" if comment_part else "any"
+                        )
+                    else:
+                        output[processed_prop_name] = str(value)
 
                 if (field_dependencies) and processed_prop_name not in self.pending_postfix:
                     comment = f" {self.comment_prefix}"
@@ -502,6 +550,8 @@ class JSONishFormatter(BaseFormatter):
             return self.process_oneof(schema)
         elif "type" in schema and schema["type"]:
             result = self.process_types(schema)
+            if isinstance(result, dict):
+                return result
             return str(result) if not isinstance(result, str) else result
         elif "allOf" in schema and schema["allOf"]:
             return self.process_allof(schema)
@@ -557,13 +607,16 @@ class JSONishFormatter(BaseFormatter):
             return "\n".join(comments) + "\n"
         return ""
 
-    def _jsonish_dump(self, obj: dict[str, Any] | list[Any] | Any, indent: int = 0) -> str:
+    def _jsonish_dump(
+        self, obj: dict[str, Any] | list[Any] | Any, indent: int = 0, is_root: bool = False
+    ) -> str:
         """
         Custom serializer for JSONish format that handles __additional_properties__.
 
         Args:
             obj: Object to serialize (dict, list, or primitive).
             indent: Current indentation level.
+            is_root: True when serializing the top-level object (for root additionalProperties).
 
         Returns:
             Serialized JSONish string.
@@ -571,6 +624,10 @@ class JSONishFormatter(BaseFormatter):
         if isinstance(obj, dict):
             # Extract the reserved key if present
             additional_props_comment: str = str(obj.get("__additional_properties__", ""))
+            if is_root and additional_props_comment:
+                rest = additional_props_comment.strip()
+                suffix = rest[2:].strip() if rest.startswith("//") else rest
+                additional_props_comment = f" // Root: {suffix}"
 
             # Build the dict content (excluding the reserved key)
             parts = []
@@ -578,7 +635,7 @@ class JSONishFormatter(BaseFormatter):
                 if k == "__additional_properties__":
                     continue
                 # Recursively serialize the value
-                serialized_value = self._jsonish_dump(v, indent + 1)
+                serialized_value = self._jsonish_dump(v, indent + 1, is_root=False)
                 # For multi-line values, indent properly
                 if "\n" in serialized_value:
                     parts.append(f"{k}: {serialized_value}")
@@ -737,11 +794,35 @@ class JSONishFormatter(BaseFormatter):
         output = self._process_schema_recursive(self.schema)
         output_string = ""
         if output and isinstance(output, dict):
-            # Use custom serializer that handles __additional_properties__
-            output_string = self._jsonish_dump(output, indent=0).replace('"', "")
+            output_string = self._jsonish_dump(output, indent=0, is_root=True).replace('"', "")
         else:
             output_string = str(output)
+        if self.schema.get("type") == "array":
+            output_string = f"// Array of (items):\n{output_string}"
         output_string = f"{self.get_info_comment(self.schema)}{self.get_required_fields_comment()}{output_string}"  # noqa: E501
+        notes = self.schema.get("notes")
+        links = self.schema.get("links")
+        if notes and self.include_metadata:
+            notes_str = notes if isinstance(notes, str) else "\n".join(str(n) for n in notes)
+            output_string = (
+                f"{output_string}\n{self.comment_prefix} Notes:\n{self.comment_prefix} {notes_str}"
+            )
+        if links and self.include_metadata and isinstance(links, list):
+            link_lines = []
+            for link in links:
+                if isinstance(link, dict):
+                    href = link.get("href", link.get("url", ""))
+                    method = link.get("method", "")
+                    rel = link.get("rel", "")
+                    part = f" [{method}]" if method else ""
+                    part += f" rel={rel}" if rel else ""
+                    link_lines.append(f"{href}{part}")
+                else:
+                    link_lines.append(str(link))
+            if link_lines:
+                output_string = f"{output_string}\n{self.comment_prefix} Links:\n" + "\n".join(
+                    f"{self.comment_prefix} {L}" for L in link_lines
+                )
 
         output_string = self._apply_pending_postfix(output_string)
         self.simplified_schema = output_string.replace("  ", " ")
