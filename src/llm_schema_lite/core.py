@@ -1,25 +1,18 @@
 """Core functionality for LLM Schema Lite."""
 
 import json
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 try:
     from pydantic import BaseModel
 except ImportError:
     BaseModel = None  # type: ignore[assignment, misc]
 
-try:
-    import jsonschema
-    from jsonschema import Draft202012Validator, FormatChecker
-except ImportError:
-    jsonschema = None
-    Draft202012Validator = None
-    FormatChecker = None
-
-from .exceptions import ConversionError, UnsupportedModelError, ValidationError
+from .exceptions import ConversionError, UnsupportedModelError
 from .formatters import JSONishFormatter, TypeScriptFormatter, YAMLFormatter
 from .formatters.base import BaseFormatter
 from .parsers import BaseParser, JSONParser, YAMLParser
+from .validators import JSONValidator, YAMLValidator
 
 
 class SchemaLite:
@@ -344,6 +337,11 @@ def validate(
     JSON Schema validation, including format checking. Supports both JSON and YAML
     data formats. Returns detailed error messages that LLMs can use to improve output.
 
+    You can also use validator classes directly for reuse or format-specific control:
+        >>> from llm_schema_lite import JSONValidator, YAMLValidator
+        >>> json_validator = JSONValidator(User)
+        >>> is_valid, errors = json_validator.validate('{"name": "Jane", "age": 25}')
+
     Args:
         schema: Pydantic BaseModel class, JSON schema dict, or JSON schema string
         data: Data to validate (can be dict, list, string, number, boolean, null,
@@ -386,167 +384,12 @@ def validate(
         >>> validate(User, "name: John\\nage: 30", mode="yaml")
         (True, None)
     """
-    # Check if jsonschema is available
-    if jsonschema is None:
-        raise ValidationError(
-            "jsonschema library is required for validation. Install it with: pip install jsonschema"
-        )
-
-    # Parse data if it's a string
-    if isinstance(data, str):
-        data_str = data
-        # Determine parsing strategy
-        if mode == "json":
-            # Try JSON parsing only
-            if data_str.strip().startswith(("{", "[")):
-                try:
-                    data = loads(data_str, mode="json")
-                except ConversionError:
-                    # If it fails to parse, treat it as a plain string value
-                    pass
-        elif mode == "yaml":
-            # Try YAML parsing
-            try:
-                data = loads(data_str, mode="yaml")
-            except ConversionError:
-                # If it fails to parse, treat it as a plain string value
-                pass
-        else:  # mode == "auto"
-            # Try JSON first (faster and more common)
-            if data_str.strip().startswith(("{", "[")):
-                try:
-                    data = loads(data_str, mode="json")
-                except ConversionError:
-                    # Try YAML as fallback
-                    try:
-                        data = loads(data_str, mode="yaml")
-                    except ConversionError:
-                        # If both fail, treat it as a plain string value
-                        pass
-            else:
-                # Doesn't look like JSON, try YAML
-                try:
-                    data = loads(data_str, mode="yaml")
-                except ConversionError:
-                    # If it fails to parse, treat it as a plain string value
-                    pass
-
-    # Get JSON schema dict
-    json_schema: dict[str, Any]
-
-    # Handle Pydantic models
-    if BaseModel is not None and isinstance(schema, type) and issubclass(schema, BaseModel):
-        json_schema = schema.model_json_schema()  # type: ignore[union-attr]
-    # Handle JSON schema dict
-    elif isinstance(schema, dict):
-        json_schema = schema
-    # Handle JSON schema string
-    elif isinstance(schema, str):
-        try:
-            json_schema = json.loads(schema)
-        except json.JSONDecodeError as e:
-            raise ConversionError(f"Invalid JSON schema string: {e}") from e
-    else:
-        raise UnsupportedModelError(
-            f"Unsupported schema type: {type(schema)}. Expected Pydantic BaseModel, dict, or str."
-        )
-
-    # Validate using jsonschema
-    try:
-        # Check if schema itself is valid
-        Draft202012Validator.check_schema(json_schema)
-
-        # Create validator with format checker for additional validation
-        format_checker = FormatChecker()
-        validator = Draft202012Validator(json_schema, format_checker=format_checker)
-
-        # Collect all validation errors
-        errors = list(validator.iter_errors(data))
-
-        if not errors:
-            # Data is valid
-            return (True, None)
-
-        # Format error messages
-        error_messages = [_format_validation_error(err) for err in errors]
-
-        if return_all_errors:
-            # Return all errors
-            return (False, error_messages)
-        else:
-            # Return only the first error
-            return (False, [error_messages[0]])
-
-    except jsonschema.exceptions.SchemaError as e:
-        # Schema itself is invalid
-        raise ValidationError("Invalid JSON schema") from e
-    except Exception as e:
-        # Other errors (not validation errors)
-        raise ValidationError(f"Validation failed: {e}") from e
-
-
-def _format_validation_error(error: Any) -> str:
-    """
-    Format a jsonschema ValidationError into a human-readable message for LLMs.
-
-    Args:
-        error: jsonschema ValidationError instance
-
-    Returns:
-        str: Formatted error message with path, issue, and context
-    """
-    # Build the path to the error
-    path_parts = list(error.absolute_path)
-    if path_parts:
-        path_str = "." + ".".join(str(p) for p in path_parts)
-    else:
-        path_str = " (root)"
-
-    # Get the error message
-    message = error.message
-
-    # Add context about the failing value if available
-    if hasattr(error, "instance"):
-        instance = error.instance
-        if isinstance(instance, dict | list):
-            # For complex types, show the type
-            instance_str = f" (got {type(instance).__name__})"
-        elif instance is None:
-            instance_str = " (got null)"
-        elif isinstance(instance, str):
-            # Truncate long strings
-            if len(instance) > 50:
-                instance_str = f" (got '{instance[:47]}...')"
-            else:
-                instance_str = f" (got '{instance}')"
-        else:
-            instance_str = f" (got {instance})"
-    else:
-        instance_str = ""
-
-    # Add schema context if available
-    schema_info = ""
-    if hasattr(error, "validator") and hasattr(error, "validator_value"):
-        validator = error.validator
-        validator_value = error.validator_value
-
-        if validator == "required":
-            # For required fields, list what's missing
-            schema_info = f" - Required properties: {validator_value}"
-        elif validator == "type":
-            # For type errors, show expected type
-            schema_info = f" - Expected type: {validator_value}"
-        elif validator in ("minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"):
-            # For constraint errors, show the constraint
-            schema_info = f" - Constraint: {validator} = {validator_value}"
-        elif validator == "pattern":
-            # For pattern errors, show the pattern
-            schema_info = f" - Expected pattern: {validator_value}"
-        elif validator == "enum":
-            # For enum errors, show allowed values
-            schema_info = f" - Allowed values: {validator_value}"
-
-    # Combine all parts
-    full_message = f"Validation error at '{path_str}': {message}{instance_str}{schema_info}"
-
-    return full_message
+    schema_arg = cast(type[Any] | dict[str, Any] | str, schema)
+    if mode == "json":
+        return JSONValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
+    if mode == "yaml":
+        return YAMLValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
+    # mode == "auto": try JSON first when data looks like JSON, else YAML
+    if isinstance(data, str) and data.strip().startswith(("{", "[")):
+        return JSONValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
+    return YAMLValidator(schema_arg).validate(data, return_all_errors=return_all_errors)

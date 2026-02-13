@@ -14,6 +14,7 @@ from .exceptions import (
     ValidationError,
 )
 from .formatters import BaseFormatter, JSONishFormatter, TypeScriptFormatter, YAMLFormatter
+from .validators import BaseValidator, JSONValidator, YAMLValidator
 
 __all__ = [
     "__version__",
@@ -27,6 +28,10 @@ __all__ = [
     "JSONishFormatter",
     "TypeScriptFormatter",
     "YAMLFormatter",
+    # Validators
+    "BaseValidator",
+    "JSONValidator",
+    "YAMLValidator",
     # Exceptions
     "SchemaLiteError",
     "UnsupportedModelError",
