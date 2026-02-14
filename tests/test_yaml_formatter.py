@@ -581,6 +581,93 @@ def test_yaml_additional_properties_false():
     assert "no additional properties" in result or "#no additional properties" in result
 
 
+def test_yaml_formatter_empty_schema_renders_as_any():
+    """Test that empty schema {} renders as 'any', not 'string'."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {}  # Empty schema
+        },
+    }
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert "value: any" in result or "value: any\n" in result
+
+
+def test_yaml_formatter_object_with_complex_additional_props_shows_placeholder():
+    """Test that object with only complex additionalProperties shows placeholder key."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "result": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {"value": {}},
+                    "required": ["value"],
+                },
+            }
+        },
+    }
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert "<key>" in result
+    assert "value*" in result or "value:" in result
+    assert "any" in result
+    assert "any properties allowed" in result
+
+
+def test_yaml_formatter_additional_props_with_object_schema():
+    """Regression: additionalProperties object should show structure details."""
+    schema = {
+        "type": "object",
+        "properties": {"result": {"type": "object"}},
+        "required": ["result"],
+        "additionalProperties": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+    }
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert "additional:" in result or "any properties allowed" in result
+    assert "value" in result and "string" in result
+
+
+def test_yaml_formatter_simple_additional_props_still_work():
+    """Test that simple additionalProperties still render as comments."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "config": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+            }
+        },
+    }
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert "additional:" in result
+    assert "string" in result
+
+
+def test_yaml_formatter_additional_props_false_still_works():
+    """Test that additionalProperties: false still works correctly."""
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+    }
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert "no additional properties" in result
+
+
 # ============================================================================
 # Datetime
 # ============================================================================

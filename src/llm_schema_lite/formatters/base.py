@@ -593,8 +593,18 @@ class BaseFormatter(ABC):
         Returns:
             Formatted type representation.
         """
+        # Check if this is an empty schema (any valid JSON)
+        if not type_value or len(type_value) == 0:
+            return "any"
+
         # Safely get type with fallback
-        type_name = type_value.get("type", "string")
+        type_name = type_value.get("type")
+
+        # If no type specified but has other constraints, treat as "any"
+        if type_name is None:
+            # Has constraints but no type -> could be any type with those constraints
+            # For simplicity, show as "any" for now
+            return "any"
 
         # Handle array of types (union types like ["string", "null"])
         if isinstance(type_name, list):
@@ -876,6 +886,10 @@ class BaseFormatter(ABC):
             else:
                 return "any"
 
+        # Empty schema {} means any valid JSON
+        if not _property:
+            return "any"
+
         if "$ref" in _property:
             prop_str = self.process_ref(_property)
         elif "enum" in _property:
@@ -971,26 +985,43 @@ class BaseFormatter(ABC):
             processed_properties[formatted_name] = self.process_property(value)
         return processed_properties
 
-    def process_additional_properties(self, schema: dict[str, Any]) -> str:
-        """Process additionalProperties constraint."""
+    def process_additional_properties(
+        self, schema: dict[str, Any], show_structure: bool = True
+    ) -> str:
+        """Process additionalProperties constraint.
+
+        Args:
+            schema: Schema containing additionalProperties
+            show_structure: If False, return simpler comment (structure shown elsewhere)
+
+        Returns:
+            Formatted additionalProperties comment.
+        """
         additional_props = schema.get("additionalProperties")
         if additional_props is False:
             return " //no additional properties"
         elif isinstance(additional_props, dict) and additional_props:
+            if not show_structure:
+                # Structure shown via placeholder key, just indicate it's allowed
+                return " //any properties allowed"
+
             type_str = self.process_type_value(additional_props)
             required = additional_props.get("required", [])
             props = additional_props.get("properties", {})
-            if isinstance(props, dict):
-                prop_names = list(props.keys())
-            else:
-                prop_names = []
-            if required or prop_names:
-                extra = []
-                if required:
-                    extra.append(f"required {', '.join(required)}")
-                if prop_names:
-                    extra.append(f"properties: {', '.join(prop_names)}")
-                return f" //additional: {type_str} with {'; '.join(extra)}"
+            if isinstance(props, dict) and props:
+                prop_details = []
+                for prop_name, prop_def in props.items():
+                    if isinstance(prop_def, dict):
+                        prop_type = self.process_type_value(prop_def)
+                    else:
+                        prop_type = str(prop_def)
+                    if prop_name in required:
+                        prop_details.append(f"{prop_name}* (required): {prop_type}")
+                    else:
+                        prop_details.append(f"{prop_name}: {prop_type}")
+                return f" //additional: {type_str} with {', '.join(prop_details)}"
+            if required:
+                return f" //additional: {type_str} with required {', '.join(required)}"
             return f" //additional: {type_str}"
         return ""
 

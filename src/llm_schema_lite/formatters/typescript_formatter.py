@@ -65,6 +65,59 @@ class TypeScriptFormatter(BaseFormatter):
         metadata_parts = self.format_metadata_parts(value)
         return f"{representation}  // {', '.join(metadata_parts)}"
 
+    def process_additional_properties(
+        self, schema: dict[str, Any], show_structure: bool = True
+    ) -> str:
+        """Process additionalProperties constraint for TypeScript."""
+        additional_props = schema.get("additionalProperties")
+        if additional_props is False:
+            return " // no additional properties"
+        elif isinstance(additional_props, dict) and additional_props:
+            if not show_structure:
+                # Structure shown via placeholder key, just indicate it's allowed
+                return " // any properties allowed"
+
+            type_str = self.process_type_value(additional_props)
+            required = additional_props.get("required", [])
+            props = additional_props.get("properties", {})
+            if isinstance(props, dict) and props:
+                prop_details = []
+                for prop_name, prop_def in props.items():
+                    if isinstance(prop_def, dict):
+                        prop_type = self.process_type_value(prop_def)
+                    else:
+                        prop_type = str(prop_def)
+                    if prop_name in required:
+                        prop_details.append(f"{prop_name}* (required): {prop_type}")
+                    else:
+                        prop_details.append(f"{prop_name}: {prop_type}")
+                return f" // additional: {type_str} with {', '.join(prop_details)}"
+            if required:
+                return f" // additional: {type_str} with required {', '.join(required)}"
+            return f" // additional: {type_str}"
+        return ""
+
+    def _is_complex_additional_props(self, schema: dict[str, Any]) -> bool:
+        """Check if schema has complex additionalProperties."""
+        additional_props = schema.get("additionalProperties")
+
+        if not isinstance(additional_props, dict) or not additional_props:
+            return False
+
+        # Check if nested object with additionalProperties
+        is_object_with_additional = (
+            additional_props.get("type") == "object" and "additionalProperties" in additional_props
+        )
+
+        # Complex if has properties, composition keywords, or nested structure
+        return (
+            "properties" in additional_props
+            or "anyOf" in additional_props
+            or "oneOf" in additional_props
+            or "allOf" in additional_props
+            or is_object_with_additional
+        )
+
     def process_anyof(self, anyof: dict[str, Any]) -> str:
         """
         Process an anyOf field (union types) for TypeScript.
@@ -327,11 +380,21 @@ class TypeScriptFormatter(BaseFormatter):
             for name, prop_type in self._processed_data.items():
                 main_output.write(f"  {name}: {prop_type};\n")
 
+            # Add placeholder for complex additionalProperties
+            if self._is_complex_additional_props(self.schema):
+                additional_props = self.schema.get("additionalProperties")
+                if isinstance(additional_props, dict):
+                    placeholder_type = self.process_property(additional_props)
+                    main_output.write(f"  <key>: {placeholder_type};\n")
+
             main_output.write("}")
 
             # Add additionalProperties comment if present and metadata is enabled
             if self.include_metadata:
-                additional_props_comment = self.process_additional_properties(self.schema)
+                show_structure = not self._is_complex_additional_props(self.schema)
+                additional_props_comment = self.process_additional_properties(
+                    self.schema, show_structure=show_structure
+                )
                 if additional_props_comment:
                     main_output.write(f"\n{additional_props_comment}")
 
@@ -366,9 +429,26 @@ class TypeScriptFormatter(BaseFormatter):
 
             # Handle schema with type but no properties
             if "type" in self.schema:
-                # For empty object type, return interface instead of type alias
-                if self.schema.get("type") == "object" and not schema_level_features:
-                    return "interface Schema {}"
+                # For empty object type, check for complex additionalProperties first
+                if self.schema.get("type") == "object":
+                    if self._is_complex_additional_props(self.schema):
+                        # Build interface with placeholder
+                        result = "interface Schema {\n"
+                        additional_props = self.schema.get("additionalProperties")
+                        if isinstance(additional_props, dict):
+                            placeholder_type = self.process_property(additional_props)
+                            result += f"  <key>: {placeholder_type};\n"
+                        result += "}"
+
+                        # Add comment
+                        additional_comment = self.process_additional_properties(
+                            self.schema, show_structure=False
+                        )
+                        if additional_comment and self.include_metadata:
+                            result += f"\n{additional_comment}"
+                        return result
+                    if not schema_level_features:
+                        return "interface Schema {}"
                 type_content = self.process_type_value(self.schema)
                 result = f"type Schema = {type_content};"
                 # Add schema-level features as comments if present
@@ -461,11 +541,21 @@ class TypeScriptFormatter(BaseFormatter):
             # so we don't need to add it again
             main_output.write(f"  {name}: {prop_type};\n")
 
+        # Add placeholder for complex additionalProperties
+        if self._is_complex_additional_props(self.schema):
+            additional_props = self.schema.get("additionalProperties")
+            if isinstance(additional_props, dict):
+                placeholder_type = self.process_property(additional_props)
+                main_output.write(f"  <key>: {placeholder_type};\n")
+
         main_output.write("}")
 
         # Add additionalProperties comment if present and metadata is enabled
         if self.include_metadata:
-            additional_props_comment = self.process_additional_properties(self.schema)
+            show_structure = not self._is_complex_additional_props(self.schema)
+            additional_props_comment = self.process_additional_properties(
+                self.schema, show_structure=show_structure
+            )
             if additional_props_comment:
                 main_output.write(f"\n{additional_props_comment}")
 

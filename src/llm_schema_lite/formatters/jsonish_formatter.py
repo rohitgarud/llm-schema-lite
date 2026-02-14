@@ -30,7 +30,7 @@ class JSONishFormatter(BaseFormatter):
         """
         super().__init__(schema, include_metadata)
         # Trial-specific state
-        self.processed_ref_cache: dict[str, dict[str, Any] | str] = {}
+        self.processed_ref_cache: dict[str, dict[str, Any] | str | list[Any]] = {}
         self.pending_postfix: dict[str, str] = {}
         self.simplified_schema: str | None = None
 
@@ -179,7 +179,7 @@ class JSONishFormatter(BaseFormatter):
         if self._is_root_schema(value):
             title, description = "", ""
         anyof_list = value.get("anyOf", [])
-        items: list[dict[str, Any] | str] = []
+        items: list[dict[str, Any] | str | list[Any]] = []
         for item in anyof_list:
             items.append(self._process_schema_recursive(item))
 
@@ -223,7 +223,7 @@ class JSONishFormatter(BaseFormatter):
         if self._is_root_schema(value):
             title, description = "", ""
         oneof_list = value.get("oneOf", [])
-        items: list[dict[str, Any] | str] = []
+        items: list[dict[str, Any] | str | list[Any]] = []
         for item in oneof_list:
             items.append(self._process_schema_recursive(item))
 
@@ -247,7 +247,9 @@ class JSONishFormatter(BaseFormatter):
 
         return f"{output}{comment}{title}{description}{default_value}{example}"
 
-    def _merge_allof_objects(self, items: list[dict[str, Any] | str]) -> dict[str, Any] | None:
+    def _merge_allof_objects(
+        self, items: list[dict[str, Any] | str | list[Any]]
+    ) -> dict[str, Any] | None:
         """If all items are dicts, merge them by key (shallow merge). Otherwise return None."""
         dicts = [x for x in items if isinstance(x, dict)]
         if len(dicts) != len(items):
@@ -281,7 +283,7 @@ class JSONishFormatter(BaseFormatter):
         if self._is_root_schema(value):
             title, description = "", ""
         allof_list = value.get("allOf", [])
-        items: list[dict[str, Any] | str] = []
+        items: list[dict[str, Any] | str | list[Any]] = []
         for item in allof_list:
             items.append(self._process_schema_recursive(item))
         if description or default_value:
@@ -335,7 +337,9 @@ class JSONishFormatter(BaseFormatter):
         """Return True if value is the root schema (skip duplicating title/description)."""
         return value is self.schema
 
-    def process_types(self, value: dict[str, Any], key: str | None = None) -> str | dict[str, Any]:
+    def process_types(
+        self, value: dict[str, Any], key: str | None = None
+    ) -> str | dict[str, Any] | list[Any]:
         """
         Process type fields with constraints.
 
@@ -412,7 +416,9 @@ class JSONishFormatter(BaseFormatter):
                             self.pending_postfix[key] = (
                                 f"{comment}{title}{description}{items_range}{default_value}{example}"
                             )
-                    return str([items]) if isinstance(items, dict) else str(items)
+                    if isinstance(items, dict):
+                        return [items]
+                    return items
                 elif items and isinstance(items, str | int | float | bool):
                     comment = f" {self.comment_prefix}"
                     return f"{items} []{items_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
@@ -449,8 +455,8 @@ class JSONishFormatter(BaseFormatter):
                             array_items = self._process_schema_recursive(value["items"])
                         if isinstance(array_items, dict | list):
                             if isinstance(array_items, dict):
-                                return str([array_items])
-                            return str(array_items)
+                                return [array_items]
+                            return array_items
                         elif isinstance(array_items, str | int | float | bool):
                             return f"{array_items} []"
                     return f"{value['type'][0]} {format_}{pattern} or null {comment}{title}{description}{options}{default_value}{example}"  # noqa: E501
@@ -459,7 +465,7 @@ class JSONishFormatter(BaseFormatter):
 
         return ""
 
-    def _process_schema_recursive(self, schema: dict[str, Any]) -> dict[str, Any] | str:
+    def _process_schema_recursive(self, schema: dict[str, Any]) -> dict[str, Any] | str | list[Any]:
         """
         Recursively process schema structure (trial's implementation).
 
@@ -483,10 +489,44 @@ class JSONishFormatter(BaseFormatter):
             and not schema.get("enum")
             and not schema.get("$ref")
         ):
-            # Set additionalProperties comment for empty object if present
-            additional_props_comment = self.process_additional_properties(schema)
-            if additional_props_comment:
-                output["__additional_properties__"] = additional_props_comment
+            # Check if additionalProperties is a complex schema
+            additional_props = schema.get("additionalProperties")
+
+            # Consider it complex only if it has nested structure (properties, composition keywords)
+            is_object_with_additional = False
+            if isinstance(additional_props, dict):
+                is_object_with_additional = (
+                    additional_props.get("type") == "object"
+                    and "additionalProperties" in additional_props
+                )
+            is_complex = (
+                isinstance(additional_props, dict)
+                and additional_props
+                and (
+                    "properties" in additional_props
+                    or "anyOf" in additional_props
+                    or "oneOf" in additional_props
+                    or "allOf" in additional_props
+                    or is_object_with_additional
+                )
+            )
+
+            if is_complex and isinstance(additional_props, dict):
+                # Complex additionalProperties - show placeholder key with structure
+                # Process the additionalProperties schema recursively
+                placeholder_value = self._process_schema_recursive(additional_props)
+                output["<key>"] = placeholder_value
+
+                # Add simple comment indicating any keys allowed
+                output["__additional_properties__"] = self.process_additional_properties(
+                    schema, show_structure=False
+                )
+            else:
+                # Simple or false - use comment only
+                additional_props_comment = self.process_additional_properties(schema)
+                if additional_props_comment:
+                    output["__additional_properties__"] = additional_props_comment
+
             return output
 
         if "properties" in schema and schema["properties"]:
@@ -509,13 +549,15 @@ class JSONishFormatter(BaseFormatter):
                     result = self.process_allof(value, processed_prop_name)
                     output[processed_prop_name] = result
                 elif "type" in value:
-                    result = self.process_types(value, processed_prop_name)
-                    if isinstance(result, dict):
-                        output[processed_prop_name] = result
-                    elif isinstance(result, str):
-                        output[processed_prop_name] = result
+                    type_result: str | dict[str, Any] | list[Any] = self.process_types(
+                        value, processed_prop_name
+                    )
+                    if isinstance(type_result, dict | list):
+                        output[processed_prop_name] = type_result
+                    elif isinstance(type_result, str):
+                        output[processed_prop_name] = type_result
                     else:
-                        output[processed_prop_name] = str(result)
+                        output[processed_prop_name] = str(type_result)
                 elif "enum" in value and value["enum"]:
                     output[processed_prop_name] = self.process_enum(value, processed_prop_name)
                 elif "properties" in value and value["properties"]:
@@ -533,7 +575,11 @@ class JSONishFormatter(BaseFormatter):
                             f"any {comment_part}" if comment_part else "any"
                         )
                     else:
-                        output[processed_prop_name] = str(value)
+                        # Empty schema {} means any valid JSON value
+                        if isinstance(value, dict) and not value:
+                            output[processed_prop_name] = "any"
+                        else:
+                            output[processed_prop_name] = str(value)
 
                 if (field_dependencies) and processed_prop_name not in self.pending_postfix:
                     comment = f" {self.comment_prefix}"
@@ -549,10 +595,14 @@ class JSONishFormatter(BaseFormatter):
         elif "oneOf" in schema and schema["oneOf"]:
             return self.process_oneof(schema)
         elif "type" in schema and schema["type"]:
-            result = self.process_types(schema)
-            if isinstance(result, dict):
-                return result
-            return str(result) if not isinstance(result, str) else result
+            schema_type_result: str | dict[str, Any] | list[Any] = self.process_types(schema)
+            if isinstance(schema_type_result, dict | list):
+                return schema_type_result
+            return (
+                str(schema_type_result)
+                if not isinstance(schema_type_result, str)
+                else schema_type_result
+            )
         elif "allOf" in schema and schema["allOf"]:
             return self.process_allof(schema)
         elif "enum" in schema and schema["enum"]:
@@ -611,78 +661,179 @@ class JSONishFormatter(BaseFormatter):
         self, obj: dict[str, Any] | list[Any] | Any, indent: int = 0, is_root: bool = False
     ) -> str:
         """
-        Custom serializer for JSONish format that handles __additional_properties__.
+        Serialize object to JSONish format using json.dumps with postprocessing.
 
         Args:
             obj: Object to serialize (dict, list, or primitive).
-            indent: Current indentation level.
-            is_root: True when serializing the top-level object (for root additionalProperties).
+            indent: Current indentation level (used for consistent spacing).
+            is_root: True when serializing the top-level object.
 
         Returns:
             Serialized JSONish string.
         """
-        if isinstance(obj, dict):
-            # Extract the reserved key if present
-            additional_props_comment: str = str(obj.get("__additional_properties__", ""))
-            if is_root and additional_props_comment:
-                rest = additional_props_comment.strip()
-                suffix = rest[2:].strip() if rest.startswith("//") else rest
-                additional_props_comment = f" // Root: {suffix}"
+        # Step 1: Use standard json.dumps with indentation
+        # Note: indent parameter is converted to match json.dumps expected behavior
+        json_output = json.dumps(obj, indent=2, ensure_ascii=False)
 
-            # Build the dict content (excluding the reserved key)
-            parts = []
-            for k, v in obj.items():
-                if k == "__additional_properties__":
-                    continue
-                # Recursively serialize the value
-                serialized_value = self._jsonish_dump(v, indent + 1, is_root=False)
-                # For multi-line values, indent properly
-                if "\n" in serialized_value:
-                    parts.append(f"{k}: {serialized_value}")
-                else:
-                    parts.append(f"{k}: {serialized_value}")
+        # Step 2: Process __additional_properties__ and convert to comments
+        json_output = self._process_additional_properties(json_output, is_root=is_root)
 
-            if not parts:
-                # Empty dict
-                if additional_props_comment:
-                    return "{" + additional_props_comment + "\n" + " " * indent + "}"
-                return "{}"
+        # Step 3: Remove quotes from keys and string values (JSONish style)
+        json_output = self._remove_quotes(json_output)
 
-            # Build the result
-            indent_str = " " * (indent + 1)
-            content = (",\n" + indent_str).join(parts)
-            result = "{\n" + indent_str + content + "\n" + " " * indent + "}"
+        # Step 4: Apply final spacing normalization
+        json_output = self._normalize_spacing(json_output)
 
-            # Add the comment before the closing brace if present
-            if additional_props_comment:
-                # Insert comment before the last closing brace
-                lines = result.rsplit("\n", 1)
-                if len(lines) == 2:
-                    result = lines[0] + additional_props_comment + "\n" + lines[1]
+        return json_output
 
-            return result
-        elif isinstance(obj, list):
-            # Handle list serialization
-            if not obj:
-                return "[]"
-            serialized_items = [self._jsonish_dump(item, indent + 1) for item in obj]
-            if any("\n" in item for item in serialized_items):
-                # Multi-line items
-                indent_str = " " * (indent + 1)
-                content = (",\n" + indent_str).join(serialized_items)
-                return "[\n" + indent_str + content + "\n" + " " * indent + "]"
+    def _remove_quotes(self, json_string: str) -> str:
+        """
+        Remove quotes from keys and string values in JSONish format.
+
+        Args:
+            json_string: JSON string with quotes.
+
+        Returns:
+            JSONish string without quotes.
+        """
+        import re
+
+        lines = json_string.split("\n")
+        result_lines = []
+
+        for line in lines:
+            # Skip lines that are only whitespace or braces
+            stripped = line.strip()
+            if stripped in ["{", "}", "[", "]", ""]:
+                result_lines.append(line)
+                continue
+
+            # Extract leading whitespace
+            leading_space = len(line) - len(line.lstrip())
+            content = line.strip()
+
+            # Check if line has a comment (preserve quotes in comments)
+            comment_pos = content.find("//")
+            if comment_pos != -1:
+                main_content = content[:comment_pos]
+                comment_content = content[comment_pos:]
             else:
-                # Single-line items
-                return "[" + ", ".join(serialized_items) + "]"
-        elif isinstance(obj, str):
-            # Don't add quotes (JSONish style)
-            return obj
-        elif obj is None:
-            return "null"
-        elif isinstance(obj, bool):
-            return "true" if obj else "false"
-        else:
-            return str(obj)
+                main_content = content
+                comment_content = ""
+
+            # Remove quotes from keys: "key": -> key:
+            # Pattern: "text": (with optional whitespace)
+            main_content = re.sub(r'"([^"]+)"(\s*:\s*)', r"\1\2", main_content)
+
+            # Remove quotes from string values
+            # After removing key quotes, remaining quotes are on values
+            main_content = main_content.replace('"', "")
+
+            # Reconstruct line
+            processed = " " * leading_space + main_content + comment_content
+            result_lines.append(processed)
+
+        return "\n".join(result_lines)
+
+    def _process_additional_properties(self, json_string: str, is_root: bool = False) -> str:
+        """
+        Convert __additional_properties__ to inline comments.
+
+        Args:
+            json_string: JSON string potentially containing __additional_properties__.
+            is_root: True when processing the top-level object.
+
+        Returns:
+            JSON string with __additional_properties__ converted to comments.
+        """
+        import re
+
+        lines = json_string.split("\n")
+        result_lines = []
+        i = 0
+        root_comment_used = False
+
+        while i < len(lines):
+            line = lines[i]
+
+            # Check if line contains __additional_properties__ key
+            if "__additional_properties__" in line:
+                # Extract the value
+                # Pattern: "key": "value" or "key": "value",
+                match = re.search(r'"__additional_properties__"\s*:\s*"([^"]*)"', line)
+                if match:
+                    comment_value = match.group(1)
+
+                    # Format comment based on is_root flag
+                    if is_root and not root_comment_used:
+                        # Extract content after // if present
+                        rest = comment_value.strip()
+                        if rest.startswith("//"):
+                            suffix = rest[2:].strip()
+                        else:
+                            suffix = rest
+                        comment = f" // Root: {suffix}"
+                        root_comment_used = True
+                    else:
+                        comment = f" {comment_value}"
+
+                    # Find the next closing brace and add comment before it
+                    # Skip current line (don't add it to result)
+                    j = i + 1
+                    while j < len(lines):
+                        if "}" in lines[j]:
+                            # Add lines between __additional_properties__ and closing brace
+                            for k in range(i + 1, j):
+                                result_lines.append(lines[k])
+
+                            # Add comment before closing brace
+                            brace_line = lines[j]
+                            stripped_brace = brace_line.strip()
+                            if stripped_brace in ["}", "},"]:
+                                # Insert comment on its own line before brace
+                                indent = len(brace_line) - len(brace_line.lstrip())
+                                result_lines.append(" " * indent + comment.strip())
+                            result_lines.append(lines[j])
+                            i = j
+                            break
+                        j += 1
+                else:
+                    # Pattern not matched, keep line as is
+                    result_lines.append(line)
+            else:
+                result_lines.append(line)
+
+            i += 1
+
+        return "\n".join(result_lines)
+
+    def _normalize_spacing(self, json_string: str) -> str:
+        """
+        Apply final spacing normalization.
+
+        Args:
+            json_string: JSONish string.
+
+        Returns:
+            Normalized JSONish string with single spaces.
+        """
+        # Replace double spaces with single spaces, but preserve leading indentation
+        lines = json_string.split("\n")
+        result_lines = []
+
+        for line in lines:
+            # Extract leading whitespace
+            leading_space = len(line) - len(line.lstrip())
+            content = line.lstrip()
+
+            # Replace multiple spaces with single space in content
+            while "  " in content:
+                content = content.replace("  ", " ")
+
+            # Reconstruct line with original indentation
+            result_lines.append(" " * leading_space + content)
+
+        return "\n".join(result_lines)
 
     def _apply_pending_postfix(self, output_string: str) -> str:
         """

@@ -350,7 +350,17 @@ class YAMLFormatter(BaseFormatter):
         """
         Add metadata comments to a field representation (JSONish parity:
         title, description, id, $comment, default, example/examples).
+        Always appends additionalProperties when present (even without include_metadata).
         """
+        # Always show additionalProperties when present (e.g. "additional: string")
+        if isinstance(value, dict) and value.get("additionalProperties") is not None:
+            additional_comment = self.process_additional_properties(value)
+            if additional_comment:
+                representation = (
+                    f"{representation}{additional_comment}"
+                    if representation
+                    else additional_comment.strip()
+                )
         if not self.include_metadata:
             return representation
 
@@ -381,10 +391,50 @@ class YAMLFormatter(BaseFormatter):
     def process_properties(self, properties: dict[str, Any]) -> dict[str, Any]:
         """
         Process properties and append per-field (DEPENDS ON: ...) when present (JSONish parity).
+        For object properties with complex additionalProperties and no fixed properties,
+        emit a dict with <key> placeholder.
         """
-        processed_properties = {}
+        self._nested_placeholder_count = 0
+        processed_properties: dict[str, Any] = {}
         for prop_name, value in properties.items():
             formatted_name = self.format_field_name(prop_name)
+            if isinstance(value, dict) and value.get("type") == "object":
+                additional_props_raw = value.get("additionalProperties")
+                is_object_with_additional = (
+                    isinstance(additional_props_raw, dict)
+                    and additional_props_raw.get("type") == "object"
+                    and "additionalProperties" in additional_props_raw
+                )
+                is_complex = (
+                    isinstance(additional_props_raw, dict)
+                    and additional_props_raw
+                    and (
+                        "properties" in additional_props_raw
+                        or "anyOf" in additional_props_raw
+                        or "oneOf" in additional_props_raw
+                        or "allOf" in additional_props_raw
+                        or is_object_with_additional
+                    )
+                )
+                if (
+                    is_complex
+                    and isinstance(additional_props_raw, dict)
+                    and not (value.get("properties"))
+                ):
+                    additional_props = additional_props_raw
+                    if "properties" in additional_props and additional_props["properties"]:
+                        inner_required = set(additional_props.get("required", []))
+                        inner = {}
+                        for pname, pdef in additional_props["properties"].items():
+                            fname = f"{pname}*" if pname in inner_required else pname
+                            inner[fname] = self.process_property(pdef)
+                        processed_properties[formatted_name] = {"<key>": inner}
+                    else:
+                        processed_properties[formatted_name] = {
+                            "<key>": self.process_property(additional_props)
+                        }
+                    self._nested_placeholder_count += 1
+                    continue
             prop_str = self.process_property(value)
             dep = self._get_fields_dependencies(self.schema, prop_name)
             if dep and self.include_metadata:
@@ -428,13 +478,36 @@ class YAMLFormatter(BaseFormatter):
             return ""
         return f"{self.comment_prefix} Fields marked with * are required\n"
 
-    def process_additional_properties(self, schema: dict[str, Any]) -> str:
+    def process_additional_properties(
+        self, schema: dict[str, Any], show_structure: bool = True
+    ) -> str:
         """Emit additionalProperties with # prefix for YAML (JSONish semantics)."""
         additional_props = schema.get("additionalProperties")
         if additional_props is False:
             return f" {self.comment_prefix} no additional properties"
         if isinstance(additional_props, dict) and additional_props:
-            return f" {self.comment_prefix} additional: {self.process_type_value(additional_props)}"
+            if not show_structure:
+                return f" {self.comment_prefix} any properties allowed"
+            type_str = self.process_type_value(additional_props)
+            required = additional_props.get("required", [])
+            props = additional_props.get("properties", {})
+            if isinstance(props, dict) and props:
+                prop_details = []
+                for prop_name, prop_def in props.items():
+                    if isinstance(prop_def, dict):
+                        prop_type = self.process_type_value(prop_def)
+                    else:
+                        prop_type = str(prop_def)
+                    if prop_name in required:
+                        prop_details.append(f"{prop_name}* (required): {prop_type}")
+                    else:
+                        prop_details.append(f"{prop_name}: {prop_type}")
+                details = ", ".join(prop_details)
+                return f" {self.comment_prefix} additional: {type_str} with {details}"
+            if required:
+                req_str = ", ".join(required)
+                return f" {self.comment_prefix} additional: {type_str} with required {req_str}"
+            return f" {self.comment_prefix} additional: {type_str}"
         return ""
 
     def dict_to_string(self, value: Any, indent: int = 1) -> str:
@@ -525,11 +598,17 @@ class YAMLFormatter(BaseFormatter):
             # Use cached processed data for main content
             main_parts.append(self._dump_yaml(self._processed_data))
 
-            # Add additionalProperties comment if present and metadata is enabled
-            if self.include_metadata:
+            # Add additionalProperties comment (short if structure already in cached data)
+            if "<key>" in self._processed_data:
+                additional_props_comment = self.process_additional_properties(
+                    self.schema, show_structure=False
+                )
+            elif self.include_metadata:
                 additional_props_comment = self.process_additional_properties(self.schema)
-                if additional_props_comment:
-                    main_parts.append(additional_props_comment)
+            else:
+                additional_props_comment = ""
+            if additional_props_comment:
+                main_parts.append(additional_props_comment)
 
             # Combine nested sections with main content
             if all_sections:
@@ -540,6 +619,50 @@ class YAMLFormatter(BaseFormatter):
 
         # Second branch: no properties - handle schema-level-only cases
         if not self.properties:
+            # Check for complex additionalProperties in empty object schemas
+            if self.schema.get("type") == "object":
+                additional_props = self.schema.get("additionalProperties")
+                is_object_with_additional = False
+                if isinstance(additional_props, dict):
+                    is_object_with_additional = (
+                        additional_props.get("type") == "object"
+                        and "additionalProperties" in additional_props
+                    )
+                is_complex = (
+                    isinstance(additional_props, dict)
+                    and additional_props
+                    and (
+                        "properties" in additional_props
+                        or "anyOf" in additional_props
+                        or "oneOf" in additional_props
+                        or "allOf" in additional_props
+                        or is_object_with_additional
+                    )
+                )
+
+                if is_complex and isinstance(additional_props, dict):
+                    # Build nested structure for placeholder key
+                    output_dict: dict[str, Any]
+                    if "properties" in additional_props and additional_props["properties"]:
+                        inner_required = set(additional_props.get("required", []))
+                        inner: dict[str, Any] = {}
+                        for prop_name, prop_def in additional_props["properties"].items():
+                            formatted_name = (
+                                f"{prop_name}*" if prop_name in inner_required else prop_name
+                            )
+                            inner[formatted_name] = self.process_property(prop_def)
+                        output_dict = {"<key>": inner}
+                    else:
+                        output_dict = {"<key>": self.process_property(additional_props)}
+
+                    additional_comment = self.process_additional_properties(
+                        self.schema, show_structure=False
+                    )
+                    result = self._dump_yaml(output_dict)
+                    if additional_comment:
+                        result += f"\n{additional_comment}"
+                    return result
+
             # Handle schema-level features even when there are no properties
             schema_level_features = ""
 
@@ -566,17 +689,16 @@ class YAMLFormatter(BaseFormatter):
             # Handle schema with type but no properties
             if "type" in self.schema:
                 type_content = self.process_type_value(self.schema)
-                # For object type with no properties, return {} instead of "object"
-                if type_content == "object" and not schema_level_features:
+                # For object type with no properties, return {} instead of "object"/"dict"
+                if type_content in ("object", "dict") and not schema_level_features:
                     return "{}"
-                # Add schema-level features as comments if present
-                if schema_level_features and self.include_metadata:
+                # Add schema-level features as comments (e.g. additionalProperties)
+                if schema_level_features:
                     return (
                         f"# Schema-level constraints: {schema_level_features.strip()}\n"
                         f"{type_content}"
                     )
-                else:
-                    return type_content
+                return type_content
             elif "oneOf" in self.schema:
                 oneof_content = self.process_oneof(self.schema)
                 if schema_level_features and self.include_metadata:
@@ -659,14 +781,53 @@ class YAMLFormatter(BaseFormatter):
         # Process properties and cache the result
         processed_properties = self.process_properties(self.properties)
 
-        # Dump processed properties to YAML
-        main_parts.append(self._dump_yaml(processed_properties))
+        # Check for complex additionalProperties and add placeholder key if needed
+        additional_props = self.schema.get("additionalProperties")
+        is_object_with_additional = False
+        if isinstance(additional_props, dict):
+            is_object_with_additional = (
+                additional_props.get("type") == "object"
+                and "additionalProperties" in additional_props
+            )
+        is_complex_additional = (
+            isinstance(additional_props, dict)
+            and additional_props
+            and (
+                "properties" in additional_props
+                or "anyOf" in additional_props
+                or "oneOf" in additional_props
+                or "allOf" in additional_props
+                or is_object_with_additional
+            )
+        )
+        if is_complex_additional and isinstance(additional_props, dict):
+            if "properties" in additional_props and additional_props["properties"]:
+                inner_required = set(additional_props.get("required", []))
+                inner = {}
+                for prop_name, prop_def in additional_props["properties"].items():
+                    formatted_name = f"{prop_name}*" if prop_name in inner_required else prop_name
+                    inner[formatted_name] = self.process_property(prop_def)
+                processed_properties["<key>"] = inner
+            else:
+                processed_properties["<key>"] = self.process_property(additional_props)
 
-        # Add additionalProperties comment if present and metadata is enabled
-        if self.include_metadata:
+        # Dump processed properties to YAML
+        main_content = self._dump_yaml(processed_properties)
+        if getattr(self, "_nested_placeholder_count", 0) > 0:
+            main_content += "\n# any properties allowed"
+        main_parts.append(main_content)
+
+        # Add additionalProperties comment: for complex use short "any properties allowed"
+        if is_complex_additional:
+            additional_props_comment = self.process_additional_properties(
+                self.schema, show_structure=False
+            )
+        elif self.include_metadata:
             additional_props_comment = self.process_additional_properties(self.schema)
-            if additional_props_comment:
-                main_parts.append(additional_props_comment)
+        else:
+            additional_props_comment = ""
+        if additional_props_comment:
+            main_parts.append(additional_props_comment)
 
         # Set _processed_data for future calls (caching)
         self._processed_data = processed_properties

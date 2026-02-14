@@ -644,6 +644,136 @@ def test_jsonish_formatter_with_additional_props_false():
     assert "no additional properties" in result or "//no additional properties" in result
 
 
+def test_jsonish_formatter_array_of_objects_not_duplicated():
+    """Regression: array items should render as JSONish, not Python str."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "product_name": {"type": "string"},
+                        "quantity": {"type": "integer"},
+                        "price": {"type": "number"},
+                    },
+                    "required": ["product_name", "quantity", "price"],
+                },
+            }
+        },
+        "required": ["items"],
+    }
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert result.count("items*:") == 1
+    assert "items*: [" in result
+    assert "{" in result
+    assert "[{'" not in result
+
+
+def test_jsonish_formatter_additional_props_with_object_schema():
+    """Regression: additionalProperties object should show structure details."""
+    schema = {
+        "type": "object",
+        "properties": {"result": {"type": "object"}},
+        "required": ["result"],
+        "additionalProperties": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+    }
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Root level has fixed properties, so it shows the comment-style additional properties
+    assert "additional:" in result
+    assert "value* (required): string" in result
+
+
+def test_jsonish_formatter_empty_schema_renders_as_any():
+    """Test that empty schema {} renders as 'any', not 'string'."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {}  # Empty schema
+        },
+    }
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert "value: any" in result
+
+
+def test_jsonish_formatter_object_with_complex_additional_props_shows_placeholder():
+    """Test that object with only complex additionalProperties shows placeholder key."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "result": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {"value": {}},
+                    "required": ["value"],
+                },
+            }
+        },
+    }
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Should show placeholder key with structure
+    assert "<key>" in result
+    assert "value*: any" in result
+    assert "any properties allowed" in result
+
+
+def test_jsonish_formatter_simple_additional_props_still_work():
+    """Test that simple additionalProperties still render as comments."""
+    schema = {
+        "type": "object",
+        "properties": {"config": {"type": "object", "additionalProperties": {"type": "string"}}},
+    }
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Simple additionalProperties should show as comment
+    assert "additional: string" in result
+
+
+def test_jsonish_formatter_additional_props_false_still_works():
+    """Test that additionalProperties: false still works correctly."""
+    schema = {"type": "object", "additionalProperties": False}
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Should show "no additional properties" comment
+    assert "no additional properties" in result
+
+
+def test_jsonish_formatter_root_additional_props_prefix_only_once():
+    """Regression: root prefix should only apply to the first occurrence."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "config": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "additionalProperties": False,
+            }
+        },
+        "required": ["config"],
+        "additionalProperties": False,
+    }
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert result.count("Root:") <= 1
+
+
 # ============================================================================
 # Datetime and Special Type Tests
 # ============================================================================

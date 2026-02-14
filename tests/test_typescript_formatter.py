@@ -799,3 +799,115 @@ def test_typescript_consistent_asterisk_usage():
     # Optional field should not have asterisk
     assert "optional_field:" in result
     assert "optional_field*:" not in result
+
+
+# ============================================================================
+# Empty schema, additionalProperties, array parity with JSONish
+# ============================================================================
+
+
+def test_typescript_formatter_empty_schema_renders_as_any():
+    """Test that empty schema {} renders as 'any' type."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {}  # Empty schema
+        },
+    }
+    formatter = TypeScriptFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert "value: any" in result
+
+
+def test_typescript_formatter_object_with_complex_additional_props_shows_placeholder():
+    """Test that object with only complex additionalProperties shows placeholder key."""
+    # Root has no properties and complex additionalProperties -> Branch 2 emits placeholder
+    schema = {
+        "type": "object",
+        "additionalProperties": {
+            "type": "object",
+            "properties": {"value": {}},
+            "required": ["value"],
+        },
+    }
+    formatter = TypeScriptFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+
+    # Should show placeholder field with structure
+    assert "<key>" in result
+    assert "any properties allowed" in result
+
+
+def test_typescript_formatter_additional_props_with_object_schema():
+    """Test that additionalProperties with object schema shows structure details in comment."""
+    schema = {
+        "type": "object",
+        "properties": {"result": {"type": "object"}},
+        "required": ["result"],
+        "additionalProperties": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+    }
+    formatter = TypeScriptFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+
+    # With placeholder we show "any properties allowed"; otherwise "additional: ..."
+    assert "additional:" in result or "any properties allowed" in result
+    assert "value" in result and "string" in result
+
+
+def test_typescript_formatter_simple_additional_props_still_work():
+    """Test that simple additionalProperties (type only) still render as comments."""
+    # Root-level simple additionalProperties so the comment is emitted on the main interface
+    schema = {
+        "type": "object",
+        "properties": {"config": {"type": "object"}},
+        "additionalProperties": {"type": "string"},
+    }
+    formatter = TypeScriptFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+
+    assert "additional: string" in result
+
+
+def test_typescript_formatter_additional_props_false_still_works():
+    """Test that additionalProperties: false still shows 'no additional properties'."""
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+    }
+    formatter = TypeScriptFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+
+    assert "no additional properties" in result
+
+
+def test_typescript_formatter_array_of_objects_not_duplicated():
+    """Verify array items render correctly as TypeScript Array<{{...}}> syntax."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "product_name": {"type": "string"},
+                        "quantity": {"type": "integer"},
+                        "price": {"type": "number"},
+                    },
+                    "required": ["product_name", "quantity", "price"],
+                },
+            }
+        },
+        "required": ["items"],
+    }
+    formatter = TypeScriptFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert result.count("items*:") == 1
+    assert "Array<" in result
+    assert "product_name" in result and "quantity" in result and "price" in result
