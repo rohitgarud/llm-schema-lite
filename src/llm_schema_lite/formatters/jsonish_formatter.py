@@ -368,6 +368,8 @@ class JSONishFormatter(BaseFormatter):
         # Format based on type: numbers/bools unquoted
         if isinstance(const, bool):
             formatted = "true" if const else "false"
+        elif isinstance(const, int | float):
+            formatted = str(const)
         else:
             formatted = str(const)
 

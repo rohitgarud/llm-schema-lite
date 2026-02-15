@@ -173,6 +173,8 @@ class YAMLFormatter(BaseFormatter):
         # Format based on type: strings quoted, numbers/bools unquoted (YAML style)
         if isinstance(const, bool):
             return "true" if const else "false"
+        elif isinstance(const, int | float):
+            return const  # type: ignore
         else:
             return str(const)
 

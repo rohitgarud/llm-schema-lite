@@ -204,6 +204,8 @@ class TypeScriptFormatter(BaseFormatter):
         const = const_value.get("const")
         if isinstance(const, bool):
             return "true" if const else "false"
+        elif isinstance(const, int | float):
+            return str(const)
         else:
             return str(const)
 
