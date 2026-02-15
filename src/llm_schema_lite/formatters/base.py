@@ -583,6 +583,26 @@ class BaseFormatter(ABC):
         enum_values = ", ".join(str(e) for e in enum_list)
         return f"{type_str} //oneOf: {enum_values}"
 
+    def process_const(self, const_value: dict[str, Any]) -> str:
+        """
+        Process a const field (single literal value).
+
+        Args:
+            const_value: Dictionary containing const definition.
+
+        Returns:
+            Formatted const representation.
+        """
+        const = const_value.get("const")
+
+        # Format based on type - subclasses can override for formatter-specific formatting
+        if isinstance(const, bool):
+            # Return as lowercase string for base formatter
+            return "true" if const else "false"
+        else:
+            # int, float, or other
+            return str(const)
+
     def process_type_value(self, type_value: dict[str, Any]) -> str:
         """
         Process a type field.
@@ -892,6 +912,8 @@ class BaseFormatter(ABC):
 
         if "$ref" in _property:
             prop_str = self.process_ref(_property)
+        elif "const" in _property:
+            prop_str = self.process_const(_property)
         elif "enum" in _property:
             prop_str = self.process_enum(_property)
         elif "anyOf" in _property:

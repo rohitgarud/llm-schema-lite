@@ -158,6 +158,24 @@ class YAMLFormatter(BaseFormatter):
             return str(enum_list[0])
         return f"OPTIONS: {'| '.join(str(v) for v in enum_list)}"
 
+    def process_const(self, const_value: dict[str, Any]) -> str:
+        """
+        Process a const field (single literal value) for YAML.
+
+        Args:
+            const_value: Dictionary containing const definition.
+
+        Returns:
+            Formatted const representation.
+        """
+        const = const_value.get("const")
+
+        # Format based on type: strings quoted, numbers/bools unquoted (YAML style)
+        if isinstance(const, bool):
+            return "true" if const else "false"
+        else:
+            return str(const)
+
     def process_oneof(self, oneof: dict[str, Any]) -> str:
         """
         Process oneOf with ONE OF: ... OR ... (JSONish parity).

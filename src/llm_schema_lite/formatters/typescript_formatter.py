@@ -182,9 +182,30 @@ class TypeScriptFormatter(BaseFormatter):
         if not enum_list:
             return "string"
 
-        # Create TypeScript union of string literals
-        enum_literals = [f'"{val}"' for val in enum_list]
+        # Format based on value type: don't quote numbers/bools
+        enum_literals = []
+        for val in enum_list:
+            if isinstance(val, bool):
+                enum_literals.append("true" if val else "false")
+            else:  # int, float
+                enum_literals.append(str(val))
         return " | ".join(enum_literals)
+
+    def process_const(self, const_value: dict[str, Any]) -> str:
+        """
+        Process a const field (single literal value) for TypeScript.
+
+        Args:
+            const_value: Dictionary containing const definition.
+
+        Returns:
+            Formatted const representation as TypeScript literal.
+        """
+        const = const_value.get("const")
+        if isinstance(const, bool):
+            return "true" if const else "false"
+        else:
+            return str(const)
 
     def process_type_value(self, type_value: dict[str, Any]) -> str:
         """

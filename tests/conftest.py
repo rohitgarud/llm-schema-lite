@@ -221,6 +221,40 @@ class ConstModel(BaseModel):
     version: Literal["v1"] = "v1"
 
 
+# Additional literal type models
+class IntLiterals(BaseModel):
+    """Model with integer literals."""
+
+    priority: Literal[1, 2, 3, 4, 5]
+
+
+class BoolLiterals(BaseModel):
+    """Model with boolean literals."""
+
+    flag: Literal[True, False]
+
+
+class MixedTypeLiterals(BaseModel):
+    """Model with mixed type literals (string, int, bool)."""
+
+    status: Literal["active", "inactive"]
+    level: Literal[1, 2, 3]
+    enabled: Literal[True, False]
+
+
+class SingleConstInt(BaseModel):
+    """Model with single integer const."""
+
+    version: Literal[1]
+
+
+class IssueClassification(BaseModel):
+    """Model for issue classification with multiple literal fields."""
+
+    category: Literal["bug", "feature", "question"]
+    priority: Literal[1, 2, 3, 4, 5]
+
+
 # Union types
 class UnionTypes(BaseModel):
     """Model for testing union types."""
@@ -1109,6 +1143,36 @@ def literal_only_model():
 def const_model():
     """Fixture for ConstModel model."""
     return ConstModel
+
+
+@pytest.fixture
+def int_literals_model():
+    """Fixture for IntLiterals model."""
+    return IntLiterals
+
+
+@pytest.fixture
+def bool_literals_model():
+    """Fixture for BoolLiterals model."""
+    return BoolLiterals
+
+
+@pytest.fixture
+def mixed_type_literals_model():
+    """Fixture for MixedTypeLiterals model."""
+    return MixedTypeLiterals
+
+
+@pytest.fixture
+def single_const_int_model():
+    """Fixture for SingleConstInt model."""
+    return SingleConstInt
+
+
+@pytest.fixture
+def issue_classification_model():
+    """Fixture for IssueClassification model."""
+    return IssueClassification
 
 
 @pytest.fixture

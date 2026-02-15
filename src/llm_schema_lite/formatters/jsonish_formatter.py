@@ -328,10 +328,50 @@ class JSONishFormatter(BaseFormatter):
         enum_list = value.get("enum", [])
         if description or default_value:
             comment = f" {self.comment_prefix}"
+
+        # Format enum values: strings with markers for quotes, numbers/bools unquoted
+        def format_enum_value(e: Any) -> str:
+            if isinstance(e, bool):
+                return "true" if e else "false"
+            else:
+                return str(e)
+
         if len(enum_list) == 1:
-            return f"{enum_list[0]}{comment}{title}{description}{default_value}{example}"
+            formatted_value = format_enum_value(enum_list[0])
+            return f"{formatted_value}{comment}{title}{description}{default_value}{example}"
         else:
-            return f"OPTIONS: {'| '.join(enum_list)}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+            formatted_values = "| ".join(format_enum_value(e) for e in enum_list)
+            return (
+                f"OPTIONS: {formatted_values}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+            )
+
+    def process_const(self, value: dict[str, Any], key: str | None = None) -> str:
+        """
+        Process a const field (single literal value).
+
+        Args:
+            value: Dictionary containing const definition.
+            key: Optional property key for postfix tracking.
+
+        Returns:
+            Formatted const representation.
+        """
+        comment = ""
+        title, description, default_value, example = self._get_title_description_default_value(
+            value
+        )
+        const = value.get("const")
+
+        if description or default_value or title:
+            comment = f" {self.comment_prefix}"
+
+        # Format based on type: numbers/bools unquoted
+        if isinstance(const, bool):
+            formatted = "true" if const else "false"
+        else:
+            formatted = str(const)
+
+        return f"{formatted}{comment}{title}{description}{default_value}{example}"
 
     def _is_root_schema(self, value: dict[str, Any]) -> bool:
         """Return True if value is the root schema (skip duplicating title/description)."""
@@ -548,6 +588,12 @@ class JSONishFormatter(BaseFormatter):
                 elif "allOf" in value and value["allOf"]:
                     result = self.process_allof(value, processed_prop_name)
                     output[processed_prop_name] = result
+                elif "const" in value:
+                    # Priority: const before type/enum (single literal value)
+                    output[processed_prop_name] = self.process_const(value, processed_prop_name)
+                elif "enum" in value and value["enum"]:
+                    # Priority: enum before type (multiple literal values)
+                    output[processed_prop_name] = self.process_enum(value, processed_prop_name)
                 elif "type" in value:
                     type_result: str | dict[str, Any] | list[Any] = self.process_types(
                         value, processed_prop_name
@@ -558,8 +604,6 @@ class JSONishFormatter(BaseFormatter):
                         output[processed_prop_name] = type_result
                     else:
                         output[processed_prop_name] = str(type_result)
-                elif "enum" in value and value["enum"]:
-                    output[processed_prop_name] = self.process_enum(value, processed_prop_name)
                 elif "properties" in value and value["properties"]:
                     nested = self._process_schema_recursive(value)
                     output[processed_prop_name] = nested
@@ -681,7 +725,10 @@ class JSONishFormatter(BaseFormatter):
         # Step 3: Remove quotes from keys and string values (JSONish style)
         json_output = self._remove_quotes(json_output)
 
-        # Step 4: Apply final spacing normalization
+        # # Step 4: Replace literal string markers with actual quotes
+        # json_output = json_output.replace("«", '"').replace("»", '"')
+
+        # Step 5: Apply final spacing normalization
         json_output = self._normalize_spacing(json_output)
 
         return json_output
@@ -945,7 +992,7 @@ class JSONishFormatter(BaseFormatter):
         output = self._process_schema_recursive(self.schema)
         output_string = ""
         if output and isinstance(output, dict):
-            output_string = self._jsonish_dump(output, indent=0, is_root=True).replace('"', "")
+            output_string = self._jsonish_dump(output, indent=0, is_root=True)
         else:
             output_string = str(output)
         if self.schema.get("type") == "array":

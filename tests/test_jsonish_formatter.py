@@ -318,9 +318,8 @@ def test_jsonish_formatter_with_literal_single():
 
     # Should contain api_version field
     assert "api_version*:" in result
-    # Single literals are rendered as their type (string) in Pydantic schema
-    # The const/enum constraint should be in the schema but may not show in output
-    assert "string" in result or "v1" in result
+    # Single literal should be rendered as the const value
+    assert "v1" in result
 
 
 def test_jsonish_formatter_with_literal_union():
@@ -333,10 +332,116 @@ def test_jsonish_formatter_with_literal_union():
 
     # Should contain status field
     assert "status*:" in result
-    # Should contain all literal values
+    # Should use OPTIONS format for multiple literals
+    assert "OPTIONS:" in result
+    # Should contain all literal values (quoted strings)
     assert "draft" in result
     assert "published" in result
     assert "archived" in result
+
+
+def test_jsonish_formatter_with_int_literals():
+    """Test JSONish formatter with integer literals."""
+    from tests.conftest import IntLiterals
+
+    schema = IntLiterals.model_json_schema()
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Should contain priority field
+    assert "priority*:" in result
+    # Should use OPTIONS format for multiple integer literals
+    assert "OPTIONS:" in result
+    # Should contain all integer values (unquoted)
+    assert "1" in result
+    assert "2" in result
+    assert "3" in result
+    assert "4" in result
+    assert "5" in result
+    # Verify unquoted format (no quotes around numbers)
+    assert "OPTIONS: 1| 2| 3| 4| 5" in result or "OPTIONS: 1 | 2 | 3 | 4 | 5" in result
+
+
+def test_jsonish_formatter_with_bool_literals():
+    """Test JSONish formatter with boolean literals."""
+    from tests.conftest import BoolLiterals
+
+    schema = BoolLiterals.model_json_schema()
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Should contain flag field
+    assert "flag*:" in result
+    # Should use OPTIONS format for boolean literals
+    assert "OPTIONS:" in result
+    # Should contain lowercase, unquoted boolean values
+    assert "true" in result
+    assert "false" in result
+
+
+def test_jsonish_formatter_with_mixed_type_literals():
+    """Test JSONish formatter with mixed type literals (string, int, bool)."""
+    from tests.conftest import MixedTypeLiterals
+
+    schema = MixedTypeLiterals.model_json_schema()
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Should contain all three fields
+    assert "status*:" in result
+    assert "level*:" in result
+    assert "enabled*:" in result
+
+    # String literals should be quoted
+    assert "active" in result
+    assert "inactive" in result
+
+    # Integer literals should be unquoted
+    assert "1" in result and "2" in result and "3" in result
+
+    # Boolean literals should be lowercase and unquoted
+    assert "true" in result
+    assert "false" in result
+
+
+def test_jsonish_formatter_with_single_const_int():
+    """Test JSONish formatter with single integer const."""
+    from tests.conftest import SingleConstInt
+
+    schema = SingleConstInt.model_json_schema()
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Should contain version field
+    assert "version*:" in result
+    # Single integer literal should be rendered as unquoted number
+    assert "version*: 1" in result
+
+
+def test_jsonish_formatter_with_issue_classification():
+    """Test JSONish formatter with IssueClassification model (integration test)."""
+    from tests.conftest import IssueClassification
+
+    schema = IssueClassification.model_json_schema()
+    formatter = JSONishFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    # Should contain both fields
+    assert "category*:" in result
+    assert "priority*:" in result
+
+    # String literals should be quoted with OPTIONS format
+    assert "OPTIONS:" in result
+    assert "bug" in result
+    assert "feature" in result
+    assert "question" in result
+
+    # Integer literals should be unquoted with OPTIONS format
+    assert "1" in result
+    assert "2" in result
+    assert "3" in result
+    assert "4" in result
+    assert "5" in result
 
 
 # ============================================================================

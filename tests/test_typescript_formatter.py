@@ -370,6 +370,8 @@ def test_typescript_literal_single():
 
     assert_required_optional_consistent(result, schema)
     assert "api_version*:" in result
+    # Single literal should be rendered as the literal value (quoted string)
+    assert "v1" in result
 
 
 def test_typescript_literal_union():
@@ -380,6 +382,100 @@ def test_typescript_literal_union():
 
     assert_required_optional_consistent(result, schema)
     assert "status*:" in result
+    # Should use pipe-separated union format for literals
+    assert "draft" in result
+    assert "published" in result
+    assert "archived" in result
+    assert "|" in result
+
+
+def test_typescript_int_literals():
+    """Test TypeScript formatter with integer literals."""
+    from tests.conftest import IntLiterals
+
+    schema = IntLiterals.model_json_schema()
+    formatter = TypeScriptFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    assert "priority*:" in result
+    # Should use pipe-separated union format with unquoted numbers
+    assert "1 | 2 | 3 | 4 | 5" in result
+
+
+def test_typescript_bool_literals():
+    """Test TypeScript formatter with boolean literals."""
+    from tests.conftest import BoolLiterals
+
+    schema = BoolLiterals.model_json_schema()
+    formatter = TypeScriptFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    assert "flag*:" in result
+    # Should use pipe-separated union with lowercase, unquoted booleans
+    assert "true | false" in result
+
+
+def test_typescript_mixed_type_literals():
+    """Test TypeScript formatter with mixed type literals (string, int, bool)."""
+    from tests.conftest import MixedTypeLiterals
+
+    schema = MixedTypeLiterals.model_json_schema()
+    formatter = TypeScriptFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    # Should contain all three fields
+    assert "status*:" in result
+    assert "level*:" in result
+    assert "enabled*:" in result
+
+    # String literals should be quoted
+    assert "active" in result
+    assert "inactive" in result
+
+    # Integer literals should be unquoted
+    assert "1 | 2 | 3" in result
+
+    # Boolean literals should be lowercase and unquoted
+    assert "true | false" in result
+
+
+def test_typescript_single_const_int():
+    """Test TypeScript formatter with single integer const."""
+    from tests.conftest import SingleConstInt
+
+    schema = SingleConstInt.model_json_schema()
+    formatter = TypeScriptFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    assert "version*:" in result
+    # Single integer literal should be rendered as unquoted number
+    assert "version*: 1" in result
+
+
+def test_typescript_issue_classification():
+    """Test TypeScript formatter with IssueClassification model (integration test)."""
+    from tests.conftest import IssueClassification
+
+    schema = IssueClassification.model_json_schema()
+    formatter = TypeScriptFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    # Should contain both fields
+    assert "category*:" in result
+    assert "priority*:" in result
+
+    # String literals should be quoted with pipe unions
+    assert "bug" in result
+    assert "feature" in result
+    assert "question" in result
+
+    # Integer literals should be unquoted with pipe unions
+    assert "1 | 2 | 3 | 4 | 5" in result
 
 
 # ============================================================================

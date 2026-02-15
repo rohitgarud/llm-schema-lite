@@ -330,6 +330,8 @@ def test_yaml_literal_single():
 
     assert_required_optional_consistent(result, schema)
     assert "api_version*:" in result
+    # Single literal should be rendered as the const value (quoted string)
+    assert "v1" in result
 
 
 def test_yaml_literal_union():
@@ -340,6 +342,120 @@ def test_yaml_literal_union():
 
     assert_required_optional_consistent(result, schema)
     assert "status*:" in result
+    # Should use OPTIONS format for multiple literals
+    assert "OPTIONS:" in result
+    # Should contain all literal values (YAML wraps entire OPTIONS string in quotes)
+    assert "draft" in result
+    assert "published" in result
+    assert "archived" in result
+
+
+def test_yaml_int_literals():
+    """Test YAML formatter with integer literals."""
+    from tests.conftest import IntLiterals
+
+    schema = IntLiterals.model_json_schema()
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    assert "priority*:" in result
+    # Should use OPTIONS format for multiple integer literals
+    assert "OPTIONS:" in result
+    # Should contain all integer values (unquoted)
+    assert "1" in result
+    assert "2" in result
+    assert "3" in result
+    assert "4" in result
+    assert "5" in result
+    # Verify unquoted format
+    assert "OPTIONS: 1| 2| 3| 4| 5" in result or "OPTIONS: 1 | 2 | 3 | 4 | 5" in result
+
+
+def test_yaml_bool_literals():
+    """Test YAML formatter with boolean literals."""
+    from tests.conftest import BoolLiterals
+
+    schema = BoolLiterals.model_json_schema()
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    assert "flag*:" in result
+    # Should use OPTIONS format for boolean literals
+    assert "OPTIONS:" in result
+    # YAML may serialize bools as True/False (Python) - verify presence
+    has_true = "true" in result.lower() or "True" in result
+    has_false = "false" in result.lower() or "False" in result
+    assert has_true and has_false
+
+
+def test_yaml_mixed_type_literals():
+    """Test YAML formatter with mixed type literals (string, int, bool)."""
+    from tests.conftest import MixedTypeLiterals
+
+    schema = MixedTypeLiterals.model_json_schema()
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    # Should contain all three fields
+    assert "status*:" in result
+    assert "level*:" in result
+    assert "enabled*:" in result
+
+    # String literals (YAML wraps entire OPTIONS string in quotes)
+    assert "active" in result
+    assert "inactive" in result
+
+    # Integer literals should be unquoted
+    assert "1" in result and "2" in result and "3" in result
+
+    # Boolean literals (YAML may use True/False)
+    has_true = "true" in result.lower() or "True" in result
+    has_false = "false" in result.lower() or "False" in result
+    assert has_true and has_false
+
+
+def test_yaml_single_const_int():
+    """Test YAML formatter with single integer const."""
+    from tests.conftest import SingleConstInt
+
+    schema = SingleConstInt.model_json_schema()
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    assert "version*:" in result
+    # Single integer literal (YAML may quote it)
+    assert "version*: 1" in result
+
+
+def test_yaml_issue_classification():
+    """Test YAML formatter with IssueClassification model (integration test)."""
+    from tests.conftest import IssueClassification
+
+    schema = IssueClassification.model_json_schema()
+    formatter = YAMLFormatter(schema, include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert_required_optional_consistent(result, schema)
+    # Should contain both fields
+    assert "category*:" in result
+    assert "priority*:" in result
+
+    # String literals with OPTIONS format (YAML wraps entire string)
+    assert "OPTIONS:" in result
+    assert "bug" in result
+    assert "feature" in result
+    assert "question" in result
+
+    # Integer literals with OPTIONS format
+    assert "1" in result
+    assert "2" in result
+    assert "3" in result
+    assert "4" in result
+    assert "5" in result
 
 
 # ============================================================================
