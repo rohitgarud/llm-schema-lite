@@ -13,6 +13,7 @@ except ImportError:
 from ..exceptions import ConversionError, ValidationError
 from ..parsers import YAMLParser
 from .base import BaseValidator
+from .enum_aliases import normalize_enum_aliases
 
 
 class YAMLValidator(BaseValidator):
@@ -116,11 +117,12 @@ class YAMLValidator(BaseValidator):
             )
         parsed = self.parse_data(data)
         json_schema = self._json_schema
+        normalized = normalize_enum_aliases(parsed, json_schema)
         try:
             Draft202012Validator.check_schema(json_schema)
             format_checker = FormatChecker()
             validator = Draft202012Validator(json_schema, format_checker=format_checker)
-            errors = list(validator.iter_errors(parsed))
+            errors = list(validator.iter_errors(normalized))
             if not errors:
                 return (True, None)
             error_messages = [self._format_validation_error(err) for err in errors]

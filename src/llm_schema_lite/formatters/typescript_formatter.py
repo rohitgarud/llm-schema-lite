@@ -177,6 +177,7 @@ class TypeScriptFormatter(BaseFormatter):
 
         Returns:
             Formatted enum representation as TypeScript union literals.
+            When x-enum-descriptions or x-enum-aliases exist, appends inline comment.
         """
         enum_list = enum_value.get("enum", [])
         if not enum_list:
@@ -187,9 +188,30 @@ class TypeScriptFormatter(BaseFormatter):
         for val in enum_list:
             if isinstance(val, bool):
                 enum_literals.append("true" if val else "false")
-            else:  # int, float
+            elif isinstance(val, str):
+                enum_literals.append(f'"{val}"')
+            else:
                 enum_literals.append(str(val))
-        return " | ".join(enum_literals)
+        type_str = " | ".join(enum_literals)
+        descs, alias_map = self._extract_enum_metadata(enum_value)
+        if not descs and not alias_map:
+            return type_str
+        # Inline comment: OPTIONS with descriptions and per-value lines
+        parts = ["OPTIONS with descriptions"]
+        for val in enum_list:
+            canonical = str(val) if not isinstance(val, bool) else ("true" if val else "false")
+            if canonical in descs and descs[canonical]:
+                part = f"{canonical}: {descs[canonical]}"
+                if canonical in alias_map and alias_map[canonical]:
+                    part += f" (aliases: {', '.join(alias_map[canonical])})"
+            elif canonical in alias_map and alias_map[canonical]:
+                part = f"{canonical} (aliases: {', '.join(alias_map[canonical])})"
+            else:
+                continue
+            parts.append(part)
+        if len(parts) > 1:
+            type_str += "  // " + "; ".join(parts)
+        return type_str
 
     def process_const(self, const_value: dict[str, Any]) -> str:
         """

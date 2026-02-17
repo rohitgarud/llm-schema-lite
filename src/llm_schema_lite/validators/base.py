@@ -10,6 +10,7 @@ except ImportError:
     BaseModel = None  # type: ignore[assignment, misc]
 
 from ..exceptions import UnsupportedModelError
+from ..schema_enrichment import enrich_schema_with_enum_metadata
 
 
 class BaseValidator(ABC):
@@ -39,7 +40,9 @@ class BaseValidator(ABC):
         schema = self._schema_input
 
         if BaseModel is not None and isinstance(schema, type) and issubclass(schema, BaseModel):
-            return schema.model_json_schema()
+            json_schema = schema.model_json_schema()
+            enrich_schema_with_enum_metadata(schema, json_schema)
+            return json_schema
         if isinstance(schema, dict):
             return schema
         if isinstance(schema, str):

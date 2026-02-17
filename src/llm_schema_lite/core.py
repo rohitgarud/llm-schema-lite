@@ -12,6 +12,7 @@ from .exceptions import ConversionError, UnsupportedModelError
 from .formatters import JSONishFormatter, TypeScriptFormatter, YAMLFormatter
 from .formatters.base import BaseFormatter
 from .parsers import BaseParser, JSONParser, YAMLParser
+from .schema_enrichment import enrich_schema_with_enum_metadata
 from .validators import JSONValidator, YAMLValidator
 
 
@@ -228,6 +229,7 @@ def simplify_schema(
     if BaseModel is not None and isinstance(model, type) and issubclass(model, BaseModel):
         try:
             original_schema = model.model_json_schema()
+            enrich_schema_with_enum_metadata(model, original_schema)
         except Exception as e:
             raise ConversionError(f"Failed to extract JSON schema from model: {e}") from e
     # Handle dict (already a JSON schema)

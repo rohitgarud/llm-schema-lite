@@ -150,13 +150,31 @@ class YAMLFormatter(BaseFormatter):
     def process_enum(self, enum_value: dict[str, Any]) -> str:
         """
         Process enum (JSONish parity): single value -> value; multiple -> OPTIONS: a | b | c.
+        When x-enum-descriptions or x-enum-aliases exist, include OPTIONS with descriptions.
         """
         enum_list = enum_value.get("enum", [])
         if not enum_list:
             return "string"
+        descs, alias_map = self._extract_enum_metadata(enum_value)
+        has_enum_metadata = bool(descs or alias_map)
         if len(enum_list) == 1:
             return str(enum_list[0])
-        return f"OPTIONS: {'| '.join(str(v) for v in enum_list)}"
+        main_line = f"OPTIONS: {'| '.join(str(v) for v in enum_list)}"
+        if not has_enum_metadata:
+            return main_line
+        lines = ["# OPTIONS with descriptions"]
+        for e in enum_list:
+            canonical = str(e) if not isinstance(e, bool) else ("true" if e else "false")
+            part = canonical
+            if canonical in descs and descs[canonical]:
+                part += f": {descs[canonical]}"
+                if canonical in alias_map and alias_map[canonical]:
+                    part += f" (aliases: {', '.join(alias_map[canonical])})"
+            elif canonical in alias_map and alias_map[canonical]:
+                part += f" (aliases: {', '.join(alias_map[canonical])})"
+            lines.append(f"# - {part}")
+        lines.append(main_line)
+        return "\n".join(lines)
 
     def process_const(self, const_value: dict[str, Any]) -> str:
         """

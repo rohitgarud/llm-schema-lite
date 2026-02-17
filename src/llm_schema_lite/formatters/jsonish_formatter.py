@@ -326,6 +326,8 @@ class JSONishFormatter(BaseFormatter):
             value
         )
         enum_list = value.get("enum", [])
+        descs, alias_map = self._extract_enum_metadata(value)
+        has_enum_metadata = bool(descs or alias_map)
         if description or default_value:
             comment = f" {self.comment_prefix}"
 
@@ -341,9 +343,27 @@ class JSONishFormatter(BaseFormatter):
             return f"{formatted_value}{comment}{title}{description}{default_value}{example}"
         else:
             formatted_values = "| ".join(format_enum_value(e) for e in enum_list)
-            return (
+            main_line = (
                 f"OPTIONS: {formatted_values}{comment}{title}{description}{default_value}{example}"  # noqa: E501
             )
+            if not has_enum_metadata:
+                return main_line
+            # OPTIONS with descriptions: build per-value comment lines
+            parts = []
+            for e in enum_list:
+                val_str = format_enum_value(e)
+                canonical = str(e) if not isinstance(e, bool) else ("true" if e else "false")
+                line = val_str
+                if canonical in descs and descs[canonical]:
+                    line += f" ({descs[canonical]}"
+                    if canonical in alias_map and alias_map[canonical]:
+                        line += f"; aliases: {', '.join(alias_map[canonical])}"
+                    line += ")"
+                elif canonical in alias_map and alias_map[canonical]:
+                    line += f" (aliases: {', '.join(alias_map[canonical])})"
+                parts.append(f"{line}")
+            desc_comment = f"{self.comment_prefix} OPTIONS with descriptions: {', '.join(parts)}"
+            return f"{desc_comment}\n{main_line}"
 
     def process_const(self, value: dict[str, Any], key: str | None = None) -> str:
         """
@@ -640,6 +660,8 @@ class JSONishFormatter(BaseFormatter):
             return self.process_anyof(schema)
         elif "oneOf" in schema and schema["oneOf"]:
             return self.process_oneof(schema)
+        elif "enum" in schema and schema["enum"]:
+            return self.process_enum(schema)
         elif "type" in schema and schema["type"]:
             schema_type_result: str | dict[str, Any] | list[Any] = self.process_types(schema)
             if isinstance(schema_type_result, dict | list):
@@ -651,8 +673,6 @@ class JSONishFormatter(BaseFormatter):
             )
         elif "allOf" in schema and schema["allOf"]:
             return self.process_allof(schema)
-        elif "enum" in schema and schema["enum"]:
-            return self.process_enum(schema)
         elif "$ref" in schema and schema["$ref"]:
             return self.process_ref(schema)
 

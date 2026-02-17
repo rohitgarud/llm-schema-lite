@@ -544,6 +544,27 @@ class BaseFormatter(ABC):
             if self._ref_expansion_path and self._ref_expansion_path[-1] == ref_key:
                 self._ref_expansion_path.pop()
 
+    def _extract_enum_metadata(
+        self, enum_value: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """
+        Extract x-enum-descriptions and x-enum-aliases from schema.
+
+        Args:
+            enum_value: Schema node that may contain enum and extension fields.
+
+        Returns:
+            Tuple of (descriptions, aliases). descriptions maps value -> str;
+            aliases maps canonical value -> list of alias strings.
+        """
+        descriptions = enum_value.get("x-enum-descriptions", {})
+        aliases = enum_value.get("x-enum-aliases", {})
+        if not isinstance(descriptions, dict):
+            descriptions = {}
+        if not isinstance(aliases, dict):
+            aliases = {}
+        return descriptions, aliases
+
     def process_enum(self, enum_value: dict[str, Any]) -> str:
         """
         Process an enum field.
