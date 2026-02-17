@@ -195,6 +195,59 @@ class IntEnumModel(BaseModel):
     priority: Priority
 
 
+# Enums with metadata (_descriptions, _aliases) for enhanced enum tests.
+# Assign _descriptions/_aliases after class body so they are not str-Enum-coerced to string.
+class PriorityWithMetadata(str, Enum):
+    """Issue priority levels."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+PriorityWithMetadata._descriptions = {
+    "LOW": "Non-urgent, can wait",
+    "MEDIUM": "Normal priority",
+    "HIGH": "Needs attention soon",
+    "CRITICAL": "Urgent, blocking issue",
+}
+PriorityWithMetadata._aliases = {
+    "CRITICAL": ["urgent", "blocker"],
+}
+
+
+class StatusWithDescriptionsOnly(str, Enum):
+    """Status with only descriptions."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+StatusWithDescriptionsOnly._descriptions = {
+    "ACTIVE": "Currently active",
+    "INACTIVE": "Currently inactive",
+}
+
+
+class CategoryWithAliasesOnly(str, Enum):
+    """Category with only aliases."""
+
+    BUG = "bug"
+    FEATURE = "feature"
+
+
+CategoryWithAliasesOnly._aliases = {
+    "BUG": ["issue", "error", "defect"],
+}
+
+
+class ModelWithPriorityMetadata(BaseModel):
+    """Model with enum that has descriptions and aliases."""
+
+    priority: PriorityWithMetadata
+
+
 # Literal types
 class LiteralSingle(BaseModel):
     """Model with single literal value."""

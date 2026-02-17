@@ -308,6 +308,36 @@ def test_jsonish_formatter_with_int_enum():
     assert "1" in result or "LOW" in result
 
 
+def test_jsonish_formatter_enum_with_descriptions_and_aliases():
+    """Test JSONish formatter shows OPTIONS with descriptions and aliases."""
+    from llm_schema_lite import simplify_schema
+    from tests.conftest import ModelWithPriorityMetadata
+
+    result = simplify_schema(ModelWithPriorityMetadata, format_type="jsonish").to_string()
+    assert "OPTIONS with descriptions" in result
+    assert "Non-urgent, can wait" in result
+    assert "Urgent, blocking issue" in result
+    assert "aliases:" in result
+    assert "urgent" in result
+    assert "blocker" in result
+    assert "OPTIONS: low | medium | high | critical" in result or "priority*:" in result
+
+
+def test_jsonish_formatter_enum_without_metadata_unchanged():
+    """Test enum without _descriptions/_aliases has no description comment."""
+    from pydantic import BaseModel
+
+    from llm_schema_lite import simplify_schema
+    from tests.conftest import Role
+
+    class M(BaseModel):
+        role: Role
+
+    result = simplify_schema(M, format_type="jsonish").to_string()
+    assert "OPTIONS:" in result
+    assert "OPTIONS with descriptions" not in result
+
+
 def test_jsonish_formatter_with_literal_single():
     """Test JSONish formatter with single literal value."""
     from tests.conftest import LiteralSingle

@@ -362,6 +362,18 @@ def test_typescript_int_enum():
     assert "priority*:" in result
 
 
+def test_typescript_enum_with_descriptions_and_aliases():
+    """Test TypeScript formatter shows OPTIONS with descriptions in comment."""
+    from llm_schema_lite import simplify_schema
+    from tests.conftest import ModelWithPriorityMetadata
+
+    result = simplify_schema(ModelWithPriorityMetadata, format_type="typescript").to_string()
+    assert "OPTIONS with descriptions" in result
+    assert "Non-urgent" in result or "Urgent" in result
+    assert "aliases:" in result
+    assert "critical" in result
+
+
 def test_typescript_literal_single():
     """Test TypeScript formatter with single literal value."""
     schema = LiteralSingle.model_json_schema()

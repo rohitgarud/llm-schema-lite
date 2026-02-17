@@ -322,6 +322,19 @@ def test_yaml_int_enum():
     assert "priority*:" in result
 
 
+def test_yaml_enum_with_descriptions_and_aliases():
+    """Test YAML formatter shows OPTIONS with descriptions."""
+    from llm_schema_lite import simplify_schema
+    from tests.conftest import ModelWithPriorityMetadata
+
+    result = simplify_schema(ModelWithPriorityMetadata, format_type="yaml").to_string()
+    assert "OPTIONS with descriptions" in result
+    assert "Non-urgent, can wait" in result
+    assert "aliases:" in result
+    assert "OPTIONS:" in result
+    assert "low" in result and "critical" in result
+
+
 def test_yaml_literal_single():
     """Test YAML formatter with single literal value."""
     schema = LiteralSingle.model_json_schema()
