@@ -74,6 +74,20 @@ class JSONishFormatter(BaseFormatter):
         """
         return representation
 
+    def _extract_description(self, schema: dict[str, Any]) -> str:
+        """
+        Extract description from any schema node with comment prefix.
+
+        Args:
+            schema: Schema dictionary to extract description from.
+
+        Returns:
+            Formatted description string with // comment prefix or empty string.
+        """
+        if "description" in schema and schema["description"] is not None:
+            return f" {self.comment_prefix} {schema['description']}"
+        return ""
+
     def _get_title_description_default_value(
         self, value: dict[str, Any]
     ) -> tuple[str, str, str, str]:
@@ -171,6 +185,17 @@ class JSONishFormatter(BaseFormatter):
         if "default" in value:
             if isinstance(output, str):
                 output = output + f" (default='{value['default']}')"
+
+        # Include description from resolved definition if available
+        if isinstance(_def, dict) and "description" in _def and _def["description"]:
+            def_description = f" {self.comment_prefix} {_def['description']}"
+            if isinstance(output, str) and def_description not in output:
+                output = str(output) + def_description
+            elif isinstance(output, dict):
+                # For dict output, add description as inline comment
+                output_str = self._jsonish_dump(output, 0)
+                output = output_str + def_description
+
         return str(output) if not isinstance(output, str) else output
 
     def process_anyof(  # type: ignore[override]
@@ -195,7 +220,20 @@ class JSONishFormatter(BaseFormatter):
         anyof_list = value.get("anyOf", [])
         items: list[dict[str, Any] | str | list[Any]] = []
         for item in anyof_list:
-            items.append(self._process_schema_recursive(item))
+            # Include description from individual anyOf items inline
+            item_desc = self._extract_description(item)
+            processed_item = self._process_schema_recursive(item)
+            if item_desc:
+                if isinstance(processed_item, dict | list):
+                    item_str = (
+                        self._jsonish_dump(processed_item, 0)
+                        if isinstance(processed_item, dict | list)
+                        else str(processed_item)
+                    )
+                    processed_item = item_str + item_desc
+                else:
+                    processed_item = str(processed_item) + item_desc
+            items.append(processed_item)
 
         if description or default_value:
             comment = f" {self.comment_prefix}"
@@ -240,7 +278,20 @@ class JSONishFormatter(BaseFormatter):
         oneof_list = value.get("oneOf", [])
         items: list[dict[str, Any] | str | list[Any]] = []
         for item in oneof_list:
-            items.append(self._process_schema_recursive(item))
+            # Include description from individual oneOf items inline
+            item_desc = self._extract_description(item)
+            processed_item = self._process_schema_recursive(item)
+            if item_desc:
+                if isinstance(processed_item, dict | list):
+                    item_str = (
+                        self._jsonish_dump(processed_item, 0)
+                        if isinstance(processed_item, dict | list)
+                        else str(processed_item)
+                    )
+                    processed_item = item_str + item_desc
+                else:
+                    processed_item = str(processed_item) + item_desc
+            items.append(processed_item)
 
         if description or default_value:
             comment = f" {self.comment_prefix}"
@@ -293,15 +344,33 @@ class JSONishFormatter(BaseFormatter):
             Formatted intersection representation (string or merged dict).
         """
         comment = ""
+        # If this allOf node has its own description (e.g. same as parent items.description),
+        # skip adding it again to avoid duplication when already shown in array header
+        value_has_description = "description" in value and value.get("description")
         title, description, default_value, example = self._get_title_description_default_value(
             value
         )
         if self._is_root_schema(value):
             title, description = "", ""
+        if value_has_description:
+            description = ""
         allof_list = value.get("allOf", [])
         items: list[dict[str, Any] | str | list[Any]] = []
         for item in allof_list:
-            items.append(self._process_schema_recursive(item))
+            # Include description from individual allOf items inline
+            item_desc = self._extract_description(item)
+            processed_item = self._process_schema_recursive(item)
+            if item_desc:
+                if isinstance(processed_item, dict | list):
+                    item_str = (
+                        self._jsonish_dump(processed_item, 0)
+                        if isinstance(processed_item, dict | list)
+                        else str(processed_item)
+                    )
+                    processed_item = item_str + item_desc
+                else:
+                    processed_item = str(processed_item) + item_desc
+            items.append(processed_item)
         if description or default_value:
             comment = f" {self.comment_prefix}"
 
@@ -487,6 +556,7 @@ class JSONishFormatter(BaseFormatter):
                 items: dict[str, Any] | str | list[Any] = {}
                 if "items" in value and value["items"]:
                     items = self._process_schema_recursive(value["items"])
+                # Note: items.description is now handled in transform_schema array header
                 if items and isinstance(items, dict | list):
                     if items_range or title or description or default_value or example:
                         comment = f" {self.comment_prefix}"
@@ -1039,7 +1109,12 @@ class JSONishFormatter(BaseFormatter):
         else:
             output_string = str(output)
         if self.schema.get("type") == "array":
-            output_string = f"// Array of (items):\n{output_string}"
+            # Include items description in the array header if present (inline comment)
+            items_desc = ""
+            items_schema = self.schema.get("items")
+            if isinstance(items_schema, dict) and items_schema.get("description"):
+                items_desc = f" {self.comment_prefix} {items_schema['description']}"
+            output_string = f"// Array of (items):{items_desc}\n{output_string}"
         output_string = f"{self.get_info_comment(self.schema)}{self.get_required_fields_comment()}{output_string}"  # noqa: E501
         notes = self.schema.get("notes")
         links = self.schema.get("links")
