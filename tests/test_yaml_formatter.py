@@ -975,6 +975,6 @@ def test_yaml_consistent_asterisk_usage():
 
     # Required field should have asterisk
     assert "required_field*:" in result
-    # Optional field should not have asterisk
+    # Optional field should not have any marker (default optional_marker="")
     assert "optional_field:" in result
     assert "optional_field*:" not in result

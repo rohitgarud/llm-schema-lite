@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
+from .config import FormatterConfig
+
 
 class BaseFormatter(ABC):
     """
@@ -61,16 +63,32 @@ class BaseFormatter(ABC):
         "additionalItems": lambda v: f"additionalItems: {v}" if isinstance(v, dict) else "",
     }
 
-    def __init__(self, schema: dict[str, Any], include_metadata: bool = True):
+    def __init__(
+        self,
+        schema: dict[str, Any],
+        config: FormatterConfig | None = None,
+        include_metadata: bool | None = None,
+    ):
         """
         Initialize the formatter.
 
         Args:
             schema: JSON schema from Pydantic model_json_schema.
-            include_metadata: Whether to include metadata in the output.
+            config: FormatterConfig for customizing formatter behavior.
+            include_metadata: Deprecated. Use config.include_metadata instead.
         """
         self.schema = schema
-        self.include_metadata = include_metadata
+        # Handle config - use provided config or create default
+        self.config = config if config is not None else FormatterConfig()
+
+        # Handle backward compatibility for include_metadata parameter
+        if include_metadata is not None:
+            # If legacy parameter is provided, it takes precedence
+            self.config.include_metadata = include_metadata
+
+        # Backward compatibility: expose include_metadata as instance attribute
+        self.include_metadata = self.config.include_metadata
+
         self.defs = schema.get("$defs", schema.get("definitions", {}))
         self.properties = schema.get("properties", {})
         self.required_fields = set(schema.get("required", []))
@@ -342,28 +360,31 @@ class BaseFormatter(ABC):
 
     def format_field_name(self, field_name: str) -> str:
         """
-        Format field name with required indicator if applicable.
+        Format field name with required/optional indicator if applicable.
 
         Args:
             field_name: The name of the field.
 
         Returns:
-            Field name with asterisk if required, otherwise unchanged.
+            Field name with marker if required/optional.
         """
         if field_name in self.required_fields:
-            return f"{field_name}*"
-        return field_name
+            return f"{field_name}{self.config.required_marker}"
+        return f"{field_name}{self.config.optional_marker}"
 
     def get_required_fields_comment(self) -> str:
         """
         Get a comment explaining the required field notation.
 
         Returns:
-            Comment string explaining asterisk notation for required fields.
+            Comment string explaining marker notation for required fields.
         """
+        if not self.include_metadata:
+            return ""
         if not self.required_fields:
             return ""
-        return f"{self.comment_prefix} Fields marked with * are required"
+        marker = self.config.required_marker
+        return f"{self.comment_prefix} Fields marked with {marker} are required"
 
     def get_schema_info_comment(self) -> str:
         """
@@ -659,7 +680,7 @@ class BaseFormatter(ABC):
             else:
                 # Multiple non-null types - treat as union
                 type_strs = [self.TYPE_MAP.get(t, t) for t in type_name if t != "null"]
-                return " or ".join(s for s in type_strs if s is not None)
+                return self.config.union_separator.join(s for s in type_strs if s is not None)
 
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
@@ -808,7 +829,7 @@ class BaseFormatter(ABC):
         if len(item_types) > max_items:
             return f"anyOf: {len(item_types)} options"
         else:
-            return " or ".join(item_types) if item_types else "string"
+            return self.config.union_separator.join(item_types) if item_types else "string"
 
     def process_oneof(self, oneof: dict[str, Any]) -> str:
         """Process oneOf (exclusive choice) schemas."""
@@ -857,7 +878,7 @@ class BaseFormatter(ABC):
         if len(item_types) > max_items:
             return f"oneOf: {len(item_types)} options"
         elif item_types:
-            return f"oneOf: {' | '.join(item_types)}"
+            return f"oneOf: {self.config.union_separator.join(item_types)}"
         else:
             return "string"
 

@@ -13,7 +13,13 @@ from .exceptions import (
     UnsupportedModelError,
     ValidationError,
 )
-from .formatters import BaseFormatter, JSONishFormatter, TypeScriptFormatter, YAMLFormatter
+from .formatters import (
+    BaseFormatter,
+    FormatterConfig,
+    JSONishFormatter,
+    TypeScriptFormatter,
+    YAMLFormatter,
+)
 from .validators import BaseValidator, JSONValidator, YAMLValidator
 
 __all__ = [
@@ -25,6 +31,7 @@ __all__ = [
     "SchemaLite",
     # Formatters
     "BaseFormatter",
+    "FormatterConfig",
     "JSONishFormatter",
     "TypeScriptFormatter",
     "YAMLFormatter",

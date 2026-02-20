@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from .base import BaseFormatter
+from .config import FormatterConfig
 
 
 class JSONishFormatter(BaseFormatter):
@@ -20,15 +21,28 @@ class JSONishFormatter(BaseFormatter):
         }
     """
 
-    def __init__(self, schema: dict[str, Any], include_metadata: bool = True):
+    def __init__(
+        self,
+        schema: dict[str, Any],
+        config: "FormatterConfig | None" = None,
+        include_metadata: bool | None = None,
+    ):
         """
         Initialize the JSONish formatter.
 
         Args:
             schema: JSON schema from Pydantic model_json_schema.
-            include_metadata: Whether to include metadata in the output.
+            config: FormatterConfig for customizing formatter behavior.
+            include_metadata: Deprecated. Use config.include_metadata instead.
         """
-        super().__init__(schema, include_metadata)
+        # Set default union_separator for JSONish format if not explicitly provided
+        if config is None:
+            config = FormatterConfig(union_separator=" OR ")
+        elif config.union_separator == FormatterConfig().union_separator:
+            # User didn't override union_separator, use JSONish default
+            config.union_separator = " OR "
+
+        super().__init__(schema, config, include_metadata)
         # Trial-specific state
         self.processed_ref_cache: dict[str, dict[str, Any] | str | list[Any]] = {}
         self.pending_postfix: dict[str, str] = {}
@@ -199,7 +213,8 @@ class JSONishFormatter(BaseFormatter):
                 self._jsonish_dump(item, 0) if isinstance(item, dict | list) else str(item)
                 for item in items
             ]
-            output = " OR ".join(str_items) if len(str_items) > 1 else str_items[0]
+            sep = self.config.union_separator
+            output = sep.join(str_items) if len(str_items) > 1 else str_items[0]
 
         return f"{output}{comment}{title}{description}{default_value}{example}"
 
@@ -243,9 +258,10 @@ class JSONishFormatter(BaseFormatter):
                 self._jsonish_dump(item, 0) if isinstance(item, dict | list) else str(item)
                 for item in items
             ]
-            output = "ONE OF: " + " OR ".join(str_items) if len(str_items) > 1 else str_items[0]
+            sep = self.config.union_separator
+            one_of_output = "ONE OF: " + sep.join(str_items) if len(str_items) > 1 else str_items[0]
 
-        return f"{output}{comment}{title}{description}{default_value}{example}"
+        return f"{one_of_output}{comment}{title}{description}{default_value}{example}"
 
     def _merge_allof_objects(
         self, items: list[dict[str, Any] | str | list[Any]]
@@ -598,7 +614,9 @@ class JSONishFormatter(BaseFormatter):
 
                 processed_prop_name = prop_name
                 if prop_name in required:
-                    processed_prop_name = f"{prop_name}*"
+                    processed_prop_name = f"{prop_name}{self.config.required_marker}"
+                else:
+                    processed_prop_name = f"{prop_name}{self.config.optional_marker}"
                 if "$ref" in value and value["$ref"]:
                     output[processed_prop_name] = self.process_ref(value, processed_prop_name)
                 elif "anyOf" in value and value["anyOf"]:
@@ -683,11 +701,14 @@ class JSONishFormatter(BaseFormatter):
         Get a comment explaining the required field notation.
 
         Returns:
-            Comment string explaining asterisk notation for required fields.
+            Comment string explaining marker notation for required fields.
         """
+        if not self.include_metadata:
+            return ""
         if not self.schema.get("required", None):
             return ""
-        return f"{self.comment_prefix} Fields marked with * are required\n"
+        marker = self.config.required_marker
+        return f"{self.comment_prefix} Fields marked with {marker} are required\n"
 
     def get_schema_info_comment(self) -> str:
         """
@@ -1010,7 +1031,7 @@ class JSONishFormatter(BaseFormatter):
             Formatted schema as a string.
         """
         if self.simplified_schema is not None:
-            return self.simplified_schema
+            return self._add_prefix(self.simplified_schema)
         output = self._process_schema_recursive(self.schema)
         output_string = ""
         if output and isinstance(output, dict):
@@ -1046,6 +1067,12 @@ class JSONishFormatter(BaseFormatter):
 
         output_string = self._apply_pending_postfix(output_string)
         self.simplified_schema = output_string.replace("  ", " ")
+        return self._add_prefix(output_string)
+
+    def _add_prefix(self, output_string: str) -> str:
+        """Add prefix to output if configured."""
+        if self.config.prefix:
+            return self.config.prefix + output_string
         return output_string
 
     def token_count(self, encoding: str = "cl100k_base") -> int:

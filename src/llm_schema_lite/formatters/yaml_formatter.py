@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from .base import BaseFormatter
+from .config import FormatterConfig
 
 
 class YAMLFormatter(BaseFormatter):
@@ -26,6 +27,29 @@ class YAMLFormatter(BaseFormatter):
         age: int  # min: 0, max: 120
         tags: list[str]  # Product tags
     """
+
+    def __init__(
+        self,
+        schema: dict[str, Any],
+        config: "FormatterConfig | None" = None,
+        include_metadata: bool | None = None,
+    ):
+        """
+        Initialize the YAML formatter.
+
+        Args:
+            schema: JSON schema from Pydantic model_json_schema.
+            config: FormatterConfig for customizing formatter behavior.
+            include_metadata: Deprecated. Use config.include_metadata instead.
+        """
+        # Set default union_separator for YAML format if not explicitly provided
+        if config is None:
+            config = FormatterConfig(union_separator=" OR ")
+        elif config.union_separator == FormatterConfig().union_separator:
+            # User didn't override union_separator, use YAML default
+            config.union_separator = " OR "
+
+        super().__init__(schema, config, include_metadata)
 
     @property
     def TYPE_MAP(self) -> dict[str, str]:
@@ -145,7 +169,7 @@ class YAMLFormatter(BaseFormatter):
             elif "allOf" in item:
                 item_types.append(self.process_allof(item))
 
-        return " OR ".join(item_types) if item_types else "string"
+        return self.config.union_separator.join(item_types) if item_types else "string"
 
     def process_enum(self, enum_value: dict[str, Any]) -> str:
         """
@@ -226,7 +250,7 @@ class YAMLFormatter(BaseFormatter):
         if not item_types:
             return "string"
         if len(item_types) > 1:
-            return "ONE OF: " + " OR ".join(item_types)
+            return "ONE OF: " + self.config.union_separator.join(item_types)
         return str(item_types[0])
 
     def process_allof(self, allof: dict[str, Any]) -> str:
@@ -321,7 +345,7 @@ class YAMLFormatter(BaseFormatter):
                 return f"{type_str} OR null"
             else:
                 type_strs = [self.TYPE_MAP.get(t, t) for t in type_name if t != "null"]
-                return " OR ".join(s for s in type_strs if s is not None)
+                return self.config.union_separator.join(s for s in type_strs if s is not None)
 
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
@@ -511,10 +535,13 @@ class YAMLFormatter(BaseFormatter):
         return ""
 
     def get_required_fields_comment(self) -> str:
-        """Required fields comment (JSONish wording): Fields marked with * are required."""
+        """Required fields comment with configurable marker."""
+        if not self.include_metadata:
+            return ""
         if not self.schema.get("required", None):
             return ""
-        return f"{self.comment_prefix} Fields marked with * are required\n"
+        marker = self.config.required_marker
+        return f"{self.comment_prefix} Fields marked with {marker} are required\n"
 
     def process_additional_properties(
         self, schema: dict[str, Any], show_structure: bool = True
@@ -604,9 +631,7 @@ class YAMLFormatter(BaseFormatter):
                         dep = self._get_fields_dependencies(def_schema, prop_name)
                         if dep and self.include_metadata:
                             prop_type = f"{prop_type}  # {dep}"
-                        formatted_prop_name = (
-                            f"{prop_name}*" if prop_name in nested_required else prop_name
-                        )
+                        formatted_prop_name = self.format_field_name(prop_name)
                         def_dict[f"{def_name}.{formatted_prop_name}"] = prop_type
 
                     # Dump to YAML and optionally prepend section header
@@ -685,9 +710,11 @@ class YAMLFormatter(BaseFormatter):
                         inner_required = set(additional_props.get("required", []))
                         inner: dict[str, Any] = {}
                         for prop_name, prop_def in additional_props["properties"].items():
-                            formatted_name = (
-                                f"{prop_name}*" if prop_name in inner_required else prop_name
-                            )
+                            # Use config markers for formatting
+                            if prop_name in inner_required:
+                                formatted_name = f"{prop_name}{self.config.required_marker}"
+                            else:
+                                formatted_name = f"{prop_name}{self.config.optional_marker}"
                             inner[formatted_name] = self.process_property(prop_def)
                         output_dict = {"<key>": inner}
                     else:
@@ -699,7 +726,7 @@ class YAMLFormatter(BaseFormatter):
                     result = self._dump_yaml(output_dict)
                     if additional_comment:
                         result += f"\n{additional_comment}"
-                    return result
+                    return self._add_prefix(result)
 
             # Handle schema-level features even when there are no properties
             schema_level_features = ""
@@ -729,47 +756,46 @@ class YAMLFormatter(BaseFormatter):
                 type_content = self.process_type_value(self.schema)
                 # For object type with no properties, return {} instead of "object"/"dict"
                 if type_content in ("object", "dict") and not schema_level_features:
-                    return "{}"
+                    return self._add_prefix("{}")
                 # Add schema-level features as comments (e.g. additionalProperties)
                 if schema_level_features:
-                    return (
+                    return self._add_prefix(
                         f"# Schema-level constraints: {schema_level_features.strip()}\n"
                         f"{type_content}"
                     )
-                return type_content
+                return self._add_prefix(type_content)
             elif "oneOf" in self.schema:
                 oneof_content = self.process_oneof(self.schema)
                 if schema_level_features and self.include_metadata:
-                    return (
+                    return self._add_prefix(
                         f"# Schema-level constraints: {schema_level_features.strip()}\n"
                         f"{oneof_content}"
                     )
                 else:
-                    return oneof_content
+                    return self._add_prefix(oneof_content)
             elif "anyOf" in self.schema:
                 anyof_content = self.process_anyof(self.schema)
                 if schema_level_features and self.include_metadata:
-                    return (
+                    return self._add_prefix(
                         f"# Schema-level constraints: {schema_level_features.strip()}\n"
                         f"{anyof_content}"
                     )
                 else:
-                    return anyof_content
+                    return self._add_prefix(anyof_content)
             elif "allOf" in self.schema:
                 allof_content = self.process_allof(self.schema)
                 if schema_level_features and self.include_metadata:
-                    return (
+                    return self._add_prefix(
                         f"# Schema-level constraints: {schema_level_features.strip()}\n"
                         f"{allof_content}"
                     )
                 else:
-                    return allof_content
-
-            # Return schema-level features as comments if present
+                    return self._add_prefix(allof_content)
             if schema_level_features and self.include_metadata:
-                return f"# Schema-level constraints: {schema_level_features.strip()}"
+                constraints_comment = f"# Schema-level constraints: {schema_level_features.strip()}"
+                return self._add_prefix(constraints_comment)
             else:
-                return "{}"
+                return self._add_prefix("{}")
 
         # Third branch: main flow with properties
         all_sections = []
@@ -787,9 +813,11 @@ class YAMLFormatter(BaseFormatter):
                     dep = self._get_fields_dependencies(def_schema, prop_name)
                     if dep and self.include_metadata:
                         prop_type = f"{prop_type}  # {dep}"
-                    formatted_prop_name = (
-                        f"{prop_name}*" if prop_name in nested_required else prop_name
-                    )
+                    # Use config markers for formatting
+                    if prop_name in nested_required:
+                        formatted_prop_name = f"{prop_name}{self.config.required_marker}"
+                    else:
+                        formatted_prop_name = f"{prop_name}{self.config.optional_marker}"
                     def_dict[f"{def_name}.{formatted_prop_name}"] = prop_type
 
                 # Dump to YAML and optionally prepend section header
@@ -843,7 +871,11 @@ class YAMLFormatter(BaseFormatter):
                 inner_required = set(additional_props.get("required", []))
                 inner = {}
                 for prop_name, prop_def in additional_props["properties"].items():
-                    formatted_name = f"{prop_name}*" if prop_name in inner_required else prop_name
+                    # Use config markers for formatting
+                    if prop_name in inner_required:
+                        formatted_name = f"{prop_name}{self.config.required_marker}"
+                    else:
+                        formatted_name = f"{prop_name}{self.config.optional_marker}"
                     inner[formatted_name] = self.process_property(prop_def)
                 processed_properties["<key>"] = inner
             else:
@@ -873,6 +905,18 @@ class YAMLFormatter(BaseFormatter):
         # If there are nested sections, combine them
         if all_sections:
             all_sections.append("\n".join(main_parts))
-            return "\n\n".join(all_sections)
+            result = "\n\n".join(all_sections)
+        else:
+            result = "\n".join(main_parts)
 
-        return "\n".join(main_parts)
+        # Add prefix if configured
+        if self.config.prefix:
+            result = self.config.prefix + result
+
+        return result
+
+    def _add_prefix(self, output_string: str) -> str:
+        """Add prefix to output if configured."""
+        if self.config.prefix:
+            return self.config.prefix + output_string
+        return output_string

@@ -166,7 +166,7 @@ class TypeScriptFormatter(BaseFormatter):
         if len(item_types) > max_items:
             return f"anyOf: {len(item_types)} options"
         else:
-            return " | ".join(item_types) if item_types else "string"
+            return self.config.union_separator.join(item_types) if item_types else "string"
 
     def process_enum(self, enum_value: dict[str, Any]) -> str:
         """
@@ -192,7 +192,7 @@ class TypeScriptFormatter(BaseFormatter):
                 enum_literals.append(f'"{val}"')
             else:
                 enum_literals.append(str(val))
-        type_str = " | ".join(enum_literals)
+        type_str = self.config.union_separator.join(enum_literals)
         descs, alias_map = self._extract_enum_metadata(enum_value)
         if not descs and not alias_map:
             return type_str
@@ -255,7 +255,7 @@ class TypeScriptFormatter(BaseFormatter):
             else:
                 # Multiple non-null types - treat as union
                 type_strs = [self.TYPE_MAP.get(t, t) for t in type_name if t != "null"]
-                return " | ".join(s for s in type_strs if s is not None)
+                return self.config.union_separator.join(s for s in type_strs if s is not None)
 
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)

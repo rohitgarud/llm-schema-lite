@@ -9,7 +9,7 @@ except ImportError:
     BaseModel = None  # type: ignore[assignment, misc]
 
 from .exceptions import ConversionError, UnsupportedModelError
-from .formatters import JSONishFormatter, TypeScriptFormatter, YAMLFormatter
+from .formatters import FormatterConfig, JSONishFormatter, TypeScriptFormatter, YAMLFormatter
 from .formatters.base import BaseFormatter
 from .parsers import BaseParser, JSONParser, YAMLParser
 from .schema_enrichment import enrich_schema_with_enum_metadata
@@ -150,7 +150,8 @@ class SchemaLite:
 
 def simplify_schema(
     model: type["BaseModel"] | dict[str, Any] | str,
-    include_metadata: bool = True,
+    config: "FormatterConfig | None" = None,
+    include_metadata: bool | None = None,
     format_type: Literal["jsonish", "typescript", "yaml"] = "jsonish",
 ) -> SchemaLite:
     """
@@ -158,7 +159,8 @@ def simplify_schema(
 
     Args:
         model: Pydantic BaseModel class, JSON schema dict, or JSON schema string.
-        include_metadata: Include validation rules as inline comments.
+        config: FormatterConfig for customizing formatter behavior.
+        include_metadata: Deprecated. Use config.include_metadata instead.
         format_type: Output format preference:
             - 'jsonish': JSONish/BAML-like format with inline comments (default)
             - 'typescript': TypeScript interface format
@@ -248,12 +250,17 @@ def simplify_schema(
 
     # Select formatter based on format_type
     formatter: BaseFormatter
+    formatter_kwargs: dict[str, Any] = {"schema": original_schema, "config": config}
+    # Handle backward compatibility for include_metadata parameter
+    if include_metadata is not None:
+        formatter_kwargs["include_metadata"] = include_metadata
+
     if format_type == "jsonish":
-        formatter = JSONishFormatter(original_schema, include_metadata=include_metadata)
+        formatter = JSONishFormatter(**formatter_kwargs)
     elif format_type == "typescript":
-        formatter = TypeScriptFormatter(original_schema, include_metadata=include_metadata)
+        formatter = TypeScriptFormatter(**formatter_kwargs)
     elif format_type == "yaml":
-        formatter = YAMLFormatter(original_schema, include_metadata=include_metadata)
+        formatter = YAMLFormatter(**formatter_kwargs)
     else:
         raise ValueError(
             f"Unsupported format_type: {format_type}. "
