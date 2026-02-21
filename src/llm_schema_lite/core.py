@@ -8,6 +8,7 @@ try:
 except ImportError:
     BaseModel = None  # type: ignore[assignment, misc]
 
+from .coercion import CoercionMetadata, ParseConfig, coerce_to_schema
 from .exceptions import ConversionError, UnsupportedModelError
 from .formatters import FormatterConfig, JSONishFormatter, TypeScriptFormatter, YAMLFormatter
 from .formatters.base import BaseFormatter
@@ -281,6 +282,7 @@ def loads(
     text: str,
     mode: Literal["json", "yaml"] = "json",
     repair: bool = True,
+    parse_config: ParseConfig | None = None,
 ) -> dict[str, Any]:
     """
     Parse structured text (JSON or YAML) with robust error handling and content extraction.
@@ -294,6 +296,7 @@ def loads(
         text: The text content to parse
         mode: The parsing mode - "json" or "yaml"
         repair: Whether to attempt repair for malformed content
+        parse_config: Configuration for coercion behavior (optional)
 
     Returns:
         Parsed dictionary content
@@ -316,6 +319,9 @@ def loads(
 
         >>> # Parse with repair disabled
         >>> data = loads('{"name": "John"}', repair=False)
+
+        >>> # Parse with coercion disabled
+        >>> data = loads('{"name": "John"}', parse_config=ParseConfig(allow_coercion=False))
     """
     if not text or not text.strip():
         raise ConversionError("Empty or whitespace-only text provided")
@@ -402,3 +408,49 @@ def validate(
     if isinstance(data, str) and data.strip().startswith(("{", "[")):
         return JSONValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
     return YAMLValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
+
+
+def coerce(
+    data: dict[str, Any] | str | list[Any] | int | float | bool | None,
+    schema: type[BaseModel] | dict[str, Any] | str,
+    config: ParseConfig | None = None,
+) -> tuple[dict[str, Any], list[CoercionMetadata]]:
+    """
+    Coerce data to match schema types.
+
+    This function converts input data to match the expected types defined in a schema.
+    It handles various type coercions like string to int, string to bool, etc.
+
+    Args:
+        data: Data to coerce (can be dict, list, string, number, boolean, null,
+              JSON string, or YAML string)
+        schema: Pydantic BaseModel class, JSON schema dict, or JSON schema string
+        config: ParseConfig with coercion settings (optional, uses default if None)
+
+    Returns:
+        Tuple of (coerced_data, list of CoercionMetadata)
+
+    Raises:
+        ConversionError: If coercion fails or schema is invalid
+
+    Example:
+        >>> from pydantic import BaseModel
+        >>> from llm_schema_lite import coerce
+        >>>
+        >>> class User(BaseModel):
+        ...     name: str
+        ...     age: int
+        ...
+        >>> # Coerce data with type mismatches
+        >>> coerced, metadata = coerce({"name": "John", "age": "30"}, User)
+        >>> print(coerced)
+        {'name': 'John', 'age': 30}
+        >>> # Coerce from JSON string
+        >>> coerced, metadata = coerce('{"name": "Jane", "age": "25"}', User)
+        >>> print(coerced)
+        {'name': 'Jane', 'age': 25}
+        >>> # With custom config
+        >>> config = ParseConfig(coerce_list_single_item=True)
+        >>> coerced, metadata = coerce({"name": "John"}, User, config)
+    """
+    return coerce_to_schema(data, schema, config)

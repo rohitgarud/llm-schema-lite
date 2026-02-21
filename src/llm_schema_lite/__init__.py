@@ -6,7 +6,8 @@ Reduce token usage by 60-85% while preserving essential type information.
 
 __version__ = "0.6.1"
 
-from .core import SchemaLite, loads, simplify_schema, validate
+from .coercion import CoercionMetadata, ParseConfig, coerce_to_schema, coerce_value
+from .core import SchemaLite, coerce, loads, simplify_schema, validate
 from .exceptions import (
     ConversionError,
     SchemaLiteError,
@@ -28,7 +29,13 @@ __all__ = [
     "simplify_schema",
     "loads",
     "validate",
+    "coerce",
     "SchemaLite",
+    # Coercion
+    "coerce_to_schema",
+    "coerce_value",
+    "ParseConfig",
+    "CoercionMetadata",
     # Formatters
     "BaseFormatter",
     "FormatterConfig",
