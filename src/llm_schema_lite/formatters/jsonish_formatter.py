@@ -110,7 +110,8 @@ class JSONishFormatter(BaseFormatter):
             if isinstance(comment, str):
                 comment = f"'{comment}'"
             description += f" (COMMENT: {comment})"
-        if "default" in value:
+        # Filter default based on metadata_inclusion config
+        if "default" in value and self._should_include_metadata("default"):
             default = value["default"]
             if default is None:
                 default = "null"
@@ -119,32 +120,38 @@ class JSONishFormatter(BaseFormatter):
             elif isinstance(default, bool):
                 default = "true" if default else "false"
             default_value = f" (default={default})"
-        if "example" in value and value["example"] is not None:
-            example = f" (EXAMPLE: {value['example']})"
-        elif "examples" in value and value["examples"] is not None:
-            examples = value["examples"]
-            if isinstance(examples, list):
-                examples = [json.dumps(ex, indent=2).replace('"', "") for ex in examples]
-                example = f" (EXAMPLES: {', '.join(examples)})"
-            else:
-                example = f" (EXAMPLES: {examples})"
+        # Filter examples based on metadata_inclusion config
+        if self._should_include_metadata("examples"):
+            if "example" in value and value["example"] is not None:
+                example = f" (EXAMPLE: {value['example']})"
+            elif "examples" in value and value["examples"] is not None:
+                examples = value["examples"]
+                if isinstance(examples, list):
+                    examples = [json.dumps(ex, indent=2).replace('"', "") for ex in examples]
+                    example = f" (EXAMPLES: {', '.join(examples)})"
+                else:
+                    example = f" (EXAMPLES: {examples})"
         return title, description, default_value, example
 
     def _get_options_format_pattern(self, value: dict[str, Any]) -> tuple[str, str, str]:
         """Extract options, format, and pattern from schema value."""
         options = ""
         format_ = ""
-        pattern = ""
-        if "pattern" in value and value["pattern"]:
+        # Filter pattern based on metadata_inclusion config
+        if "pattern" in value and value["pattern"] and self._should_include_metadata("pattern"):
             pattern = f" (PATTERN: {value['pattern']})"
+        else:
+            pattern = ""
         if "enum" in value and value["enum"]:
             # Convert enum values to strings to handle both string and numeric enums
             enum_strs = [str(v) for v in value["enum"]]
             options = f" (OPTIONS: {'| '.join(enum_strs)})"
-        if "format" in value and value["format"]:
-            format_ = f" (FORMAT: {value['format']})"
-        elif "_format" in value and value["_format"]:
-            format_ = f" (FORMAT: {value['_format']})"
+        # Filter format based on metadata_inclusion config
+        if self._should_include_metadata("format"):
+            if "format" in value and value["format"]:
+                format_ = f" (FORMAT: {value['format']})"
+            elif "_format" in value and value["_format"]:
+                format_ = f" (FORMAT: {value['_format']})"
         return options, format_, pattern
 
     def _get_fields_dependencies(self, schema: dict[str, Any], field_name: str) -> str:
@@ -510,24 +517,36 @@ class JSONishFormatter(BaseFormatter):
                 type_name = "string"
 
                 length_range = ""
-                if "minLength" in value and "maxLength" in value:
-                    length_range = f" ({value['minLength']}-{value['maxLength']} chars)"
-                elif "minLength" in value:
-                    length_range += f" (>= {value['minLength']} chars)"
-                elif "maxLength" in value:
-                    length_range += f" (<= {value['maxLength']} chars)"
+                # Filter length constraints based on metadata_inclusion config
+                check_min_len = self._should_include_metadata("minLength")
+                check_max_len = self._should_include_metadata("maxLength")
+                if check_min_len or check_max_len:
+                    has_min = "minLength" in value and check_min_len
+                    has_max = "maxLength" in value and check_max_len
+                    if has_min and has_max:
+                        length_range = f" ({value['minLength']}-{value['maxLength']} chars)"
+                    elif has_min:
+                        length_range += f" (>= {value['minLength']} chars)"
+                    elif has_max:
+                        length_range += f" (<= {value['maxLength']} chars)"
                 if title or description or options or default_value or example:
                     comment = f" {self.comment_prefix}"
                 return f"{type_name}{pattern}{format_}{length_range}{comment}{title}{description}{options}{default_value}{example}"  # noqa: E501
             elif value["type"] in ["number", "integer"]:
                 type_name = "float" if value["type"] == "number" else "int"
                 value_range = ""
-                if "minimum" in value and "maximum" in value:
-                    value_range = f" ({value['minimum']} to {value['maximum']})"
-                elif "minimum" in value:
-                    value_range += f" (>= {value['minimum']})"
-                elif "maximum" in value:
-                    value_range += f" (<= {value['maximum']})"
+                # Filter range constraints based on metadata_inclusion config
+                check_min = self._should_include_metadata("minimum")
+                check_max = self._should_include_metadata("maximum")
+                if check_min or check_max:
+                    has_min = "minimum" in value and check_min
+                    has_max = "maximum" in value and check_max
+                    if has_min and has_max:
+                        value_range = f" ({value['minimum']} to {value['maximum']})"
+                    elif has_min:
+                        value_range += f" (>= {value['minimum']})"
+                    elif has_max:
+                        value_range += f" (<= {value['maximum']})"
                 if title or description or options or default_value or example:
                     comment = f" {self.comment_prefix}"
                 return f"{type_name}{format_}{pattern}{value_range}{comment}{title}{description}{options}{default_value}{example}"  # noqa: E501
@@ -538,18 +557,28 @@ class JSONishFormatter(BaseFormatter):
                 return f"{type_name}{comment}{title}{description}{default_value}{example}"
             elif value["type"] == "array":
                 unique_items = ""
-                if ("_uniqueItems" in value and value["_uniqueItems"]) or (
-                    "uniqueItems" in value and value["uniqueItems"]
-                ):
-                    unique_items = "UNIQUE"
+                # Filter uniqueItems based on metadata_inclusion config
+                if self._should_include_metadata("uniqueItems"):
+                    if ("_uniqueItems" in value and value["_uniqueItems"]) or (
+                        "uniqueItems" in value and value["uniqueItems"]
+                    ):
+                        unique_items = "UNIQUE"
 
                 items_range = ""
-                if "minItems" in value and "maxItems" in value:
-                    items_range = f" ({value['minItems']}-{value['maxItems']} {unique_items} items)"
-                elif "minItems" in value:
-                    items_range += f" (>= {value['minItems']} {unique_items} items)"
-                elif "maxItems" in value:
-                    items_range += f" (<= {value['maxItems']} {unique_items} items)"
+                # Filter minItems/maxItems based on metadata_inclusion config
+                check_min_items = self._should_include_metadata("minItems")
+                check_max_items = self._should_include_metadata("maxItems")
+                if check_min_items or check_max_items:
+                    has_min = "minItems" in value and check_min_items
+                    has_max = "maxItems" in value and check_max_items
+                    if has_min and has_max:
+                        items_range = (
+                            f" ({value['minItems']}-{value['maxItems']} {unique_items} items)"
+                        )
+                    elif has_min:
+                        items_range += f" (>= {value['minItems']} {unique_items} items)"
+                    elif has_max:
+                        items_range += f" (<= {value['maxItems']} {unique_items} items)"
                 elif unique_items:
                     items_range = f" ({unique_items} items)"
 

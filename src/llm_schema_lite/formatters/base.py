@@ -89,6 +89,9 @@ class BaseFormatter(ABC):
         # Backward compatibility: expose include_metadata as instance attribute
         self.include_metadata = self.config.include_metadata
 
+        # Metadata inclusion configuration for fine-grained control
+        self._metadata_inclusion = self.config.metadata_inclusion
+
         self.defs = schema.get("$defs", schema.get("definitions", {}))
         self.properties = schema.get("properties", {})
         self.required_fields = set(schema.get("required", []))
@@ -310,9 +313,13 @@ class BaseFormatter(ABC):
             List of formatted metadata strings.
         """
         available_metadata = self.get_available_metadata(value)
+
+        # Filter available metadata based on metadata_inclusion config
+        filtered_metadata = [k for k in available_metadata if self._should_include_metadata(k)]
+
         formatted_parts = []
 
-        for k in available_metadata:
+        for k in filtered_metadata:
             # Check both regular and underscore-prefixed keys
             actual_key = k if k in value else f"_{k}"
 
@@ -371,6 +378,26 @@ class BaseFormatter(ABC):
         if field_name in self.required_fields:
             return f"{field_name}{self.config.required_marker}"
         return f"{field_name}{self.config.optional_marker}"
+
+    def _should_include_metadata(self, key: str) -> bool:
+        """
+        Check if a metadata key should be included in output.
+
+        This method respects the metadata_inclusion configuration to provide
+        fine-grained control over which metadata keywords appear in the output.
+
+        Args:
+            key: The metadata key to check (e.g., "pattern", "format", "examples").
+
+        Returns:
+            True if the metadata key should be included, False otherwise.
+        """
+        # If include_metadata is False, exclude everything
+        if not self.include_metadata:
+            return False
+
+        # Check the metadata_inclusion config, defaulting to True if not specified
+        return self._metadata_inclusion.get(key, True)
 
     def get_required_fields_comment(self) -> str:
         """

@@ -3,6 +3,25 @@
 from dataclasses import dataclass
 from typing import Literal
 
+# Default metadata inclusion configuration
+# Includes all constraint metadata by default, excludes examples for token savings
+DEFAULT_METADATA_INCLUSION: dict[str, bool] = {
+    # Constraints - included by default (True)
+    "pattern": True,
+    "format": True,
+    "minimum": True,
+    "maximum": True,
+    "minLength": True,
+    "maxLength": True,
+    "minItems": True,
+    "maxItems": True,
+    "uniqueItems": True,
+    "const": True,
+    "default": True,
+    # Examples - excluded by default (False) for token savings
+    "examples": False,
+}
+
 
 @dataclass
 class FormatterConfig:
@@ -16,6 +35,7 @@ class FormatterConfig:
     - Indentation
     - Optional/required field markers
     - Description/constraint inclusion toggles
+    - Metadata inclusion per-keyword control
 
     Attributes:
         prefix: Instruction prefix to prepend to output (default: None)
@@ -30,6 +50,10 @@ class FormatterConfig:
         include_constraints: Include validation constraints like min/max (default: True)
         include_metadata: Include all metadata (default: True) - supersedes
             include_descriptions and include_constraints
+        metadata_inclusion: Dictionary to control which metadata keywords are included
+            in output. Keys are metadata keyword names, values are booleans.
+            If not provided, defaults to DEFAULT_METADATA_INCLUSION.
+            Example: {"pattern": True, "format": True, "examples": False}
     """
 
     prefix: str | None = None
@@ -42,3 +66,15 @@ class FormatterConfig:
     include_descriptions: bool = True
     include_constraints: bool = True
     include_metadata: bool = True
+    metadata_inclusion: dict[str, bool] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        """Post-initialization to handle metadata_inclusion defaults."""
+        if self.metadata_inclusion is None:
+            # Use default metadata inclusion if not specified
+            self.metadata_inclusion = DEFAULT_METADATA_INCLUSION.copy()
+        else:
+            # Merge user-provided dict with defaults (user values override defaults)
+            merged = DEFAULT_METADATA_INCLUSION.copy()
+            merged.update(self.metadata_inclusion)
+            self.metadata_inclusion = merged

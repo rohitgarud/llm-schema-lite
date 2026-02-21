@@ -62,6 +62,11 @@ class TypeScriptFormatter(BaseFormatter):
         if not available_metadata:
             return representation
 
+        # Filter metadata based on metadata_inclusion config
+        filtered_metadata = [k for k in available_metadata if self._should_include_metadata(k)]
+        if not filtered_metadata:
+            return representation
+
         metadata_parts = self.format_metadata_parts(value)
         return f"{representation}  // {', '.join(metadata_parts)}"
 
@@ -261,17 +266,26 @@ class TypeScriptFormatter(BaseFormatter):
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
         # Add validation constraints to type description (only if metadata is enabled)
+        # Filter based on metadata_inclusion config
         if self.include_metadata:
             if type_name == "string":
-                length_range = self._format_validation_range(
-                    type_value, "minLength", "maxLength", " chars"
-                )  # noqa: E501
-                if length_range:
-                    type_str = f"{type_str} ({length_range})"
+                # Check if minLength or maxLength should be included
+                include_min_length = self._should_include_metadata("minLength")
+                include_max_length = self._should_include_metadata("maxLength")
+                if include_min_length or include_max_length:
+                    length_range = self._format_validation_range(
+                        type_value, "minLength", "maxLength", " chars"
+                    )  # noqa: E501
+                    if length_range:
+                        type_str = f"{type_str} ({length_range})"
             elif type_name in ["number", "integer"]:
-                range_info = self._format_validation_range(type_value, "minimum", "maximum")
-                if range_info:
-                    type_str = f"{type_str} ({range_info})"
+                # Check if minimum or maximum should be included
+                include_min = self._should_include_metadata("minimum")
+                include_max = self._should_include_metadata("maximum")
+                if include_min or include_max:
+                    range_info = self._format_validation_range(type_value, "minimum", "maximum")
+                    if range_info:
+                        type_str = f"{type_str} ({range_info})"
 
         # Handle array type (consolidate both "Array" and "array" cases)
         if type_str == "Array" or type_name == "array":
@@ -312,16 +326,22 @@ class TypeScriptFormatter(BaseFormatter):
                 array_type = "Array<any>"
 
             # Add array constraints (only if metadata is enabled)
+            # Filter based on metadata_inclusion config
             if self.include_metadata:
                 constraints = []
-                if type_value.get("uniqueItems"):
+                # Check if uniqueItems should be included
+                if type_value.get("uniqueItems") and self._should_include_metadata("uniqueItems"):
                     constraints.append("unique")
 
-                items_range = self._format_validation_range(
-                    type_value, "minItems", "maxItems", " items"
-                )
-                if items_range:
-                    constraints.append(f"length: {items_range}")
+                # Check if minItems or maxItems should be included
+                include_min_items = self._should_include_metadata("minItems")
+                include_max_items = self._should_include_metadata("maxItems")
+                if include_min_items or include_max_items:
+                    items_range = self._format_validation_range(
+                        type_value, "minItems", "maxItems", " items"
+                    )
+                    if items_range:
+                        constraints.append(f"length: {items_range}")
 
                 if constraints:
                     array_type = f"{array_type} ({', '.join(constraints)})"
@@ -329,7 +349,7 @@ class TypeScriptFormatter(BaseFormatter):
                 # Add contains and unique items metadata
                 if "contains" in type_value:
                     array_type += self.process_contains(type_value)
-                if "uniqueItems" in type_value:
+                if "uniqueItems" in type_value and self._should_include_metadata("uniqueItems"):
                     array_type += self.process_unique_items(type_value)
 
             return array_type

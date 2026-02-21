@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
 from tests.conftest import (
     EMPTY_SCHEMA,
@@ -499,7 +500,7 @@ def test_jsonish_formatter_with_array_constraints():
     from tests.conftest import ArrayMinMaxItems
 
     schema = ArrayMinMaxItems.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
     # Should contain tags field
@@ -645,10 +646,12 @@ def test_jsonish_formatter_with_examples():
         },
         "required": ["email"],
     }
-    formatter = JSONishFormatter(schema, include_metadata=True)
+    # Enable examples in metadata_inclusion to test example display
+    config = FormatterConfig(include_metadata=True, metadata_inclusion={"examples": True})
+    formatter = JSONishFormatter(schema, config=config)
     result = formatter.transform_schema()
 
-    # Should include examples when metadata is on
+    # Should include examples when metadata is on and examples are enabled
     assert "email*:" in result
     assert "EXAMPLE" in result or "example" in result.lower()
 

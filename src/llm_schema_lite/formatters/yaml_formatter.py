@@ -175,30 +175,54 @@ class YAMLFormatter(BaseFormatter):
         """
         Process enum (JSONish parity): single value -> value; multiple -> OPTIONS: a | b | c.
         When x-enum-descriptions or x-enum-aliases exist, include OPTIONS with descriptions.
+        Includes title, description, default_value, example metadata in output.
         """
+        title, description, default_value, example = self._get_title_description_default_value(
+            enum_value
+        )
         enum_list = enum_value.get("enum", [])
         if not enum_list:
             return "string"
         descs, alias_map = self._extract_enum_metadata(enum_value)
         has_enum_metadata = bool(descs or alias_map)
+        # Initialize comment - will be set if there's description or default_value
+        comment = ""
+        if description or default_value:
+            comment = f" {self.comment_prefix}"
+
+        # Format enum values: strings with markers for quotes, numbers/bools unquoted
+        def format_enum_value(e: Any) -> str:
+            if isinstance(e, bool):
+                return "true" if e else "false"
+            else:
+                return str(e)
+
         if len(enum_list) == 1:
-            return str(enum_list[0])
-        main_line = f"OPTIONS: {'| '.join(str(v) for v in enum_list)}"
-        if not has_enum_metadata:
-            return main_line
-        lines = ["# OPTIONS with descriptions"]
-        for e in enum_list:
-            canonical = str(e) if not isinstance(e, bool) else ("true" if e else "false")
-            part = canonical
-            if canonical in descs and descs[canonical]:
-                part += f": {descs[canonical]}"
-                if canonical in alias_map and alias_map[canonical]:
-                    part += f" (aliases: {', '.join(alias_map[canonical])})"
-            elif canonical in alias_map and alias_map[canonical]:
-                part += f" (aliases: {', '.join(alias_map[canonical])})"
-            lines.append(f"# - {part}")
-        lines.append(main_line)
-        return "\n".join(lines)
+            formatted_value = format_enum_value(enum_list[0])
+            return f"{formatted_value}{comment}{title}{description}{default_value}{example}"
+        else:
+            formatted_values = "| ".join(format_enum_value(e) for e in enum_list)
+            main_line = (
+                f"OPTIONS: {formatted_values}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+            )
+            if not has_enum_metadata:
+                return main_line
+            # OPTIONS with descriptions: build per-value comment lines
+            parts = []
+            for e in enum_list:
+                val_str = format_enum_value(e)
+                canonical = str(e) if not isinstance(e, bool) else ("true" if e else "false")
+                line = val_str
+                if canonical in descs and descs[canonical]:
+                    line += f" ({descs[canonical]}"
+                    if canonical in alias_map and alias_map[canonical]:
+                        line += f"; aliases: {', '.join(alias_map[canonical])}"
+                    line += ")"
+                elif canonical in alias_map and alias_map[canonical]:
+                    line += f" (aliases: {', '.join(alias_map[canonical])})"
+                parts.append(f"{line}")
+            desc_comment = f"{self.comment_prefix} OPTIONS with descriptions: {', '.join(parts)}"
+            return f"{desc_comment}\n{main_line}"
 
     def process_const(self, const_value: dict[str, Any]) -> str:
         """
@@ -300,31 +324,44 @@ class YAMLFormatter(BaseFormatter):
     def _format_string_constraints_jsonish(self, type_value: dict[str, Any]) -> str:
         """Format string constraints like JSONish: length, PATTERN, FORMAT."""
         parts = []
+        # Check minLength/maxLength based on metadata_inclusion config
+        include_min_length = self._should_include_metadata("minLength")
+        include_max_length = self._should_include_metadata("maxLength")
         min_len = type_value.get("minLength")
         max_len = type_value.get("maxLength")
-        if min_len is not None and max_len is not None:
+        if (
+            include_min_length
+            and include_max_length
+            and min_len is not None
+            and max_len is not None
+        ):
             parts.append(f"({min_len}-{max_len} chars)")
-        elif min_len is not None:
+        elif include_min_length and min_len is not None:
             parts.append(f"(>= {min_len} chars)")
-        elif max_len is not None:
+        elif include_max_length and max_len is not None:
             parts.append(f"(<= {max_len} chars)")
-        if type_value.get("pattern"):
+        # Check pattern based on metadata_inclusion config
+        if type_value.get("pattern") and self._should_include_metadata("pattern"):
             parts.append(f"(PATTERN: {type_value['pattern']})")
-        if type_value.get("format"):
-            parts.append(f"(FORMAT: {type_value['format']})")
-        elif type_value.get("_format"):
-            parts.append(f"(FORMAT: {type_value['_format']})")
+        # Check format based on metadata_inclusion config
+        if self._should_include_metadata("format"):
+            if type_value.get("format"):
+                parts.append(f"(FORMAT: {type_value['format']})")
+            elif type_value.get("_format"):
+                parts.append(f"(FORMAT: {type_value['_format']})")
         return " ".join(parts)
 
     def _format_number_range_jsonish(self, type_value: dict[str, Any]) -> str:
         """Format number range like JSONish: (min to max), (>= min), (<= max)."""
+        include_min = self._should_include_metadata("minimum")
+        include_max = self._should_include_metadata("maximum")
         min_val = type_value.get("minimum")
         max_val = type_value.get("maximum")
-        if min_val is not None and max_val is not None:
+        if include_min and include_max and min_val is not None and max_val is not None:
             return f"({min_val} to {max_val})"
-        if min_val is not None:
+        if include_min and min_val is not None:
             return f"(>= {min_val})"
-        if max_val is not None:
+        if include_max and max_val is not None:
             return f"(<= {max_val})"
         return ""
 
@@ -382,15 +419,28 @@ class YAMLFormatter(BaseFormatter):
                 type_str = "list[Any]"
 
             if self.include_metadata:
+                # Check uniqueItems based on metadata_inclusion config
                 unique_items = type_value.get("_uniqueItems") or type_value.get("uniqueItems")
-                unique_str = "UNIQUE " if unique_items else ""
+                unique_str = "UNIQUE "
+                if unique_items and self._should_include_metadata("uniqueItems"):
+                    unique_str = "UNIQUE "
+                else:
+                    unique_str = ""
+                # Check minItems/maxItems based on metadata_inclusion config
+                include_min_items = self._should_include_metadata("minItems")
+                include_max_items = self._should_include_metadata("maxItems")
                 min_i = type_value.get("minItems")
                 max_i = type_value.get("maxItems")
-                if min_i is not None and max_i is not None:
+                if (
+                    include_min_items
+                    and include_max_items
+                    and min_i is not None
+                    and max_i is not None
+                ):
                     type_str = f"{type_str} ({min_i}-{max_i} {unique_str}items)".strip()
-                elif min_i is not None:
+                elif include_min_items and min_i is not None:
                     type_str = f"{type_str} (>= {min_i} {unique_str}items)".strip()
-                elif max_i is not None:
+                elif include_max_items and max_i is not None:
                     type_str = f"{type_str} (<= {max_i} {unique_str}items)".strip()
                 elif unique_str:
                     type_str = f"{type_str} ({unique_str}items)".strip()
@@ -426,25 +476,44 @@ class YAMLFormatter(BaseFormatter):
         if not self.include_metadata:
             return representation
 
+        # Check if this is an enum that already has metadata inline (from process_enum)
+        # If representation already contains a comment, skip adding metadata to avoid duplication
+        is_enum_with_metadata = (
+            isinstance(value, dict) and "enum" in value and "#" in representation
+        )
+
         title, description, default_value, example = self._get_title_description_default_value(
             value
         )
         parts = []
         if title:
             parts.append(title.strip())
-        if description:
+        if description and not is_enum_with_metadata:
+            # Skip description for enums that already have it inline
             parts.append(description.strip())
-        if default_value:
+        if default_value and not is_enum_with_metadata:
             parts.append(default_value.strip())
-        if example:
+        if example and not is_enum_with_metadata:
             parts.append(example.strip())
 
         # Base METADATA_MAP-style parts for pattern, format, etc. (when not in type)
+        # For enums with inline metadata, exclude description to avoid duplication
         available_metadata = self.get_available_metadata(value)
         if available_metadata:
-            metadata_parts = self.format_metadata_parts(value)
-            if metadata_parts:
-                parts.extend(metadata_parts)
+            # For enums, exclude description from metadata to avoid duplication
+            filtered_metadata = [
+                m for m in available_metadata if not (is_enum_with_metadata and m == "description")
+            ]
+            if filtered_metadata:
+                metadata_parts = self.format_metadata_parts(value)
+                if metadata_parts:
+                    # Filter out description part for enums
+                    filtered_parts = [
+                        p
+                        for p in metadata_parts
+                        if not (is_enum_with_metadata and "description" in p.lower())
+                    ]
+                    parts.extend(filtered_parts)
 
         if not parts:
             return representation
