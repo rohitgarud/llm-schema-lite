@@ -13,6 +13,7 @@ from .exceptions import ConversionError, UnsupportedModelError
 from .formatters import FormatterConfig, JSONishFormatter, TypeScriptFormatter, YAMLFormatter
 from .formatters.base import BaseFormatter
 from .parsers import BaseParser, JSONParser, YAMLParser
+from .parsers.schema_parser import parse_with_schema
 from .schema_enrichment import enrich_schema_with_enum_metadata
 from .validators import JSONValidator, YAMLValidator
 
@@ -283,7 +284,8 @@ def loads(
     mode: Literal["json", "yaml"] = "json",
     repair: bool = True,
     parse_config: ParseConfig | None = None,
-) -> dict[str, Any]:
+    schema: type[BaseModel] | dict[str, Any] | str | None = None,
+) -> dict[str, Any] | tuple[dict[str, Any] | BaseModel, dict[str, Any]]:
     """
     Parse structured text (JSON or YAML) with robust error handling and content extraction.
 
@@ -292,39 +294,57 @@ def loads(
     handles various LLM response formats including markdown code blocks, embedded JSON/YAML,
     and text with explanatory content.
 
+    When parse_config.partial=True and schema is provided, enables partial extraction mode
+    to extract valid fields even when some fields fail validation.
+
     Args:
         text: The text content to parse
         mode: The parsing mode - "json" or "yaml"
         repair: Whether to attempt repair for malformed content
-        parse_config: Configuration for coercion behavior (optional)
+        parse_config: Configuration for coercion behavior (optional, includes partial flag)
+        schema: Pydantic BaseModel, JSON schema dict, or JSON schema string
 
     Returns:
-        Parsed dictionary content
+        Tuple of (parsed_result, metadata)
+        - parsed_result: Parsed dictionary or model instance
+        - metadata: Dict with failed_fields info (empty if not partial or all fields valid)
 
     Raises:
-        ConversionError: If parsing fails and repair is disabled or unsuccessful
+        ConversionError: If parsing fails and repair is disabled or unsuccessful,
+                        or if partial=True and required fields fail validation
 
     Examples:
         >>> # Parse JSON with automatic extraction
-        >>> data = loads('{"name": "John", "age": 30}')
+        >>> data, metadata = loads('{"name": "John", "age": 30}')
 
         >>> # Parse JSON from markdown with extra text
-        >>> data = loads('Here is the result: ```json\\n{"name": "Jane", "age": 25}\\n```')
+        >>> data, metadata = loads(
+        ...     'Here is the result: ```json\\n{"name": "Jane", "age": 25}\\n```'
+        ... )
 
-        >>> # Parse JSON embedded in explanatory text
-        >>> data = loads('The user data is: {"name": "Bob", "age": 35} and that\'s all.')
-
-        >>> # Parse YAML with automatic extraction
-        >>> data = loads('```yaml\\nname: Alice\\nage: 28\\n```', mode="yaml")
-
-        >>> # Parse with repair disabled
-        >>> data = loads('{"name": "John"}', repair=False)
-
-        >>> # Parse with coercion disabled
-        >>> data = loads('{"name": "John"}', parse_config=ParseConfig(allow_coercion=False))
+        >>> # Parse with partial extraction using ParseConfig
+        >>> from pydantic import BaseModel
+        >>> from llm_schema_lite import ParseConfig
+        >>> class Person(BaseModel):
+        ...     name: str
+        ...     age: int
+        ...     email: str | None = None
+        >>> data, metadata = loads(
+        ...     '{"name": "Alice", "age": "invalid", "email": "alice@example.com"}',
+        ...     parse_config=ParseConfig(partial=True),
+        ...     schema=Person
+        ... )
     """
     if not text or not text.strip():
         raise ConversionError("Empty or whitespace-only text provided")
+
+    # Create parse_config if not provided
+    if parse_config is None:
+        parse_config = ParseConfig()
+
+    # If a schema is provided, delegate to schema-aware parsing (via parsers)
+    if schema is not None:
+        return parse_with_schema(text.strip(), schema, parse_config)
 
     # Select parser based on mode
     parser: BaseParser
@@ -336,7 +356,9 @@ def loads(
         raise ConversionError(f"Unsupported mode: {mode}. Supported modes: 'json', 'yaml'")
 
     # Delegate parsing to the selected parser
-    return parser.parse(text.strip(), repair)
+    result = parser.parse(text.strip(), repair)
+    # Return just the dict for backward compatibility
+    return result
 
 
 def validate(

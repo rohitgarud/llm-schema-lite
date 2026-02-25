@@ -7,7 +7,13 @@ Reduce token usage by 60-85% while preserving essential type information.
 __version__ = "0.6.1"
 
 from .coercion import CoercionMetadata, ParseConfig, coerce_to_schema, coerce_value
-from .core import SchemaLite, coerce, loads, simplify_schema, validate
+from .core import (
+    SchemaLite,
+    coerce,
+    loads,
+    simplify_schema,
+    validate,
+)
 from .exceptions import (
     ConversionError,
     SchemaLiteError,
@@ -20,6 +26,12 @@ from .formatters import (
     JSONishFormatter,
     TypeScriptFormatter,
     YAMLFormatter,
+)
+from .parsers import SchemaParser
+from .parsers.schema_parser import (
+    _build_result,
+    _get_json_schema,
+    _validate_field,
 )
 from .validators import BaseValidator, JSONValidator, YAMLValidator
 
@@ -42,6 +54,8 @@ __all__ = [
     "JSONishFormatter",
     "TypeScriptFormatter",
     "YAMLFormatter",
+    # Parsers
+    "SchemaParser",
     # Validators
     "BaseValidator",
     "JSONValidator",
@@ -51,4 +65,8 @@ __all__ = [
     "UnsupportedModelError",
     "ConversionError",
     "ValidationError",
+    # Helper functions (for testing)
+    "_get_json_schema",
+    "_validate_field",
+    "_build_result",
 ]
