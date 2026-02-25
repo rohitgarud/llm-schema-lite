@@ -47,6 +47,15 @@ repos:
     hooks:
       - id: gitlint
 
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest
+        language: system
+        pass_filenames: false
+        args: ["-x"]
+
   - repo: https://github.com/opensource-nepal/commitlint
     rev: v1.2.0
     hooks:
