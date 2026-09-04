@@ -23,7 +23,7 @@ from pydantic import TypeAdapter
 from pydantic.fields import FieldInfo
 
 # Use llm_schema_lite for schema simplification and robust parsing
-from llm_schema_lite import loads, simplify_schema
+from llm_schema_lite import FormatterConfig, loads, simplify_schema
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,8 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         use_native_function_calling: Whether to use native function calling
         output_mode: Output format mode (JSON, JSONISH, or YAML)
         include_input_schemas: Whether to include simplified schemas for complex input types
+        max_recursion_depth: How many times a recursive $ref's body is rendered before
+            it is replaced by a placeholder, forwarded to FormatterConfig. Default 2.
     """
 
     def __init__(
@@ -68,12 +70,14 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         use_native_function_calling: bool = True,
         output_mode: OutputMode = OutputMode.JSONISH,
         include_input_schemas: bool = True,
+        max_recursion_depth: int = 2,
     ):
         super().__init__(
             callbacks=callbacks, use_native_function_calling=use_native_function_calling
         )
         self.output_mode = output_mode
         self.include_input_schemas = include_input_schemas
+        self.max_recursion_depth = max_recursion_depth
 
     # ==================== Core Call Methods ====================
 
@@ -253,7 +257,12 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                 # Simplify using llm-schema-lite
                 format_type_literal: Literal["jsonish", "typescript", "yaml"] = format_type  # type: ignore
                 simplified = simplify_schema(
-                    field_type, format_type=format_type_literal, include_metadata=False
+                    field_type,
+                    config=FormatterConfig(
+                        include_metadata=False,
+                        max_recursion_depth=self.max_recursion_depth,
+                    ),
+                    format_type=format_type_literal,
                 )
                 schema_str = simplified.to_string()
 

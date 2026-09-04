@@ -6,7 +6,10 @@ import pytest
 
 pytest.importorskip("dspy", minversion="3.3.1")
 
-from llm_schema_lite.dspy_integration import OutputMode  # noqa: E402
+import dspy  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
 from tests.dspy_helpers import (  # noqa: E402
     QA,
     Extract,
@@ -169,3 +172,50 @@ class TestOutputRequirements:
         assert (
             make_adapter(OutputMode.YAML).user_message_output_requirements(QA) == EXPECTED_QA_YAML
         )
+
+
+class RecNode(BaseModel):
+    """Self-referencing model local to this suite (lsl-2026-09-04-014).
+
+    Per ``tests/dspy_helpers.py:13-18`` the DSPy suite defines its own models rather
+    than importing recursive fixtures from ``tests/conftest.py``.
+    """
+
+    name: str
+    children: list[RecNode] = []
+
+
+RecNode.model_rebuild()
+
+
+class RecOutput(dspy.Signature):
+    """Produce a recursive tree from a query."""
+
+    query: str = dspy.InputField()
+    tree: RecNode = dspy.OutputField()
+
+
+class TestMaxRecursionDepthForwarding:
+    """Tier 2 (anchor): StructuredOutputAdapter.max_recursion_depth reaches simplify_schema."""
+
+    def test_recursive_output_field_prompt_contains_placeholder(self):
+        """AC4: a recursive output field renders the compact placeholder, not raw $defs.
+
+        Before phases 1-6 landed, the adapter's `except Exception` at :265 swallowed the
+        ConversionError from a recursive model and silently fell back to the full verbose
+        JSON schema (which contains a literal `"$defs"` key). A test that only checks for
+        the absence of a traceback would pass before this change; the `$defs` assertion is
+        what proves the compact rendering path is actually being taken.
+        """
+        adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH, max_recursion_depth=2)
+        out = adapter.format_field_structure(RecOutput)
+        assert "recursive:" in out
+        assert '"$defs"' not in out
+
+    def test_adapter_max_recursion_depth_kwarg_is_forwarded(self):
+        """Two adapters with different max_recursion_depth render different prompts."""
+        shallow = StructuredOutputAdapter(output_mode=OutputMode.JSONISH, max_recursion_depth=1)
+        deep = StructuredOutputAdapter(output_mode=OutputMode.JSONISH, max_recursion_depth=3)
+        out_shallow = shallow.format_field_structure(RecOutput)
+        out_deep = deep.format_field_structure(RecOutput)
+        assert out_shallow != out_deep
