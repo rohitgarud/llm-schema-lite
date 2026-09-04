@@ -616,6 +616,42 @@ class DeepNested(BaseModel):
     level_b: LevelB
 
 
+# Recursive model fixtures (lsl-2026-09-04-014)
+class TreeNode(BaseModel):
+    """Directly self-referencing model (recursive list)."""
+
+    name: str
+    children: list["TreeNode"] = []
+
+
+class MutualA(BaseModel):
+    """Mutually recursive pair: A -> B -> A."""
+
+    name: str
+    b: "MutualB | None" = None
+
+
+class MutualB(BaseModel):
+    """Mutually recursive pair: B -> A -> B."""
+
+    tag: str
+    a: "MutualA | None" = None
+
+
+class OptionalTree(BaseModel):
+    """Self-referencing model through Optional."""
+
+    value: str
+    left: "OptionalTree | None" = None
+    right: "OptionalTree | None" = None
+
+
+TreeNode.model_rebuild()
+MutualA.model_rebuild()
+MutualB.model_rebuild()
+OptionalTree.model_rebuild()
+
+
 class UnionHeavy(BaseModel):
     """Model with multiple union types."""
 
@@ -1552,6 +1588,9 @@ def all_pydantic_models():
         ("NestedReferences", NestedReferences),
         ("AdvancedFeatures", AdvancedFeatures),
         ("DeepNested", DeepNested),
+        ("TreeNode", TreeNode),
+        ("MutualA", MutualA),
+        ("OptionalTree", OptionalTree),
         ("UnionHeavy", UnionHeavy),
         ("AllOfLike", AllOfLike),
         ("ListAndDict", ListAndDict),
