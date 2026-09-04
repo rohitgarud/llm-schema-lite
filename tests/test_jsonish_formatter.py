@@ -9,17 +9,22 @@ from pydantic import BaseModel, Field
 
 from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
+from llm_schema_lite.schema_normalization import auto_title_for_key
 from tests.conftest import (
     EMPTY_SCHEMA,
+    Address,
     ComplexTypes,
     ConstrainedFormatterModel,
+    ModelWithAlias,
     ModelWithPriorityMetadata,
+    Order,
     OrderedFieldsModel,
     PersonWithAddress,
     Product,
     RequiredOptionalModel,
     SimpleFormatterModel,
     WithFieldDescriptions,
+    WithTitleDescription,
 )
 from tests.formatter_helpers import (
     assert_required_optional_consistent,
@@ -38,7 +43,7 @@ def test_jsonish_formatter_produces_valid_output():
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
-    assert_schema_info_comment_presence(result, include_metadata=True)
+    assert_schema_info_comment_presence(result, include_metadata=True, schema=schema)
 
     # Verify asterisk notation comment is present (schema has required fields)
     assert "Fields marked with * are required" in result
@@ -52,7 +57,7 @@ def test_jsonish_formatter_without_metadata():
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
-    assert_schema_info_comment_presence(result, include_metadata=False)
+    assert_schema_info_comment_presence(result, include_metadata=False, schema=schema)
 
     # Verify title comment is not included when metadata is off
     assert "//Title:" not in result
@@ -1123,6 +1128,61 @@ def test_jsonish_formatter_with_schema_title():
     assert "//Title:" in result or "User Profile" in result
 
 
+def test_no_auto_generated_property_titles_jsonish():
+    """AC-1: JSONish drops auto-generated per-field titles from the output."""
+    for model in (Address, SimpleFormatterModel, ModelWithAlias):
+        schema = model.model_json_schema()
+        formatter = JSONishFormatter(schema, include_metadata=True)
+        result = formatter.transform_schema()
+
+        for key in schema.get("properties", {}):
+            assert f"{formatter.comment_prefix} {auto_title_for_key(key)}:" not in result
+
+
+def test_docstring_model_omits_title_header():
+    """AC-3: a docstring-derived identifier-shaped root title is dropped, but a title
+    with no description, or a user-supplied non-identifier title, survives."""
+
+    class LocalNoDescriptionModel(BaseModel):
+        name: str
+
+    schema_with_docstring = SimpleFormatterModel.model_json_schema()
+    formatter = JSONishFormatter(schema_with_docstring, include_metadata=True)
+    result = formatter.transform_schema()
+    assert "//Title: SimpleFormatterModel" not in result
+
+    schema_no_description = LocalNoDescriptionModel.model_json_schema()
+    formatter = JSONishFormatter(schema_no_description, include_metadata=True)
+    result = formatter.transform_schema()
+    assert "//Title: LocalNoDescriptionModel" in result
+
+    schema_user_title = WithTitleDescription.model_json_schema()
+    formatter = JSONishFormatter(schema_user_title, include_metadata=True)
+    result = formatter.transform_schema()
+    assert "//Title: User Profile" in result
+
+
+def test_user_supplied_title_and_description_render_once_jsonish():
+    """AC-2: a user-supplied field title and description each render exactly once."""
+    schema = WithFieldDescriptions.model_json_schema()
+    formatter = JSONishFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+
+    assert result.count("Full Name") == 1
+    assert result.count("The user's full name") == 1
+
+
+def test_metadata_inclusion_title_false_suppresses_title_jsonish():
+    """The ``title`` metadata_inclusion lever suppresses field titles, not descriptions."""
+    schema = WithFieldDescriptions.model_json_schema()
+    config = FormatterConfig(include_metadata=True, metadata_inclusion={"title": False})
+    formatter = JSONishFormatter(schema, config=config)
+    result = formatter.transform_schema()
+
+    assert "Full Name" not in result
+    assert "The user's full name" in result
+
+
 def test_jsonish_formatter_with_full_featured_model():
     """Comprehensive test with FullFeaturedModel (kitchen sink)."""
     from tests.conftest import FullFeaturedModel
@@ -1320,3 +1380,63 @@ def test_remove_quotes_does_not_unescape() -> None:
     result = formatter._remove_quotes('  "p*": "a\\\\b and \\"c\\" end",')
 
     assert result == '  p*: a\\\\b and \\"c\\" end,'
+
+
+def test_raw_array_schema_no_empty_comment_marker() -> None:
+    """Arrays with no title/description/range/default/example must not emit a bare `//`.
+
+    ``JSONishFormatter.process_types`` used to assign ``comment`` unconditionally on the
+    array branches, so a plain array (no metadata at all) rendered a trailing bare `//`
+    or `//,` marker with nothing after it.
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "empty": {"type": "array"},
+        },
+    }
+    formatter = JSONishFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+
+    assert "tags: string []" in result
+    assert "empty: []" in result
+    for line in result.splitlines():
+        if "tags: string []" in line or line.strip().startswith("empty: []"):
+            assert "//" not in line
+
+
+def test_no_empty_comment_marker_across_all_models_jsonish(all_pydantic_models) -> None:
+    """No rendered JSONish line should end in a bare `//` comment marker.
+
+    Sweeps every registered Pydantic model. This test is expected to start GREEN at
+    HEAD, because arrays on real Pydantic models always carry an auto-generated title
+    today -- it becomes load-bearing once ticket 003's Phase 3 drops those auto titles,
+    at which point a regression here would mean the JSONish array branches emitted a
+    marker with no metadata behind it. Starting green is intentional (see plan Phase 2).
+    """
+    # A bare marker is `//` with nothing (or only a trailing comma) after it.
+    bare_marker_pattern = re.compile(r"//\s*,?\s*$")
+
+    for _name, model in all_pydantic_models:
+        schema = model.model_json_schema()
+        formatter = JSONishFormatter(schema, include_metadata=True)
+        result = formatter.transform_schema()
+
+        for line in result.splitlines():
+            assert not bare_marker_pattern.search(
+                line
+            ), f"{_name}: bare comment marker in line: {line!r}"
+
+
+def test_order_jsonish_token_count_decreases() -> None:
+    """Dropping auto-generated titles shrinks the JSONish token count for ``Order``.
+
+    HEAD (pre-ticket-003) measured 482 tokens; the fix is expected to land at 423.
+    The assertion is strict-lower-than-HEAD rather than pinned to the exact number so
+    unrelated future formatting tweaks do not spuriously fail this test.
+    """
+    pytest.importorskip("tiktoken")
+    from llm_schema_lite import simplify_schema
+
+    assert simplify_schema(Order).token_count() < 482

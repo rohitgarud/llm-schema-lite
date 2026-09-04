@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from llm_schema_lite.schema_normalization import normalize_schema_titles
+
 _FIELD_LINE_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)(\*)?\s*:")
 
 
@@ -144,7 +146,8 @@ def assert_schema_title_comment_consistent(
 
     # JSONish uses `//Title:`, base formatters use `// Title:` / `# Title:`.
     has_title_comment = f"{comment_prefix}Title:" in result or f"{comment_prefix} Title:" in result
-    expected = bool(include_metadata and schema.get("title"))
+    normalized_schema = normalize_schema_titles(schema)
+    expected = bool(include_metadata and normalized_schema.get("title"))
     assert has_title_comment == expected, (
         f"Title comment presence mismatch: expected={expected} actual={has_title_comment}. "
         f"Snippet: {result[:200]!r}"
@@ -174,15 +177,31 @@ def assert_required_optional_consistent(result: str, schema: dict[str, Any]) -> 
         )
 
 
-def assert_schema_info_comment_presence(result: str, include_metadata: bool) -> None:
+def assert_schema_info_comment_presence(
+    result: str, include_metadata: bool, schema: dict[str, Any] | None = None
+) -> None:
     """Assert presence/absence of schema-level info comments based on flag.
 
     JSONishFormatter currently includes the "Fields marked with * are required"
     comment whenever the schema has required fields, even when include_metadata=False.
     So this helper only checks schema *info* (e.g. `//Title:`), not required-field comments.
+
+    When `schema` is provided, the expected title-comment presence is computed from
+    its *normalized* title (auto-generated titles stripped) combined with
+    `include_metadata`, matching `assert_schema_title_comment_consistent`. When
+    `schema` is omitted, behaviour is byte-identical to before this parameter existed.
     """
 
     has_title_comment = "//Title:" in result
+    if schema is not None:
+        normalized_schema = normalize_schema_titles(schema)
+        expected = bool(include_metadata and normalized_schema.get("title"))
+        assert has_title_comment == expected, (
+            f"Title comment presence mismatch: expected={expected} actual={has_title_comment}. "
+            f"Snippet: {result[:200]!r}"
+        )
+        return
+
     if include_metadata:
         assert has_title_comment, (
             "Expected schema title comment when include_metadata=True. "

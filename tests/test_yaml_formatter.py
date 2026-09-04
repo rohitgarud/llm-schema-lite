@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.yaml_formatter import YAMLFormatter
+from llm_schema_lite.schema_normalization import auto_title_for_key
 from tests.conftest import (
     ALL_OF_SCHEMA,
     ANY_OF_SCHEMA,
@@ -13,6 +15,7 @@ from tests.conftest import (
     DEPENDENCY_SCHEMA,
     EMPTY_SCHEMA,
     ONE_OF_SCHEMA,
+    Address,
     AllOfLike,
     ArrayMinMaxItems,
     ArrayOfRefsModel,
@@ -27,15 +30,18 @@ from tests.conftest import (
     IntEnumModel,
     LiteralSingle,
     LiteralUnion,
+    ModelWithAlias,
     ObjectAdditionalPropsFalse,
     ObjectRequiredOnly,
     ObjectWithDefaults,
+    Order,
     OrderedFieldsModel,
     PatternConstraints,
     PersonWithAddress,
     RequiredOptionalModel,
     Role,
     SimpleFormatterModel,
+    SingleConstInt,
     StringFormatEmail,
     StringFormatUri,
     StringPattern,
@@ -271,6 +277,17 @@ def test_yaml_schema_title_when_metadata_on():
     # Title should appear as a comment
     if schema.get("title"):
         assert f"# {schema['title']}" in result or f"# Title: {schema['title']}" in result
+
+
+def test_no_auto_generated_property_titles_yaml():
+    """AC-1: YAML drops auto-generated per-field titles from the output."""
+    for model in (Address, SimpleFormatterModel, ModelWithAlias):
+        schema = model.model_json_schema()
+        formatter = YAMLFormatter(schema, include_metadata=True)
+        result = formatter.transform_schema()
+
+        for key in schema.get("properties", {}):
+            assert f"{formatter.comment_prefix} {auto_title_for_key(key)}:" not in result
 
 
 def test_yaml_format_scaffolding():
@@ -978,3 +995,110 @@ def test_yaml_consistent_asterisk_usage():
     # Optional field should not have any marker (default optional_marker="")
     assert "optional_field:" in result
     assert "optional_field*:" not in result
+
+
+def test_user_supplied_title_and_description_render_once_yaml():
+    """AC-2: a user-supplied field title and description each render exactly once.
+
+    ``result`` is un-escaped first: the rendered value is a single-quoted YAML
+    scalar, so PyYAML doubles the apostrophe in ``The user's full name``.
+    """
+    schema = WithFieldDescriptions.model_json_schema()
+    formatter = YAMLFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+    unescaped = result.replace("''", "'")
+
+    assert result.count("Full Name") == 1
+    assert unescaped.count("The user's full name") == 1
+
+
+def test_metadata_inclusion_title_false_suppresses_title_yaml():
+    """The ``title`` metadata_inclusion lever suppresses field titles, not descriptions."""
+    schema = WithFieldDescriptions.model_json_schema()
+    config = FormatterConfig(include_metadata=True, metadata_inclusion={"title": False})
+    formatter = YAMLFormatter(schema, config=config)
+    result = formatter.transform_schema()
+
+    assert "Full Name" not in result
+    assert "The user's full name" in result.replace("''", "'")
+
+
+def test_order_yaml_product_name_appears_exactly_twice():
+    """``Product name`` renders once per genuinely distinct property line.
+
+    ``Order`` yields two such lines -- the ``$defs``-hoisted ``Product.name`` line and
+    the inlined one -- so the description must appear exactly twice overall and never
+    twice on the same line.
+    """
+    schema = Order.model_json_schema()
+    formatter = YAMLFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+
+    assert result.count("Product name") == 2, result
+    for line in result.splitlines():
+        assert line.count("Product name") <= 1, f"duplicated on one line: {line!r}"
+
+
+def test_yaml_add_metadata_handles_non_str_representation():
+    """``add_metadata`` must tolerate a non-``str`` representation (``SingleConstInt``).
+
+    The idempotence guard calls ``.endswith`` on the representation; ``const``
+    schemas pass the raw ``int`` value through, so the guard must be
+    ``isinstance``-checked.
+    """
+    schema = SingleConstInt.model_json_schema()
+    formatter = YAMLFormatter(schema, include_metadata=True)
+
+    assert formatter.add_metadata(1, {"const": 1}) is not None  # type: ignore[arg-type]
+
+    result = formatter.transform_schema()
+    assert "version" in result
+
+
+def _iter_yaml_comment_lines(result: str) -> list[str]:
+    """Yield logical (un-wrapped) lines of a rendered YAML schema.
+
+    PyYAML folds long single-quoted scalars across physical lines, so a raw
+    ``splitlines()`` can end a line on ``#`` purely because of wrapping. Loading
+    the document rejoins each scalar, giving the logical lines the formatter
+    actually produced. Top-level comment lines are added back verbatim.
+    """
+    lines = [line for line in result.splitlines() if line.lstrip().startswith("#")]
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for item in node.values():
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, str):
+            lines.extend(node.splitlines())
+
+    walk(yaml.safe_load(result))
+    return lines
+
+
+def test_no_empty_comment_marker_across_all_models_yaml(all_pydantic_models) -> None:
+    """No rendered YAML line should carry an empty trailing ``#`` marker."""
+    for _name, model in all_pydantic_models:
+        schema = model.model_json_schema()
+        formatter = YAMLFormatter(schema, include_metadata=True)
+        result = formatter.transform_schema()
+
+        for line in _iter_yaml_comment_lines(result):
+            assert not line.endswith("# "), f"{_name}: trailing bare `# ` in line: {line!r}"
+            assert not line.endswith("#"), f"{_name}: trailing bare `#` in line: {line!r}"
+
+
+def test_order_yaml_token_count_decreases() -> None:
+    """Dropping auto-generated titles shrinks the YAML token count for ``Order``.
+
+    HEAD (pre-ticket-003) measured 2032 tokens; the fix is expected to land at 1129.
+    The assertion is strict-lower-than-HEAD rather than pinned to the exact number so
+    unrelated future formatting tweaks do not spuriously fail this test.
+    """
+    pytest.importorskip("tiktoken")
+    from llm_schema_lite import simplify_schema
+
+    assert simplify_schema(Order, format_type="yaml").token_count() < 2032

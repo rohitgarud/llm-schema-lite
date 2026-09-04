@@ -58,16 +58,10 @@ class TypeScriptFormatter(BaseFormatter):
         if not self.include_metadata:
             return representation
 
-        available_metadata = self.get_available_metadata(value)
-        if not available_metadata:
+        metadata_parts = [p for p in self.format_metadata_parts(value) if p]
+        if not metadata_parts:
             return representation
 
-        # Filter metadata based on metadata_inclusion config
-        filtered_metadata = [k for k in available_metadata if self._should_include_metadata(k)]
-        if not filtered_metadata:
-            return representation
-
-        metadata_parts = self.format_metadata_parts(value)
         return f"{representation}  // {', '.join(metadata_parts)}"
 
     def process_additional_properties(

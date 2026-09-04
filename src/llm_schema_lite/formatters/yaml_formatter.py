@@ -72,7 +72,11 @@ class YAMLFormatter(BaseFormatter):
         description = ""
         default_value = ""
         example = ""
-        if "title" in value and value["title"] is not None:
+        if (
+            "title" in value
+            and value["title"] is not None
+            and self._should_include_metadata("title")
+        ):
             title = f" {value['title']}:"
         if "description" in value and value["description"] is not None:
             description = f" {value['description']}"
@@ -496,28 +500,21 @@ class YAMLFormatter(BaseFormatter):
         if example and not is_enum_with_metadata:
             parts.append(example.strip())
 
-        # Base METADATA_MAP-style parts for pattern, format, etc. (when not in type)
-        # For enums with inline metadata, exclude description to avoid duplication
+        # Base METADATA_MAP-style parts for pattern, format, etc. (when not in type).
+        # ``title``/``description`` are already supplied above by
+        # ``_get_title_description_default_value``; METADATA_MAP must never re-supply them.
         available_metadata = self.get_available_metadata(value)
         if available_metadata:
-            # For enums, exclude description from metadata to avoid duplication
-            filtered_metadata = [
-                m for m in available_metadata if not (is_enum_with_metadata and m == "description")
-            ]
+            filtered_metadata = [m for m in available_metadata if m not in ("title", "description")]
             if filtered_metadata:
-                metadata_parts = self.format_metadata_parts(value)
-                if metadata_parts:
-                    # Filter out description part for enums
-                    filtered_parts = [
-                        p
-                        for p in metadata_parts
-                        if not (is_enum_with_metadata and "description" in p.lower())
-                    ]
-                    parts.extend(filtered_parts)
+                parts.extend(self.format_metadata_parts(value, exclude=("title", "description")))
 
         if not parts:
             return representation
-        return f"{representation}  # {', '.join(parts)}"
+        suffix = f"  # {', '.join(parts)}"
+        if isinstance(representation, str) and representation.endswith(suffix):
+            return representation
+        return f"{representation}{suffix}"
 
     def process_properties(self, properties: dict[str, Any]) -> dict[str, Any]:
         """

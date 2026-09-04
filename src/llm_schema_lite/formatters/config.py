@@ -18,6 +18,7 @@ DEFAULT_METADATA_INCLUSION: dict[str, bool] = {
     "uniqueItems": True,
     "const": True,
     "default": True,
+    "title": True,
     # Examples - excluded by default (False) for token savings
     "examples": False,
 }

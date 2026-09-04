@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
+from ..schema_normalization import normalize_schema_titles
 from .config import FormatterConfig
 
 
@@ -35,6 +36,7 @@ class BaseFormatter(ABC):
 
     # Common metadata mapping for all formatters
     METADATA_MAP: dict[str, Callable[[Any], str]] = {
+        "title": lambda v: str(v),
         "default": lambda v: f"(defaults to {v})",
         "description": lambda v: str(v),
         "pattern": lambda v: f"pattern: {v}",
@@ -77,6 +79,7 @@ class BaseFormatter(ABC):
             config: FormatterConfig for customizing formatter behavior.
             include_metadata: Deprecated. Use config.include_metadata instead.
         """
+        schema = normalize_schema_titles(schema)
         self.schema = schema
         # Handle config - use provided config or create default
         self.config = config if config is not None else FormatterConfig()
@@ -302,12 +305,17 @@ class BaseFormatter(ABC):
 
         return available
 
-    def format_metadata_parts(self, value: dict[str, Any]) -> list[str]:
+    def format_metadata_parts(
+        self, value: dict[str, Any], exclude: tuple[str, ...] = ()
+    ) -> list[str]:
         """
         Format metadata parts for a property.
 
         Args:
             value: The field definition containing metadata.
+            exclude: Metadata keys to omit from the result even if otherwise
+                available and included by config (e.g. keys already rendered
+                elsewhere by the caller, to avoid duplication).
 
         Returns:
             List of formatted metadata strings.
@@ -315,7 +323,9 @@ class BaseFormatter(ABC):
         available_metadata = self.get_available_metadata(value)
 
         # Filter available metadata based on metadata_inclusion config
-        filtered_metadata = [k for k in available_metadata if self._should_include_metadata(k)]
+        filtered_metadata = [
+            k for k in available_metadata if self._should_include_metadata(k) and k not in exclude
+        ]
 
         formatted_parts = []
 

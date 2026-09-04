@@ -6,7 +6,9 @@ import re
 
 import pytest
 
+from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.typescript_formatter import TypeScriptFormatter
+from llm_schema_lite.schema_normalization import auto_title_for_key
 from tests.conftest import (
     ALL_OF_SCHEMA,
     ANY_OF_SCHEMA,
@@ -14,6 +16,7 @@ from tests.conftest import (
     DEPENDENCY_SCHEMA,
     EMPTY_SCHEMA,
     ONE_OF_SCHEMA,
+    Address,
     AllOfLike,
     ArrayMinMaxItems,
     ArrayOfRefsModel,
@@ -28,12 +31,14 @@ from tests.conftest import (
     IntEnumModel,
     LiteralSingle,
     LiteralUnion,
+    ModelWithAlias,
     ObjectAdditionalPropsFalse,
     ObjectRequiredOnly,
     ObjectWithDefaults,
     OrderedFieldsModel,
     PatternConstraints,
     PersonWithAddress,
+    Product,
     RequiredOptionalModel,
     Role,
     SimpleFormatterModel,
@@ -317,6 +322,47 @@ def test_typescript_schema_title_when_metadata_on():
     # Title should appear as a comment
     if schema.get("title"):
         assert f"// {schema['title']}" in result or f"// Title: {schema['title']}" in result
+
+
+def test_no_auto_generated_property_titles_typescript():
+    """AC-1: TypeScript drops auto-generated per-field titles from the output.
+
+    At HEAD, TypeScript renders no field titles at all (no `title` key in
+    METADATA_MAP), so this is already green; it becomes load-bearing once Phase 4
+    adds title rendering.
+    """
+    for model in (Address, SimpleFormatterModel, ModelWithAlias):
+        schema = model.model_json_schema()
+        formatter = TypeScriptFormatter(schema, include_metadata=True)
+        result = formatter.transform_schema()
+
+        for key in schema.get("properties", {}):
+            assert f"{formatter.comment_prefix} {auto_title_for_key(key)}:" not in result
+
+
+def test_user_supplied_title_and_description_render_once_typescript():
+    """AC-2: a user-supplied field title and description each render exactly once.
+
+    New capability: TypeScript emits no field titles at all until
+    ``METADATA_MAP["title"]`` exists.
+    """
+    schema = WithFieldDescriptions.model_json_schema()
+    formatter = TypeScriptFormatter(schema, include_metadata=True)
+    result = formatter.transform_schema()
+
+    assert result.count("Full Name") == 1
+    assert result.count("The user's full name") == 1
+
+
+def test_metadata_inclusion_title_false_suppresses_title_typescript():
+    """The ``title`` metadata_inclusion lever suppresses field titles, not descriptions."""
+    schema = WithFieldDescriptions.model_json_schema()
+    config = FormatterConfig(include_metadata=True, metadata_inclusion={"title": False})
+    formatter = TypeScriptFormatter(schema, config=config)
+    result = formatter.transform_schema()
+
+    assert "Full Name" not in result
+    assert "The user's full name" in result
 
 
 def test_typescript_format_scaffolding():
@@ -1019,3 +1065,41 @@ def test_typescript_formatter_array_of_objects_not_duplicated():
     assert result.count("items*:") == 1
     assert "Array<" in result
     assert "product_name" in result and "quantity" in result and "price" in result
+
+
+def test_no_empty_comment_marker_across_all_models_typescript(all_pydantic_models) -> None:
+    """No rendered TypeScript line should carry an empty `// ;` / bare `//` marker.
+
+    ``add_metadata`` used to emit a `// <parts>` comment whenever
+    ``filtered_metadata`` was non-empty, even if every entry in ``format_metadata_parts``
+    resolved to an empty string (e.g. min/max skipped for the field's own type) --
+    producing lines like `age*: number (>=0)  // ;`. Sweeps every registered model.
+    """
+    for _name, model in all_pydantic_models:
+        schema = model.model_json_schema()
+        formatter = TypeScriptFormatter(schema, include_metadata=True)
+        result = formatter.transform_schema()
+
+        for line in result.splitlines():
+            assert "// ;" not in line, f"{_name}: empty `// ;` marker in line: {line!r}"
+            assert not line.endswith("// "), f"{_name}: trailing bare `// ` in line: {line!r}"
+            assert not line.endswith("//"), f"{_name}: trailing bare `//` in line: {line!r}"
+
+
+def test_product_typescript_token_count_decreases() -> None:
+    """Dropping auto-generated titles shrinks the TypeScript token count for ``Product``.
+
+    Anchored on ``Product``, not ``Order``: ``Order``'s TypeScript token count *rises*
+    790 -> 792 because ``tests/conftest.py``'s ``User.name`` carries a user-supplied
+    ``title="Full Name"`` that TypeScript now correctly renders (this is AC-2's new
+    capability, not a regression -- TypeScript previously had no ``"title"`` entry in
+    its ``METADATA_MAP`` at all). ``Product`` is a submodel of the same ``Order`` gist
+    with no user-supplied field titles, so its TS token count genuinely falls, HEAD
+    109 -> expected 105. The assertion is strict-lower-than-HEAD rather than pinned to
+    the exact number so unrelated future formatting tweaks do not spuriously fail this
+    test.
+    """
+    pytest.importorskip("tiktoken")
+    from llm_schema_lite import simplify_schema
+
+    assert simplify_schema(Product, format_type="typescript").token_count() < 109

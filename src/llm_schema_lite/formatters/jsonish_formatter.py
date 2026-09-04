@@ -96,7 +96,11 @@ class JSONishFormatter(BaseFormatter):
         description = ""
         default_value = ""
         example = ""
-        if "title" in value and value["title"] is not None:
+        if (
+            "title" in value
+            and value["title"] is not None
+            and self._should_include_metadata("title")
+        ):
             title = f" {value['title']}:"
         if "description" in value and value["description"] is not None:
             description = f" {value['description']}"
@@ -597,10 +601,20 @@ class JSONishFormatter(BaseFormatter):
                         return [items]
                     return items
                 elif items and isinstance(items, str | int | float | bool):
-                    comment = f" {self.comment_prefix}"
+                    # ``items_range`` is rendered before the comment marker, so it must
+                    # not on its own justify emitting one.
+                    comment = (
+                        f" {self.comment_prefix}"
+                        if (title or description or default_value or example)
+                        else ""
+                    )
                     return f"{items} []{items_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
                 else:
-                    comment = f" {self.comment_prefix}"
+                    comment = (
+                        f" {self.comment_prefix}"
+                        if (title or description or default_value or example)
+                        else ""
+                    )
                     return f"[]{items_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
             elif value["type"] == "object":
                 if title or description or default_value or example:
