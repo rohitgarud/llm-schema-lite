@@ -1347,6 +1347,7 @@ def test_no_array_of_object_across_all_models_typescript(all_pydantic_models) ->
 
 def test_cyclic_and_mutually_recursive_refs_terminate() -> None:
     """The fingerprint-discard fix must not turn a cycle into unbounded expansion."""
+    from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
     from llm_schema_lite.formatters.yaml_formatter import YAMLFormatter
 
     cyclic = {
@@ -1373,10 +1374,14 @@ def test_cyclic_and_mutually_recursive_refs_terminate() -> None:
         },
     }
     for schema in (cyclic, mutual):
-        for cls in (TypeScriptFormatter, YAMLFormatter):
+        for cls in (TypeScriptFormatter, YAMLFormatter, JSONishFormatter):
             out = cls(schema).transform_schema()
             assert "object" in out  # truncated at the cycle boundary, not expanded
-            assert len(out) < 2000  # terminates rather than growing without bound
+            assert "recursive:" in out  # and says so, rather than dropping the type
+            # Worst case measured at the default depth of 2 is 250 chars; growth
+            # is linear (d3 -> 302, d4 -> 354, d5 -> 421), so this bound fails
+            # loudly if the shipped default ever drifts upward.
+            assert len(out) < 400  # terminates rather than growing without bound
 
 
 # ============================================================================
