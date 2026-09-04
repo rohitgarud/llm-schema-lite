@@ -19,16 +19,76 @@ jobs:
         uses: astral-sh/setup-uv@v4
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
+      # --locked: this job's contract is "the LOCKED dependency set works".
+      # Without it, uv would silently re-lock in the runner and hide pyproject/uv.lock drift.
       - name: Install dependencies
-        run: uv sync --all-extras
-      - name: Install DSPy for full coverage
-        run: uv pip install -e ".[dspy]"
+        run: uv sync --all-extras --locked
+      - name: Verify DSPy version and adapter import
+        run: |
+          uv run python - <<'PY'
+          from importlib.metadata import version
+          from packaging.version import Version
+
+          v = version("dspy")
+          assert Version(v) >= Version("3.3.1"), f"dspy {v} < 3.3.1"
+          import llm_schema_lite.dspy_integration  # noqa: F401  # import must survive the pin
+          print(f"dspy {v} OK")
+          PY
       - name: Run tests and generate coverage report
         run: uv run pytest --cov=src --cov-report=xml --cov-report=term-missing
+      # --no-cov is REQUIRED: pyproject addopts force --cov-report=xml, and a second
+      # instrumented run here would overwrite coverage.xml before the Codecov upload below.
+      # TODO(lsl-2026-09-04-011): drop the exit-5 tolerance once DSPy tests exist.
+      - name: Run DSPy integration tests
+        run: |
+          set +e
+          uv run pytest tests -k dspy -v --no-cov
+          rc=$?
+          set -e
+          if [ "$rc" -eq 5 ]; then
+            echo "::warning::No DSPy tests collected yet (ticket lsl-2026-09-04-011)."
+            exit 0
+          fi
+          exit $rc
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Informational canary against the newest DSPy release on PyPI, deliberately ignoring uv.lock.
+  # It is ALLOWED TO FAIL and MUST NOT be added to branch-protection required status checks.
+  # Today it installs the same version as the pinned `test` job (3.3.1 is the latest release);
+  # its value is forward-looking, which is why the resolved version is echoed into the log.
+  dspy-latest:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+      - name: Set up Python
+        run: uv python install 3.12
+      # No --locked here: deviating from the lock is this job's entire purpose.
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Upgrade DSPy to the latest release
+        run: uv pip install -U dspy
+      # --no-sync on every `uv run` below: a plain `uv run` re-syncs from uv.lock and would
+      # silently roll DSPy back to the pinned version, making this job a no-op.
+      - name: Show resolved DSPy version
+        run: uv run --no-sync python -c "from importlib.metadata import version; print('dspy', version('dspy'))"
+      # TODO(lsl-2026-09-04-011): drop the exit-5 tolerance once DSPy tests exist.
+      - name: Run DSPy integration tests against latest DSPy
+        run: |
+          set +e
+          uv run --no-sync pytest tests -k dspy -v --no-cov
+          rc=$?
+          set -e
+          if [ "$rc" -eq 5 ]; then
+            echo "::warning::No DSPy tests collected yet (ticket lsl-2026-09-04-011)."
+            exit 0
+          fi
+          exit $rc
 
   lint:
     runs-on: ubuntu-latest

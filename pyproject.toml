@@ -69,7 +69,7 @@ dev = [
 ]
 
 dspy = [
-    "dspy>=3.0.3",
+    "dspy>=3.3.1",
 ]
 
 benchmark = [
@@ -211,7 +211,7 @@ dev = [
     "psutil>=7.1.1",
 ]
 dspy = [
-    "dspy>=3.0.3",
+    "dspy>=3.3.1",
     "types-pyyaml>=6.0.12.20250915",
     "types-regex>=2025.9.18.20250921",
 ]

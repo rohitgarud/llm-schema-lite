@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Raise the `dspy` extra and dependency-group floor from `>=3.0.3` to `>=3.3.1`; the DSPy integration adapter targets DSPy 3.3.1 APIs and no 3.0.x compatibility path is maintained.
+
 <!-- insertion marker -->
 ## [v0.6.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27
 
@@ -137,12 +143,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Chore
 
 - initial package structure ([17462ec](https://github.com/rohitgarud/llm-schema-lite/commit/17462ec0c8e135e202d58cf808ac732396ed8d58) by Rohit Garud).
-
-
-## [Unreleased]
-
-### Added
-- Initial project structure
-- Package configuration with uv support
-- Pre-commit hooks for code quality
-- Comprehensive development tooling
