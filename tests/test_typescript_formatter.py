@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -1523,3 +1524,72 @@ def test_typescript_formatter_prefix_items_tuple_with_variadic_tail():
     result = TypeScriptFormatter(PREFIX_ITEMS_SCHEMA).transform_schema()
 
     assert result == "type Schema = [string, number, boolean, ...string[]];"
+
+
+# ============================================================================
+# Recursive models -- lsl-2026-09-04-014
+# ============================================================================
+
+
+class _RecursiveListNode(BaseModel):
+    """Self-referencing model used by the recursion goldens below."""
+
+    label: str
+    kids: list[_RecursiveListNode] = Field(default_factory=list)
+
+
+_RecursiveListNode.model_rebuild()
+
+
+def _list_node_schema() -> dict[str, Any]:
+    """Return a root-``$ref`` JSON schema whose def is named ``ListNode``."""
+    schema = _RecursiveListNode.model_json_schema()
+    return json.loads(json.dumps(schema).replace("_RecursiveListNode", "ListNode"))
+
+
+def test_typescript_recursive_list_golden_default_depth() -> None:
+    """Whole-string golden for a recursive list model at the default depth of 2."""
+    result = TypeScriptFormatter(_list_node_schema()).transform_schema()
+
+    assert result == (
+        "interface ListNode {\n"
+        "  label*: string;\n"
+        "  kids: Array<{ label*: string, "
+        "kids: Array<object /* recursive: ListNode */> }>;\n"
+        "}\n"
+        "\n"
+        "// Fields marked with * are required\n"
+        "interface Schema {\n"
+        "  label*: string;\n"
+        "  kids: Array<{ label*: string, "
+        "kids: Array<object /* recursive: ListNode */> }>;\n"
+        "}"
+    )
+
+
+def test_typescript_root_ref_model_renders_interface_body() -> None:
+    """D4: a bare root ``$ref`` must not collapse to ``interface Schema {}``."""
+    result = TypeScriptFormatter(_list_node_schema()).transform_schema()
+
+    assert result != "interface Schema {}"
+    assert "label" in result
+
+
+def test_typescript_recursive_render_is_idempotent() -> None:
+    """C3: the cached ``_processed_data`` branch must seed ``$defs`` like the main flow."""
+    formatter = TypeScriptFormatter(_list_node_schema())
+
+    first = formatter.transform_schema()
+    second = formatter.transform_schema()
+
+    assert first == second
+
+
+def test_typescript_recursive_placeholder_preserves_array_of_object_invariant() -> None:
+    """The placeholder sits between ``object`` and ``>``, so ``Array<object>`` never appears."""
+    for depth in (1, 2, 3):
+        config = FormatterConfig(max_recursion_depth=depth)
+        result = TypeScriptFormatter(_list_node_schema(), config=config).transform_schema()
+
+        assert "recursive: ListNode" in result, f"depth={depth}: no placeholder"
+        assert "Array<object>" not in result, f"depth={depth}: degraded to Array<object>"

@@ -344,6 +344,10 @@ class TypeScriptFormatter(BaseFormatter):
             return f"{field_name}{marker}"
         return super().format_field_name(field_name)
 
+    def recursion_placeholder(self, type_name: str) -> str:
+        """Block-comment form: a `//` inside an inline object literal swallows the line."""
+        return f"object /* recursive: {type_name} */"
+
     @staticmethod
     def _inline_comment(value: Any) -> str:
         """Rewrite a trailing ``// ...`` comment as a block comment.
@@ -412,6 +416,13 @@ class TypeScriptFormatter(BaseFormatter):
         Returns:
             TypeScript interface definition as a string.
         """
+        self._reset_ref_state()
+        # Root-level $ref: adopt the resolved def as the effective root and count it as
+        # the first expansion of that type, so the depth knob means the same thing for
+        # ``Node`` and for ``Root(root: Node)``.
+        root_ref_key = self._adopt_root_ref()
+        if root_ref_key is not None:
+            self._root_ref_key = root_ref_key
         # First branch: if _processed_data is set, build from cache
         if hasattr(self, "_processed_data") and self._processed_data:
             all_interfaces = []
@@ -426,7 +437,8 @@ class TypeScriptFormatter(BaseFormatter):
                     nested_required = set(def_schema.get("required", []))
 
                     for prop_name, prop_def in nested_props.items():
-                        prop_type = self.process_property(prop_def)
+                        with self._expanding(def_name):
+                            prop_type = self.process_property(prop_def)
                         # Format field name with required indicator for nested definitions
                         formatted_prop_name = (
                             f"{prop_name}*" if prop_name in nested_required else prop_name
@@ -591,7 +603,8 @@ class TypeScriptFormatter(BaseFormatter):
                 nested_required = set(def_schema.get("required", []))
 
                 for prop_name, prop_def in nested_props.items():
-                    prop_type = self.process_property(prop_def)
+                    with self._expanding(def_name):
+                        prop_type = self.process_property(prop_def)
                     # Format field name with required indicator for nested definitions
                     formatted_prop_name = (
                         f"{prop_name}*" if prop_name in nested_required else prop_name
@@ -623,7 +636,8 @@ class TypeScriptFormatter(BaseFormatter):
 
         main_output.write("interface Schema {\n")
 
-        processed_properties = self.process_properties(self.properties)
+        with self._expanding(self._root_ref_key):
+            processed_properties = self.process_properties(self.properties)
         for name, prop_type in processed_properties.items():
             # process_properties() already includes metadata via process_property()
             # so we don't need to add it again
