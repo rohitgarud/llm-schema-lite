@@ -329,13 +329,20 @@ def test_jsonish_formatter_enum_with_descriptions_and_aliases():
     from tests.conftest import ModelWithPriorityMetadata
 
     result = simplify_schema(ModelWithPriorityMetadata, format_type="jsonish").to_string()
-    assert "OPTIONS with descriptions" in result
+    assert "one of:" in result
+    assert "(Non-urgent, can wait)" in result
+    assert "aliases: urgent, blocker" in result
     assert "Non-urgent, can wait" in result
     assert "Urgent, blocking issue" in result
     assert "aliases:" in result
     assert "urgent" in result
     assert "blocker" in result
-    assert "OPTIONS: low | medium | high | critical" in result or "priority*:" in result
+    line = _line_with(result, "priority*:")
+    assert (
+        'one of: "low" (Non-urgent, can wait), "medium" (Normal priority), '
+        '"high" (Needs attention soon), "critical" (Urgent, blocking issue; '
+        "aliases: urgent, blocker)"
+    ) in line
 
 
 def test_jsonish_formatter_enum_without_metadata_unchanged():
@@ -349,8 +356,8 @@ def test_jsonish_formatter_enum_without_metadata_unchanged():
         role: Role
 
     result = simplify_schema(M, format_type="jsonish").to_string()
-    assert "OPTIONS:" in result
-    assert "OPTIONS with descriptions" not in result
+    assert "string // one of:" in result
+    assert "(" not in _line_with(result, "role")
 
 
 def test_jsonish_formatter_with_literal_single():
@@ -377,8 +384,8 @@ def test_jsonish_formatter_with_literal_union():
 
     # Should contain status field
     assert "status*:" in result
-    # Should use OPTIONS format for multiple literals
-    assert "OPTIONS:" in result
+    # Should use the new "string // one of:" format for multiple literals
+    assert "string // one of:" in result
     # Should contain all literal values (quoted strings)
     assert "draft" in result
     assert "published" in result
@@ -395,8 +402,8 @@ def test_jsonish_formatter_with_int_literals():
 
     # Should contain priority field
     assert "priority*:" in result
-    # Should use OPTIONS format for multiple integer literals
-    assert "OPTIONS:" in result
+    # Should use the new "int // one of:" format for multiple integer literals
+    assert "int // one of:" in result
     # Should contain all integer values (unquoted)
     assert "1" in result
     assert "2" in result
@@ -404,7 +411,7 @@ def test_jsonish_formatter_with_int_literals():
     assert "4" in result
     assert "5" in result
     # Verify unquoted format (no quotes around numbers)
-    assert "OPTIONS: 1| 2| 3| 4| 5" in result or "OPTIONS: 1 | 2 | 3 | 4 | 5" in result
+    assert "int // one of: 1, 2, 3, 4, 5" in result
 
 
 def test_jsonish_formatter_with_bool_literals():
@@ -417,8 +424,8 @@ def test_jsonish_formatter_with_bool_literals():
 
     # Should contain flag field
     assert "flag*:" in result
-    # Should use OPTIONS format for boolean literals
-    assert "OPTIONS:" in result
+    # Should use the new "bool // one of:" format for boolean literals
+    assert "bool // one of: true, false" in result
     # Should contain lowercase, unquoted boolean values
     assert "true" in result
     assert "false" in result
@@ -460,7 +467,7 @@ def test_jsonish_formatter_with_single_const_int():
     # Should contain version field
     assert "version*:" in result
     # Single integer literal should be rendered as unquoted number
-    assert "version*: 1" in result
+    assert "version*: int // one of: 1" in result
 
 
 def test_jsonish_formatter_with_issue_classification():
@@ -475,8 +482,8 @@ def test_jsonish_formatter_with_issue_classification():
     assert "category*:" in result
     assert "priority*:" in result
 
-    # String literals should be quoted with OPTIONS format
-    assert "OPTIONS:" in result
+    # String literals should be quoted with the new "string // one of:" format
+    assert "string // one of:" in result
     assert "bug" in result
     assert "feature" in result
     assert "question" in result
@@ -595,7 +602,7 @@ def test_jsonish_nested_optional_ref_renders_as_block() -> None:
             "  address: {",
             "    street*: string // Street,",
             "    city*: string // City,",
-            "    country*: OPTIONS: US| CA Country:",
+            '    country*: string // one of: "US", "CA"',
             "  } OR null  // Home address (default=null)",
             "}",
         ]
@@ -653,7 +660,7 @@ def test_jsonish_nested_list_ref_renders_as_compact_brackets() -> None:
             "  addresses*: [{",
             "    street*: string // Street,",
             "    city*: string // City,",
-            "    country*: OPTIONS: US| CA Country:",
+            '    country*: string // one of: "US", "CA"',
             "  }]  // Addresses",
             "}",
         ]
@@ -710,7 +717,7 @@ def test_jsonish_nested_optional_list_ref_renders_as_compact_brackets() -> None:
             "  addresses: [{",
             "    street*: string // Street,",
             "    city*: string // City,",
-            "    country*: OPTIONS: US| CA Country:",
+            '    country*: string // one of: "US", "CA"',
             "  }] OR null  // Addresses (default=null)",
             "}",
         ]
@@ -767,7 +774,7 @@ def test_jsonish_nested_required_ref_renders_as_block() -> None:
             "  address*: {",
             "    street*: string // Street,",
             "    city*: string // City,",
-            "    country*: OPTIONS: US| CA Country:",
+            '    country*: string // one of: "US", "CA"',
             "  }",
             "}",
         ]
@@ -815,12 +822,12 @@ def test_jsonish_nested_ref_two_sibling_fields_both_inline() -> None:
             "  home*: {",
             "    street*: string // Street,",
             "    city*: string // City,",
-            "    country*: OPTIONS: US| CA Country:",
+            '    country*: string // one of: "US", "CA"',
             "  },",
             "  work*: {",
             "    street*: string // Street,",
             "    city*: string // City,",
-            "    country*: OPTIONS: US| CA Country:",
+            '    country*: string // one of: "US", "CA"',
             "  }",
             "}",
         ]
@@ -1625,6 +1632,11 @@ def test_jsonish_formatter_consistent_asterisk_usage():
 # never pass through `_remove_quotes` and may legitimately end in a bare `"`. It is therefore
 # only applied here to fixtures whose model-level title/description/notes/links contain no
 # `"`; field-level quotes are exercised directly via `_QuoteDescriptions` below.
+#
+# The deferred enum/const comment hoisted by lsl-2026-09-04-004 is in the same
+# category: it is substituted after _remove_quotes (see hoist_deferred_comments), so
+# a value list ending in a quoted string legitimately ends the line in a bare ".
+# Lines carrying that comment are therefore skipped below.
 STRAY_DELIMITER = re.compile(r'(?:^|[^\\])(?:\\\\)*"\s*,?\s*$')
 
 
@@ -1663,6 +1675,8 @@ def test_jsonish_no_line_ends_with_stray_delimiter(model: type[BaseModel]) -> No
     result = JSONishFormatter(model.model_json_schema()).transform_schema()
 
     for line in result.split("\n"):
+        if "// one of: " in line:
+            continue  # hoisted enum comment: exempt, see the scoping note above
         assert STRAY_DELIMITER.search(line) is None, f"Stray delimiter: {line!r}"
 
 

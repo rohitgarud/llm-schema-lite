@@ -61,6 +61,15 @@ class JSONishFormatter(BaseFormatter):
         """Comment prefix for JSONish format."""
         return "//"
 
+    @property
+    def deferred_comment_gap(self) -> str:
+        """One space before a hoisted ``//`` comment.
+
+        Matches ``_extract_description``'s ``f" {self.comment_prefix} ..."`` and is immune
+        to ``transform_schema``'s trailing ``.replace("  ", " ")``.
+        """
+        return " "
+
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
         Add metadata comments to a field representation.
@@ -140,26 +149,27 @@ class JSONishFormatter(BaseFormatter):
                     example = f" (EXAMPLES: {examples})"
         return title, description, default_value, example
 
-    def _get_options_format_pattern(self, value: dict[str, Any]) -> tuple[str, str, str]:
-        """Extract options, format, and pattern from schema value."""
-        options = ""
+    def _get_options_format_pattern(self, value: dict[str, Any]) -> tuple[str, str]:
+        """Extract format and pattern from schema value.
+
+        Note: this previously also returned an `options` element derived from an
+        `OPTIONS: ...` string built from `value["enum"]`. That branch was proven
+        unreachable (every caller of `process_types` checks `enum` before reaching
+        this code) and was removed.
+        """
         format_ = ""
         # Filter pattern based on metadata_inclusion config
         if "pattern" in value and value["pattern"] and self._should_include_metadata("pattern"):
             pattern = f" (PATTERN: {value['pattern']})"
         else:
             pattern = ""
-        if "enum" in value and value["enum"]:
-            # Convert enum values to strings to handle both string and numeric enums
-            enum_strs = [str(v) for v in value["enum"]]
-            options = f" (OPTIONS: {'| '.join(enum_strs)})"
         # Filter format based on metadata_inclusion config
         if self._should_include_metadata("format"):
             if "format" in value and value["format"]:
                 format_ = f" (FORMAT: {value['format']})"
             elif "_format" in value and value["_format"]:
                 format_ = f" (FORMAT: {value['_format']})"
-        return options, format_, pattern
+        return format_, pattern
 
     def _get_fields_dependencies(self, schema: dict[str, Any], field_name: str) -> str:
         """Extract dependencies for a field from schema."""
@@ -224,7 +234,17 @@ class JSONishFormatter(BaseFormatter):
         # Include description from resolved definition if available
         if isinstance(_def, dict) and "description" in _def and _def["description"]:
             def_description = f" {self.comment_prefix} {_def['description']}"
-            if isinstance(output, str) and def_description not in output:
+            if self.carries_deferred_comment(output):
+                # Plain-scalar invariant: never append a bare `//` comment to a
+                # marker-bearing representation. Suffixes appended later (` []` from a
+                # container, ` OR null` from an anyOf) would land *after* that comment
+                # and be swallowed into it by the hoist. Route the text into the
+                # marker's slot instead -- and only when `process_enum` has not already
+                # folded this same `$defs` description in.
+                resolved = self.hoist_deferred_comments(str(output))
+                if str(_def["description"]) not in resolved:
+                    output = self.append_deferred_comment(str(output), str(_def["description"]))
+            elif isinstance(output, str) and def_description not in output:
                 output = str(output) + def_description
             elif isinstance(output, dict | list) and key is not None:
                 self.pending_prefix[key] = def_description.strip()
@@ -439,90 +459,30 @@ class JSONishFormatter(BaseFormatter):
 
         return f"{output}{comment}{title}{description}{default_value}{example}"
 
-    def process_enum(self, value: dict[str, Any], key: str | None = None) -> str:
-        """
-        Process enum fields.
+    def process_enum(self, enum_value: dict[str, Any], key: str | None = None) -> str:
+        """Thin shim: delegate to the shared ``BaseFormatter.process_enum``.
 
         Args:
-            value: Dictionary containing enum definition.
-            key: Optional property key for postfix tracking.
+            enum_value: Dictionary containing the enum definition. Renamed from ``value``
+                to match the base signature, avoiding a ``# type: ignore[override]``.
+            key: Unused. Kept only so the existing positional call sites need no change.
 
         Returns:
-            Formatted enum representation.
+            ``super().process_enum(enum_value)``.
         """
-        comment = ""
-        title, description, default_value, example = self._get_title_description_default_value(
-            value
-        )
-        enum_list = value.get("enum", [])
-        descs, alias_map = self._extract_enum_metadata(value)
-        has_enum_metadata = bool(descs or alias_map)
-        if description or default_value:
-            comment = f" {self.comment_prefix}"
+        return super().process_enum(enum_value)
 
-        # Format enum values: strings with markers for quotes, numbers/bools unquoted
-        def format_enum_value(e: Any) -> str:
-            if isinstance(e, bool):
-                return "true" if e else "false"
-            else:
-                return str(e)
-
-        if len(enum_list) == 1:
-            formatted_value = format_enum_value(enum_list[0])
-            return f"{formatted_value}{comment}{title}{description}{default_value}{example}"
-        else:
-            formatted_values = "| ".join(format_enum_value(e) for e in enum_list)
-            main_line = (
-                f"OPTIONS: {formatted_values}{comment}{title}{description}{default_value}{example}"  # noqa: E501
-            )
-            if not has_enum_metadata:
-                return main_line
-            # OPTIONS with descriptions: build per-value comment lines
-            parts = []
-            for e in enum_list:
-                val_str = format_enum_value(e)
-                canonical = str(e) if not isinstance(e, bool) else ("true" if e else "false")
-                line = val_str
-                if canonical in descs and descs[canonical]:
-                    line += f" ({descs[canonical]}"
-                    if canonical in alias_map and alias_map[canonical]:
-                        line += f"; aliases: {', '.join(alias_map[canonical])}"
-                    line += ")"
-                elif canonical in alias_map and alias_map[canonical]:
-                    line += f" (aliases: {', '.join(alias_map[canonical])})"
-                parts.append(f"{line}")
-            desc_comment = f"{self.comment_prefix} OPTIONS with descriptions: {', '.join(parts)}"
-            return f"{desc_comment}\n{main_line}"
-
-    def process_const(self, value: dict[str, Any], key: str | None = None) -> str:
-        """
-        Process a const field (single literal value).
+    def process_const(self, enum_value: dict[str, Any], key: str | None = None) -> str:
+        """Thin shim: delegate to the shared ``BaseFormatter.process_const``.
 
         Args:
-            value: Dictionary containing const definition.
-            key: Optional property key for postfix tracking.
+            enum_value: Dictionary containing the const definition.
+            key: Unused. Kept only so the existing positional call site needs no change.
 
         Returns:
-            Formatted const representation.
+            ``super().process_const(enum_value)``.
         """
-        comment = ""
-        title, description, default_value, example = self._get_title_description_default_value(
-            value
-        )
-        const = value.get("const")
-
-        if description or default_value or title:
-            comment = f" {self.comment_prefix}"
-
-        # Format based on type: numbers/bools unquoted
-        if isinstance(const, bool):
-            formatted = "true" if const else "false"
-        elif isinstance(const, int | float):
-            formatted = str(const)
-        else:
-            formatted = str(const)
-
-        return f"{formatted}{comment}{title}{description}{default_value}{example}"
+        return super().process_const(enum_value)
 
     def _is_root_schema(self, value: dict[str, Any]) -> bool:
         """Return True if value is the root schema (skip duplicating title/description)."""
@@ -555,7 +515,7 @@ class JSONishFormatter(BaseFormatter):
         )
         if self._is_root_schema(value):
             title, description = "", ""
-        options, format_, pattern = self._get_options_format_pattern(value)
+        format_, pattern = self._get_options_format_pattern(value)
 
         if "type" in value:
             if value["type"] == "string":
@@ -574,9 +534,9 @@ class JSONishFormatter(BaseFormatter):
                         length_range += f" (>= {value['minLength']} chars)"
                     elif has_max:
                         length_range += f" (<= {value['maxLength']} chars)"
-                if title or description or options or default_value or example:
+                if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
-                return f"{type_name}{pattern}{format_}{length_range}{comment}{title}{description}{options}{default_value}{example}"  # noqa: E501
+                return f"{type_name}{pattern}{format_}{length_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
             elif value["type"] in ["number", "integer"]:
                 type_name = "float" if value["type"] == "number" else "int"
                 value_range = ""
@@ -592,9 +552,9 @@ class JSONishFormatter(BaseFormatter):
                         value_range += f" (>= {value['minimum']})"
                     elif has_max:
                         value_range += f" (<= {value['maximum']})"
-                if title or description or options or default_value or example:
+                if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
-                return f"{type_name}{format_}{pattern}{value_range}{comment}{title}{description}{options}{default_value}{example}"  # noqa: E501
+                return f"{type_name}{format_}{pattern}{value_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
             elif value["type"] == "boolean":
                 type_name = "bool"
                 if title or description or default_value or example:
@@ -675,7 +635,7 @@ class JSONishFormatter(BaseFormatter):
                     comment = f" {self.comment_prefix}"
 
                 if len(value["type"]) == 1:
-                    return f"{value['type'][0]} {format_}{pattern}{comment}{title}{description}{options}{default_value}{example}"  # noqa: E501
+                    return f"{value['type'][0]} {format_}{pattern}{comment}{title}{description}{default_value}{example}"  # noqa: E501
                 elif len(value["type"]) == 2 and "null" in value["type"]:
                     if "array" in value["type"]:
                         array_items: dict[str, Any] | str | list[Any] = {}
@@ -693,9 +653,9 @@ class JSONishFormatter(BaseFormatter):
                             return array_items
                         elif isinstance(array_items, str | int | float | bool):
                             return f"{array_items} []"
-                    return f"{value['type'][0]} {format_}{pattern} or null {comment}{title}{description}{options}{default_value}{example}"  # noqa: E501
+                    return f"{value['type'][0]} {format_}{pattern} or null {comment}{title}{description}{default_value}{example}"  # noqa: E501
                 else:
-                    return f"{', '.join(value['type'])} {format_}{pattern}{comment}{title}{description}{options}{default_value}{example}"  # noqa: E501
+                    return f"{', '.join(value['type'])} {format_}{pattern}{comment}{title}{description}{default_value}{example}"  # noqa: E501
 
         return ""
 
@@ -934,9 +894,6 @@ class JSONishFormatter(BaseFormatter):
 
         # Step 3: Remove quotes from keys and string values (JSONish style)
         json_output = self._remove_quotes(json_output)
-
-        # # Step 4: Replace literal string markers with actual quotes
-        # json_output = json_output.replace("«", '"').replace("»", '"')
 
         # Step 5: Apply final spacing normalization
         json_output = self._normalize_spacing(json_output)
@@ -1385,6 +1342,7 @@ class JSONishFormatter(BaseFormatter):
         self._merge_pending_recursion()
         output_string = self._apply_pending_postfix(output_string)
         output_string = self._apply_pending_prefix(output_string)
+        output_string = self.hoist_deferred_comments(output_string)
         self.simplified_schema = output_string.replace("  ", " ")
         return self._add_prefix(output_string)
 

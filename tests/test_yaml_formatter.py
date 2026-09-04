@@ -351,10 +351,9 @@ def test_yaml_enum_with_descriptions_and_aliases():
     from tests.conftest import ModelWithPriorityMetadata
 
     result = simplify_schema(ModelWithPriorityMetadata, format_type="yaml").to_string()
-    assert "OPTIONS with descriptions" in result
-    assert "Non-urgent, can wait" in result
-    assert "aliases:" in result
-    assert "OPTIONS:" in result
+    assert "one of:" in result
+    assert "(Non-urgent, can wait)" in result
+    assert "aliases: urgent, blocker" in result
     assert "low" in result and "critical" in result
 
 
@@ -378,9 +377,9 @@ def test_yaml_literal_union():
 
     assert_required_optional_consistent(result, schema)
     assert "status*:" in result
-    # Should use OPTIONS format for multiple literals
-    assert "OPTIONS:" in result
-    # Should contain all literal values (YAML wraps entire OPTIONS string in quotes)
+    # Should use the "one of:" trailing-comment format for multiple literals
+    assert "string  # one of:" in result
+    # Should contain all literal values (bare unquoted plain scalar, no wrapping)
     assert "draft" in result
     assert "published" in result
     assert "archived" in result
@@ -396,16 +395,16 @@ def test_yaml_int_literals():
 
     assert_required_optional_consistent(result, schema)
     assert "priority*:" in result
-    # Should use OPTIONS format for multiple integer literals
-    assert "OPTIONS:" in result
+    # Should use the "one of:" trailing-comment format for multiple integer literals
+    assert "int  # one of:" in result
     # Should contain all integer values (unquoted)
     assert "1" in result
     assert "2" in result
     assert "3" in result
     assert "4" in result
     assert "5" in result
-    # Verify unquoted format
-    assert "OPTIONS: 1| 2| 3| 4| 5" in result or "OPTIONS: 1 | 2 | 3 | 4 | 5" in result
+    # Verify exact unquoted format
+    assert "int  # one of: 1, 2, 3, 4, 5" in result
 
 
 def test_yaml_bool_literals():
@@ -418,8 +417,8 @@ def test_yaml_bool_literals():
 
     assert_required_optional_consistent(result, schema)
     assert "flag*:" in result
-    # Should use OPTIONS format for boolean literals
-    assert "OPTIONS:" in result
+    # Should use the "one of:" trailing-comment format for boolean literals
+    assert "bool  # one of: true, false" in result
     # YAML may serialize bools as True/False (Python) - verify presence
     has_true = "true" in result.lower() or "True" in result
     has_false = "false" in result.lower() or "False" in result
@@ -440,7 +439,7 @@ def test_yaml_mixed_type_literals():
     assert "level*:" in result
     assert "enabled*:" in result
 
-    # String literals (YAML wraps entire OPTIONS string in quotes)
+    # String literals (bare, unquoted plain scalar with a trailing "# one of:" comment)
     assert "active" in result
     assert "inactive" in result
 
@@ -463,8 +462,8 @@ def test_yaml_single_const_int():
 
     assert_required_optional_consistent(result, schema)
     assert "version*:" in result
-    # Single integer literal (YAML may quote it)
-    assert "version*: 1" in result
+    # Single integer literal renders with the base type token and a trailing comment
+    assert "version*: int  # one of: 1" in result
 
 
 def test_yaml_issue_classification():
@@ -480,13 +479,13 @@ def test_yaml_issue_classification():
     assert "category*:" in result
     assert "priority*:" in result
 
-    # String literals with OPTIONS format (YAML wraps entire string)
-    assert "OPTIONS:" in result
+    # String literals with the "one of:" trailing-comment format (bare, unquoted)
+    assert "  # one of:" in result
     assert "bug" in result
     assert "feature" in result
     assert "question" in result
 
-    # Integer literals with OPTIONS format
+    # Integer literals with the "one of:" trailing-comment format
     assert "1" in result
     assert "2" in result
     assert "3" in result

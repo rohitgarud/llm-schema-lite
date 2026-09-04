@@ -125,6 +125,14 @@ class YAMLFormatter(BaseFormatter):
         """Comment prefix for YAML format."""
         return "#"
 
+    @property
+    def deferred_comment_gap(self) -> str:
+        """Two spaces before a hoisted ``#`` comment.
+
+        Matches ``add_metadata``'s existing ``f"  # {...}"`` suffix convention.
+        """
+        return "  "
+
     def _resolve_mapping_value(self, value_schema: dict[str, Any]) -> dict[str, Any]:
         """Resolve a ``$ref`` mapping value schema to its ``$defs`` entry, else return it."""
         ref = value_schema.get("$ref")
@@ -212,13 +220,19 @@ class YAMLFormatter(BaseFormatter):
 
     def _dump_yaml(self, data: dict[str, Any]) -> str:
         """
-        Dump a dictionary to YAML format.
+        Dump a dictionary to YAML format, then resolve deferred comment markers.
+
+        The hoist MUST run *after* ``yaml.dump``: while a scalar still carries its opaque
+        marker it contains no ``": "`` and no ``" #"``, so PyYAML emits it as a bare plain
+        scalar on one physical line. Substituting the comment text before the dump would
+        reintroduce both and PyYAML would re-quote (and possibly fold) the line.
 
         Args:
             data: Dictionary to serialize to YAML.
 
         Returns:
-            YAML string representation.
+            YAML string representation with every deferred marker replaced by a real
+            trailing ``#`` comment.
         """
         result = yaml.dump(
             data,
@@ -226,7 +240,7 @@ class YAMLFormatter(BaseFormatter):
             sort_keys=False,
             allow_unicode=True,
         )
-        return str(result).rstrip()
+        return self.hoist_deferred_comments(str(result)).rstrip()
 
     def process_anyof(self, anyof: dict[str, Any]) -> str:
         """
@@ -262,79 +276,6 @@ class YAMLFormatter(BaseFormatter):
                 item_types.append(self.process_allof(item))
 
         return self.config.union_separator.join(item_types) if item_types else "string"
-
-    def process_enum(self, enum_value: dict[str, Any]) -> str:
-        """
-        Process enum (JSONish parity): single value -> value; multiple -> OPTIONS: a | b | c.
-        When x-enum-descriptions or x-enum-aliases exist, include OPTIONS with descriptions.
-        Includes title, description, default_value, example metadata in output.
-        """
-        title, description, default_value, example = self._get_title_description_default_value(
-            enum_value
-        )
-        enum_list = enum_value.get("enum", [])
-        if not enum_list:
-            return "string"
-        descs, alias_map = self._extract_enum_metadata(enum_value)
-        has_enum_metadata = bool(descs or alias_map)
-        # Initialize comment - will be set if there's description or default_value
-        comment = ""
-        if description or default_value:
-            comment = f" {self.comment_prefix}"
-
-        # Format enum values: strings with markers for quotes, numbers/bools unquoted
-        def format_enum_value(e: Any) -> str:
-            if isinstance(e, bool):
-                return "true" if e else "false"
-            else:
-                return str(e)
-
-        if len(enum_list) == 1:
-            formatted_value = format_enum_value(enum_list[0])
-            return f"{formatted_value}{comment}{title}{description}{default_value}{example}"
-        else:
-            formatted_values = "| ".join(format_enum_value(e) for e in enum_list)
-            main_line = (
-                f"OPTIONS: {formatted_values}{comment}{title}{description}{default_value}{example}"  # noqa: E501
-            )
-            if not has_enum_metadata:
-                return main_line
-            # OPTIONS with descriptions: build per-value comment lines
-            parts = []
-            for e in enum_list:
-                val_str = format_enum_value(e)
-                canonical = str(e) if not isinstance(e, bool) else ("true" if e else "false")
-                line = val_str
-                if canonical in descs and descs[canonical]:
-                    line += f" ({descs[canonical]}"
-                    if canonical in alias_map and alias_map[canonical]:
-                        line += f"; aliases: {', '.join(alias_map[canonical])}"
-                    line += ")"
-                elif canonical in alias_map and alias_map[canonical]:
-                    line += f" (aliases: {', '.join(alias_map[canonical])})"
-                parts.append(f"{line}")
-            desc_comment = f"{self.comment_prefix} OPTIONS with descriptions: {', '.join(parts)}"
-            return f"{desc_comment}\n{main_line}"
-
-    def process_const(self, const_value: dict[str, Any]) -> str:
-        """
-        Process a const field (single literal value) for YAML.
-
-        Args:
-            const_value: Dictionary containing const definition.
-
-        Returns:
-            Formatted const representation.
-        """
-        const = const_value.get("const")
-
-        # Format based on type: strings quoted, numbers/bools unquoted (YAML style)
-        if isinstance(const, bool):
-            return "true" if const else "false"
-        elif isinstance(const, int | float):
-            return const  # type: ignore
-        else:
-            return str(const)
 
     def process_oneof(self, oneof: dict[str, Any]) -> str:
         """
@@ -571,41 +512,59 @@ class YAMLFormatter(BaseFormatter):
         """
         Add metadata comments to a field representation (JSONish parity:
         title, description, id, $comment, default, example/examples).
+
+        When ``representation`` carries a deferred-comment marker the metadata is routed
+        *into* that marker's slot rather than appended as a ``"  # ..."`` suffix. That is
+        the plain-scalar invariant: appending ``#`` (or ``": "``) to a marker-bearing
+        scalar makes PyYAML quote the whole line.
         """
         if not self.include_metadata:
             return representation
 
-        # Check if this is an enum that already has metadata inline (from process_enum)
-        # If representation already contains a comment, skip adding metadata to avoid duplication
-        is_enum_with_metadata = (
-            isinstance(value, dict) and "enum" in value and "#" in representation
-        )
+        # Marker presence is the precise replacement for the old
+        # ``"enum" in value and "#" in representation`` substring hack, which never fired
+        # for a ``$ref``'d enum (the ``enum`` key lives in the ``$defs`` node, not in the
+        # property schema) and so restated the default several times on one line.
+        deferred = self.carries_deferred_comment(representation)
 
         title, description, default_value, example = self._get_title_description_default_value(
             value
         )
         parts = []
-        if title:
+        if title and not deferred:
+            # D4: never emit the enum's Pydantic class name alongside a hoisted comment.
             parts.append(title.strip())
-        if description and not is_enum_with_metadata:
-            # Skip description for enums that already have it inline
+        if description:
             parts.append(description.strip())
-        if default_value and not is_enum_with_metadata:
+        if default_value:
             parts.append(default_value.strip())
-        if example and not is_enum_with_metadata:
+        if example:
             parts.append(example.strip())
 
         # Base METADATA_MAP-style parts for pattern, format, etc. (when not in type).
         # ``title``/``description`` are already supplied above by
         # ``_get_title_description_default_value``; METADATA_MAP must never re-supply them.
+        # ``const`` is excluded as well for a marker-bearing representation, whose slot body
+        # already renders that value as ``one of: ...``.
+        exclude = ("title", "description", "const") if deferred else ("title", "description")
         available_metadata = self.get_available_metadata(value)
         if available_metadata:
-            filtered_metadata = [m for m in available_metadata if m not in ("title", "description")]
+            filtered_metadata = [m for m in available_metadata if m not in exclude]
             if filtered_metadata:
-                parts.extend(self.format_metadata_parts(value, exclude=("title", "description")))
+                parts.extend(self.format_metadata_parts(value, exclude=exclude))
 
         if not parts:
             return representation
+
+        if deferred:
+            # Drop anything the slot body (or the representation itself) already states,
+            # then fold the survivors into the slot instead of appending a comment.
+            resolved = self.hoist_deferred_comments(str(representation))
+            survivors = [part for part in parts if part not in resolved]
+            if not survivors:
+                return representation
+            return self.append_deferred_comment(str(representation), "; ".join(survivors))
+
         suffix = f"  # {', '.join(parts)}"
         if isinstance(representation, str) and representation.endswith(suffix):
             return representation
@@ -638,7 +597,10 @@ class YAMLFormatter(BaseFormatter):
             prop_str = self.process_property(value)
             dep = self._get_fields_dependencies(self.schema, prop_name)
             if dep and self.include_metadata:
-                prop_str = f"{prop_str}  # {dep}"
+                if self.carries_deferred_comment(prop_str):
+                    prop_str = self.append_deferred_comment(prop_str, dep)
+                else:
+                    prop_str = f"{prop_str}  # {dep}"
             processed_properties[formatted_name] = prop_str
         return processed_properties
 
@@ -750,6 +712,18 @@ class YAMLFormatter(BaseFormatter):
             return str(value)
 
     def transform_schema(self) -> str:
+        """Public entry point: run ``_transform_schema_impl``, then a final hoist sweep.
+
+        Covers the four scalar return paths that never call ``_dump_yaml``. Safe to run
+        over already-hoisted text: a completed pass leaves no token behind, and a token
+        cannot be forged from schema text (the per-instance nonce).
+
+        Returns:
+            YAML-style schema definition as a string, with no deferred marker left.
+        """
+        return self.hoist_deferred_comments(self._transform_schema_impl())
+
+    def _transform_schema_impl(self) -> str:
         """
         Transform schema into YAML-style format.
 
@@ -780,7 +754,10 @@ class YAMLFormatter(BaseFormatter):
                             prop_type = self.process_property(prop_def)
                         dep = self._get_fields_dependencies(def_schema, prop_name)
                         if dep and self.include_metadata:
-                            prop_type = f"{prop_type}  # {dep}"
+                            if self.carries_deferred_comment(prop_type):
+                                prop_type = self.append_deferred_comment(prop_type, dep)
+                            else:
+                                prop_type = f"{prop_type}  # {dep}"
                         formatted_prop_name = self.format_field_name(prop_name)
                         def_dict[f"{def_name}.{formatted_prop_name}"] = prop_type
 
@@ -946,7 +923,10 @@ class YAMLFormatter(BaseFormatter):
                         prop_type = self.process_property(prop_def)
                     dep = self._get_fields_dependencies(def_schema, prop_name)
                     if dep and self.include_metadata:
-                        prop_type = f"{prop_type}  # {dep}"
+                        if self.carries_deferred_comment(prop_type):
+                            prop_type = self.append_deferred_comment(prop_type, dep)
+                        else:
+                            prop_type = f"{prop_type}  # {dep}"
                     # Use config markers for formatting
                     if prop_name in nested_required:
                         formatted_prop_name = f"{prop_name}{self.config.required_marker}"

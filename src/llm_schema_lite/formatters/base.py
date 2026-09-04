@@ -1,11 +1,13 @@
 """Base formatter abstract class for schema formatters."""
 
+import json
 import re
+import secrets
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from ..schema_normalization import normalize_schema_titles
 from .config import FormatterConfig
@@ -13,6 +15,10 @@ from .config import FormatterConfig
 ContainerKind = Literal["mapping", "tuple", "list", "any", "object", "scalar"]
 
 _COMPOSITION_KEYS = ("$ref", "enum", "const", "anyOf", "oneOf", "allOf", "not")
+
+DEFERRED_OPEN: Final[str] = "⟪"  # U+27EA MATHEMATICAL LEFT DOUBLE ANGLE BRACKET
+DEFERRED_CLOSE: Final[str] = "⟫"  # U+27EB MATHEMATICAL RIGHT DOUBLE ANGLE BRACKET
+DEFERRED_TAG: Final[str] = "lsl"  # literal infix, before the per-instance nonce
 
 
 @dataclass(frozen=True)
@@ -104,6 +110,62 @@ def classify_container(schema: Any) -> ContainerShape:
 
     # Rule 10 -- typeless but non-empty: ``Any`` carrying only annotations.
     return ContainerShape(kind="any")
+
+
+def format_literal_value(value: Any) -> str:
+    """Render one enum/const/Literal value as it appears inside a ``one of: ...`` list.
+
+    Args:
+        value: A raw value from a JSON Schema ``enum``/``const`` list, as produced by
+            ``model_json_schema()`` (``bool``, ``int``, ``float``, ``str``, or ``None``).
+
+    Returns:
+        ``"true"``/``"false"`` for a bool (tested BEFORE ``int``, since ``bool`` is an
+        ``int`` subclass in Python); ``"null"`` for ``None``; ``str(value)`` for a plain
+        ``int``/``float``; ``json.dumps(value, ensure_ascii=False)`` for a ``str``.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def infer_json_type(values: Sequence[Any]) -> str | None:
+    """Infer a single JSON Schema type name for an enum node that carries no ``type`` key.
+
+    Args:
+        values: The raw ``enum`` value list (or a single-element list built from a
+            ``const``). ``None`` entries are ignored for the purpose of inference.
+
+    Returns:
+        The shared JSON Schema type name (``"string"``, ``"integer"``, ``"number"``,
+        ``"boolean"``) when every non-``None`` value has the same Python type, else
+        ``None`` (heterogeneous, or nothing but ``None`` values).
+    """
+    names: set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            names.add("boolean")
+        elif isinstance(value, int):
+            names.add("integer")
+        elif isinstance(value, float):
+            names.add("number")
+        elif isinstance(value, str):
+            names.add("string")
+        else:
+            return None
+        if len(names) > 1:
+            return None
+    if len(names) != 1:
+        return None
+    return names.pop()
 
 
 class BaseFormatter(ABC):
@@ -207,6 +269,16 @@ class BaseFormatter(ABC):
         self._truncation_epoch = 0  # Monotonic count of recursion truncations
         self._root_ref_key: str | None = None  # def name adopted by _adopt_root_ref()
         self._nested_required_stack: list[set[str]] = []
+
+        # Deferred-comment mechanism: the comment body for an enum/const's "one of: ..."
+        # travels out of band in this slot table so it can survive json.dumps /
+        # _remove_quotes and PyYAML's plain-scalar quoting rules.
+        self._deferred_bodies: list[str] = []
+        self._deferred_index: dict[str, int] = {}
+        self._deferred_nonce: str = secrets.token_hex(4)
+        self._deferred_pattern: re.Pattern[str] = re.compile(
+            f"{DEFERRED_OPEN}{DEFERRED_TAG}{self._deferred_nonce}\\.(\\d+){DEFERRED_CLOSE}"
+        )
 
         # Pre-warm cache for common patterns
 
@@ -730,6 +802,136 @@ class BaseFormatter(ABC):
             if self._ref_expansion_path and self._ref_expansion_path[-1] == ref_key:
                 self._ref_expansion_path.pop()
 
+    @property
+    def deferred_comment_gap(self) -> str:
+        """Whitespace between a rendered token and its hoisted comment marker.
+
+        Returns:
+            A single space. ``YAMLFormatter`` overrides this to two spaces to match its
+            existing ``"  # ..."`` convention.
+        """
+        return " "
+
+    def defer_comment(self, body: str) -> str:
+        """Register ``body`` in the slot table and return the marker token for it.
+
+        Content-keyed: a ``body`` already present reuses its existing slot index rather
+        than allocating a new one.
+
+        Args:
+            body: The comment text to render once the marker is hoisted, e.g.
+                ``'one of: "US", "CA"'``.
+
+        Returns:
+            ``f"{DEFERRED_OPEN}{DEFERRED_TAG}{self._deferred_nonce}.{index}{DEFERRED_CLOSE}"``.
+        """
+        index = self._deferred_index.get(body)
+        if index is None:
+            index = len(self._deferred_bodies)
+            self._deferred_bodies.append(body)
+            self._deferred_index[body] = index
+        return "".join(
+            (DEFERRED_OPEN, DEFERRED_TAG, self._deferred_nonce, ".", str(index), DEFERRED_CLOSE)
+        )
+
+    def append_deferred_comment(self, representation: str, extra: str) -> str:
+        """Fold ``extra`` into the slot body referenced by the first marker in ``representation``.
+
+        Args:
+            representation: A string that may contain zero or one deferred-comment marker.
+            extra: Text to fold into that marker's slot body.
+
+        Returns:
+            ``representation`` unchanged when ``extra`` is empty or no marker is present;
+            otherwise ``representation`` with its first marker token replaced by a new
+            token referencing the updated slot body.
+        """
+        if not extra:
+            return representation
+        match = self._deferred_pattern.search(representation)
+        if match is None:
+            return representation
+        body = self._deferred_bodies[int(match.group(1))]
+        token = self.defer_comment(f"{body}; {extra}")
+        return representation.replace(match.group(0), token, 1)
+
+    def carries_deferred_comment(self, representation: object) -> bool:
+        """True iff ``representation`` is a string containing at least one deferred marker.
+
+        Args:
+            representation: Value to test. Typed ``object`` so callers holding a
+                ``str | dict[str, Any] | list[Any]`` union need not narrow it first.
+
+        Returns:
+            Whether this instance's ``_deferred_pattern`` matches anywhere in it.
+        """
+        return (
+            isinstance(representation, str)
+            and self._deferred_pattern.search(representation) is not None
+        )
+
+    def hoist_deferred_comments(self, text: str) -> str:
+        """Resolve every deferred marker in ``text`` to a real trailing comment, per line.
+
+        Args:
+            text: Fully rendered formatter output, one or more lines.
+
+        Returns:
+            ``text`` with every marker removed and its slot body re-emitted as a trailing
+            comment via ``_hoist_deferred_line``; never contains ``DEFERRED_OPEN``.
+        """
+        if DEFERRED_OPEN not in text:
+            return text
+        return "\n".join(self._hoist_deferred_line(line) for line in text.split("\n"))
+
+    def _hoist_deferred_line(self, line: str) -> str:
+        """Apply the multi-fragment hoist rule to one physical line.
+
+        Args:
+            line: One line of rendered output, with zero or more markers.
+
+        Returns:
+            ``line`` unchanged if it carries no marker; otherwise ``line`` with every marker
+            removed and one trailing ``f"{gap}{comment_prefix} {frag}"`` appended before any
+            trailing comma.
+        """
+        matches = list(self._deferred_pattern.finditer(line))
+        if not matches:
+            return line
+
+        # 1-2. Collect every slot body in source order, dropping exact duplicates.
+        bodies: list[str] = []
+        seen: set[str] = set()
+        for match in matches:
+            body = self._deferred_bodies[int(match.group(1))]
+            if body in seen:
+                continue
+            seen.add(body)
+            bodies.append(body)
+
+        # 3-4. Join survivors, then strip every token out of the line.
+        frag = "; ".join(bodies)
+        head = self._deferred_pattern.sub("", line)
+
+        # 5. Hold any trailing comma aside so the comment lands before it.
+        trailing_comma = ""
+        if head.rstrip().endswith(","):
+            head = head.rstrip()
+            head, trailing_comma = head[:-1], ","
+        head = head.rstrip()
+
+        # 6. Absorb any pre-existing comment on the line into the fragment.
+        prefix = self.comment_prefix
+        if prefix in head:
+            head, _, existing = head.partition(prefix)
+            head = head.rstrip()
+            existing = existing.strip()
+            if existing and existing not in frag:
+                frag = f"{frag}; {existing}"
+
+        # 7. Emit the single trailing comment.
+        return "".join((head, self.deferred_comment_gap, prefix, " ", frag, trailing_comma))
+
     def _extract_enum_metadata(
         self, enum_value: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -751,6 +953,91 @@ class BaseFormatter(ABC):
             aliases = {}
         return descriptions, aliases
 
+    def enum_type_token(self, node: dict[str, Any]) -> str:
+        """Base type token for an enum/const node.
+
+        Args:
+            node: The schema node carrying ``enum`` (or the synthetic single-element
+                ``enum`` list built from a ``const``).
+
+        Returns:
+            A ``TYPE_MAP``-mapped token derived from ``node["type"]`` -- including the list
+            and nullable-list forms -- or, when ``type`` is absent, ``infer_json_type``
+            applied to the enum values; ``"any"`` when that inference is heterogeneous or
+            the value list is empty.
+        """
+        enum_type = node.get("type")
+
+        if enum_type is None:
+            inferred = infer_json_type(node.get("enum", []))
+            if inferred is None:
+                return "any"
+            return self.TYPE_MAP.get(inferred, inferred)
+
+        if isinstance(enum_type, list):
+            if len(enum_type) == 1:
+                single_type = str(enum_type[0])
+                return self.TYPE_MAP.get(single_type, single_type)
+            if "null" in enum_type and len(enum_type) == 2:
+                non_null_type = str(next(t for t in enum_type if t != "null"))
+                return self.TYPE_MAP.get(non_null_type, non_null_type)
+            non_null_types = [str(t) for t in enum_type if t != "null"]
+            fallback = non_null_types[0] if non_null_types else "string"
+            return self.TYPE_MAP.get(fallback, fallback)
+
+        enum_type_str = str(enum_type)
+        return self.TYPE_MAP.get(enum_type_str, enum_type_str)
+
+    def build_enum_comment(self, node: dict[str, Any], values: list[Any]) -> str:
+        """Build the ``"one of: ..."`` comment body for an enum/const node.
+
+        Args:
+            node: The schema node, consulted via ``_extract_enum_metadata`` for
+                ``x-enum-descriptions`` / ``x-enum-aliases``.
+            values: The enum's value list, or the single-element list built from a ``const``.
+
+        Returns:
+            ``"one of: "`` followed by each value's ``format_literal_value``, joined by the
+            fixed ``", "`` (never ``union_separator``), with any per-value description
+            and/or alias list folded in.
+        """
+        descriptions, aliases = self._extract_enum_metadata(node)
+        parts: list[str] = []
+        for value in values:
+            literal = format_literal_value(value)
+            if isinstance(value, bool):
+                canonical = "true" if value else "false"
+            else:
+                canonical = str(value)
+            part = literal
+            if canonical in descriptions and descriptions[canonical]:
+                part = f"{part} ({descriptions[canonical]}"
+                if canonical in aliases and aliases[canonical]:
+                    part = f"{part}; aliases: {', '.join(aliases[canonical])}"
+                part = f"{part})"
+            elif canonical in aliases and aliases[canonical]:
+                part = f"{part} (aliases: {', '.join(aliases[canonical])})"
+            parts.append(part)
+        return "".join(("one of: ", ", ".join(parts)))
+
+    def _get_title_description_default_value(
+        self, value: dict[str, Any]
+    ) -> tuple[str, str, str, str]:
+        """Base default: no metadata extraction.
+
+        ``JSONishFormatter`` and ``YAMLFormatter`` both override this with their own
+        formatter-specific extraction and stay byte-identical; this default exists only so
+        the shared ``process_enum``/``process_const`` can call it under mypy for a formatter
+        that does not override it.
+
+        Args:
+            value: Schema node (unused by this default).
+
+        Returns:
+            ``("", "", "", "")``.
+        """
+        return "", "", "", ""
+
     def process_enum(self, enum_value: dict[str, Any]) -> str:
         """
         Process an enum field.
@@ -759,36 +1046,30 @@ class BaseFormatter(ABC):
             enum_value: Dictionary containing enum definition.
 
         Returns:
-            Formatted enum representation.
+            The base type token immediately followed by a deferred-comment marker whose
+            slot holds the ``"one of: ..."`` body (plus any description / default /
+            example folded in with ``"; "``). ``"string"`` for an empty enum, with no
+            marker minted. The gap before the comment is inserted later, by
+            ``_hoist_deferred_line``.
         """
-        # Safely get enum values
         enum_list = enum_value.get("enum", [])
         if not enum_list:
             return "string"  # Fallback for empty enum
 
-        enum_type = enum_value.get("type", "string")
+        token = self.enum_type_token(enum_value)
+        body = self.build_enum_comment(enum_value, enum_list)
 
-        # Handle array of types in enum
-        if isinstance(enum_type, list):
-            if len(enum_type) == 1:
-                enum_type = enum_type[0]
-                type_str = self.TYPE_MAP.get(enum_type, enum_type)
-            elif "null" in enum_type and len(enum_type) == 2:
-                # Handle nullable enum types
-                non_null_type = next(t for t in enum_type if t != "null")
-                type_str = self.TYPE_MAP.get(non_null_type, non_null_type)
-            else:
-                # Multiple types - use first non-null type
-                non_null_types = [t for t in enum_type if t != "null"]
-                type_str = self.TYPE_MAP.get(
-                    non_null_types[0] if non_null_types else "string", "string"
-                )
-        else:
-            type_str = self.TYPE_MAP.get(enum_type, enum_type)
+        # ``title`` is deliberately read and DISCARDED: appending it is what leaked the
+        # Pydantic enum class name (``Role:``, ``PriorityWithMetadata:``) into output.
+        _title, description, default_value, example = self._get_title_description_default_value(
+            enum_value
+        )
+        for extra in (description, default_value, example):
+            stripped = extra.strip()
+            if stripped:
+                body = "; ".join((body, stripped))
 
-        # Now type_str is guaranteed to be defined (either from the if/elif branches or the else)
-        enum_values = ", ".join(str(e) for e in enum_list)
-        return f"{type_str} //oneOf: {enum_values}"
+        return f"{token}{self.defer_comment(body)}"
 
     def process_const(self, const_value: dict[str, Any]) -> str:
         """
@@ -798,17 +1079,11 @@ class BaseFormatter(ABC):
             const_value: Dictionary containing const definition.
 
         Returns:
-            Formatted const representation.
+            The same representation ``process_enum`` produces for a single-element enum:
+            a ``const`` is an enum of exactly one value.
         """
-        const = const_value.get("const")
-
-        # Format based on type - subclasses can override for formatter-specific formatting
-        if isinstance(const, bool):
-            # Return as lowercase string for base formatter
-            return "true" if const else "false"
-        else:
-            # int, float, or other
-            return str(const)
+        synthesised = {**const_value, "enum": [const_value.get("const")]}
+        return self.process_enum(synthesised)
 
     def render_type_token(self, schema: dict[str, Any]) -> str:
         """One-line type token for a nested position (tuple element / mapping value)."""
