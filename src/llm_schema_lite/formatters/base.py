@@ -2,7 +2,8 @@
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -195,25 +196,71 @@ class BaseFormatter(ABC):
         self.properties = schema.get("properties", {})
         self.required_fields = set(schema.get("required", []))
         self._ref_cache: dict[str, str] = {}
-        self._recursion_depth: dict[str, int] = {}
-        self._max_recursion_depth = 3  # Further reduced to prevent infinite expansion
-        self._processed_refs: set[str] = set()  # Track processed refs to prevent cycles
-        self._expansion_count: dict[str, int] = {}  # Track expansion count per ref
-        self._max_expansions = 3  # Further reduced to prevent excessive expansion
-        self._ref_depth_tracker: dict[str, int] = {}  # Track depth per ref path
         # Optional cache of processed schema data; may be set by subclasses in
         # transform_schema() for reuse. TypeScript/YAML check this before re-processing.
         self._processed_data: dict[str, Any] | None = None
-        self._max_ref_depth = 2  # Maximum depth for $ref resolution
 
-        # Priority 1: Global expansion budget to prevent extreme expansion
+        # Unconditional safety net; also tiers anyOf/oneOf member caps.
         self._global_expansion_budget = 150  # Max total $ref expansions across entire schema
         self._global_expansion_count = 0  # Track total expansions
-        self._ref_expansion_path: list[str] = []  # Track current expansion path for cycle detection
-        self._expansion_fingerprints: set[str] = set()
+        self._ref_expansion_path: list[str] = []  # Active $ref expansion path (the depth counter)
+        self._truncation_epoch = 0  # Monotonic count of recursion truncations
+        self._root_ref_key: str | None = None  # def name adopted by _adopt_root_ref()
         self._nested_required_stack: list[set[str]] = []
 
         # Pre-warm cache for common patterns
+
+    def _adopt_root_ref(self) -> str | None:
+        """Adopt a root-level ``$ref``'s definition as the effective root.
+
+        Pydantic emits ``{"$defs": ..., "$ref": "#/$defs/T"}`` (no ``properties``) for
+        every root model that participates in a cycle. Without this, YAML/TypeScript
+        fall into their "no properties" branch and render ``{}`` / ``interface Schema {}``.
+
+        Mutates ``self.properties`` / ``self.required_fields`` and returns the def name,
+        or returns None when the schema is not a bare root ``$ref`` to an object def.
+        """
+        ref_str = self.schema.get("$ref", "")
+        if not ref_str or self.properties:
+            return None
+        ref_match = self.REF_PATTERN.search(ref_str)
+        if not ref_match:
+            return None
+        ref_key = ref_match.group(1)
+        ref_def = self.defs.get(ref_key)
+        if not isinstance(ref_def, dict) or not ref_def.get("properties"):
+            return None
+        self.properties = ref_def["properties"]
+        self.required_fields = set(ref_def.get("required", []))
+        return ref_key
+
+    @contextmanager
+    def _expanding(self, ref_key: str | None) -> Iterator[None]:
+        """Treat a block rendered outside ``process_ref`` as an expansion of ``ref_key``.
+
+        Used for the adopted root ``$ref`` body and for each ``$defs`` section, so those
+        bodies count toward ``max_recursion_depth`` exactly like an inline expansion.
+        """
+        if ref_key is None:
+            yield
+            return
+        self._ref_expansion_path.append(ref_key)
+        try:
+            yield
+        finally:
+            if self._ref_expansion_path and self._ref_expansion_path[-1] == ref_key:
+                self._ref_expansion_path.pop()
+
+    def recursion_placeholder(self, type_name: str) -> str:
+        """Placeholder token emitted where a recursive $ref is truncated."""
+        return f"object  {self.comment_prefix} recursive: {type_name}"
+
+    def _reset_ref_state(self) -> None:
+        """Reset per-render $ref expansion state so the depth budget is deterministic."""
+        self._ref_cache.clear()
+        self._ref_expansion_path.clear()
+        self._global_expansion_count = 0
+        self._truncation_epoch = 0
 
     def process_schema(self) -> dict[str, Any]:
         """
@@ -581,48 +628,24 @@ class BaseFormatter(ABC):
 
         ref_key = ref_match.group(1)
 
-        # Priority 1: Check global expansion budget first
+        # Unconditional safety net.
         if self._global_expansion_count >= self._global_expansion_budget:
             return "object"  # Hit global budget limit
 
-        # Create expansion fingerprint to detect circular patterns
-        expansion_fingerprint = "->".join(self._ref_expansion_path + [ref_key])
-        if expansion_fingerprint in self._expansion_fingerprints:
-            return "object"  # Detected circular expansion pattern
+        # The one truncation contract: same-type re-entries on the active path.
+        # Consulted only on re-entry, so the first expansion of any $ref is unconditional.
+        reentries = self._ref_expansion_path.count(ref_key)
+        if reentries >= 1 and reentries >= self.config.max_recursion_depth:
+            self._truncation_epoch += 1
+            return self.recursion_placeholder(ref_key)
 
-        # Check if we've already processed this ref in this cycle
-        if ref_key in self._processed_refs:
-            return "object"  # Prevent circular references
-
-        # Check expansion count
-        expansion_count = self._expansion_count.get(ref_key, 0)
-        if expansion_count >= self._max_expansions:
-            return "object"  # Prevent infinite expansion
-
-        # Check recursion depth
-        current_depth = self._recursion_depth.get(ref_key, 0)
-        if current_depth >= self._max_recursion_depth:
-            return "object"  # Prevent infinite recursion
-
-        # Check ref depth to prevent deep nesting
-        ref_depth = self._ref_depth_tracker.get(ref_key, 0)
-        if ref_depth >= self._max_ref_depth:
-            return "object"  # Prevent deep ref resolution
-
-        # Check cache first
+        # Check cache first (only untruncated renderings are ever cached)
         if ref_key in self._ref_cache:
             return self._ref_cache[ref_key]
 
-        # Mark as being processed
-        self._processed_refs.add(ref_key)
-        self._recursion_depth[ref_key] = current_depth + 1
-        self._expansion_count[ref_key] = expansion_count + 1
-        self._ref_depth_tracker[ref_key] = ref_depth + 1
-
-        # Priority 1: Track global expansion and path
+        entry_epoch = self._truncation_epoch
         self._global_expansion_count += 1
         self._ref_expansion_path.append(ref_key)
-        self._expansion_fingerprints.add(expansion_fingerprint)
 
         try:
             # Priority 2: Try to resolve nested definition paths first
@@ -643,7 +666,8 @@ class BaseFormatter(ABC):
             if isinstance(ref_def, bool):
                 # Handle boolean values in JSON Schema: true means any value, false means no value
                 ref_str = "any" if ref_def else "never"
-                self._ref_cache[ref_key] = ref_str
+                if self._truncation_epoch == entry_epoch:
+                    self._ref_cache[ref_key] = ref_str
                 return ref_str
 
             # Handle different definition types with better structure preservation
@@ -698,17 +722,11 @@ class BaseFormatter(ABC):
                 else:
                     ref_str = "object"
 
-            # Cache the result
-            self._ref_cache[ref_key] = ref_str
+            # Taint-and-skip: never cache a rendering that truncated.
+            if self._truncation_epoch == entry_epoch:
+                self._ref_cache[ref_key] = ref_str
             return ref_str
         finally:
-            # Clean up tracking
-            self._processed_refs.discard(ref_key)
-            self._recursion_depth[ref_key] = current_depth
-            self._ref_depth_tracker[ref_key] = ref_depth
-
-            # Priority 1: Clean up expansion path
-            self._expansion_fingerprints.discard(expansion_fingerprint)
             if self._ref_expansion_path and self._ref_expansion_path[-1] == ref_key:
                 self._ref_expansion_path.pop()
 
