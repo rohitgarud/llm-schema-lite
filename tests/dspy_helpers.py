@@ -20,7 +20,8 @@ this duplication.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import enum
+from typing import Any, Literal
 
 import pytest
 
@@ -28,9 +29,13 @@ pytest.importorskip("dspy", minversion="3.3.1")
 
 import dspy  # noqa: E402
 from dspy.utils.dummies import DummyLM  # noqa: E402
-from pydantic import BaseModel, Field  # noqa: E402
+from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 
-from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
+from llm_schema_lite.dspy_integration import (  # noqa: E402
+    OutputMode,
+    PromptLayout,
+    StructuredOutputAdapter,
+)
 
 
 class Address(BaseModel):
@@ -81,6 +86,60 @@ class Unordered(dspy.Signature):
     alpha: str = dspy.OutputField()
 
 
+class AliasedAddress(BaseModel):
+    """Aliased address used to prove input values honour by_alias (lsl-2026-09-04-007)."""
+
+    street_name: str = Field(alias="streetName")
+    city: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class Colour(str, enum.Enum):
+    """Two-member string enum used by the Choices signature."""
+
+    RED = "red"
+    BLUE = "blue"
+
+
+class AliasIn(dspy.Signature):
+    """Probe alias-honouring, indented Pydantic input rendering (lsl-2026-09-04-007)."""
+
+    text: str = dspy.InputField()
+    addr: AliasedAddress = dspy.InputField()
+
+
+class ListOut(dspy.Signature):
+    """Extract a list of people."""
+
+    text: str = dspy.InputField()
+    items: list[Person] = dspy.OutputField()
+
+
+class Choices(dspy.Signature):
+    """Probe Optional/Literal/Enum output rendering (lsl-2026-09-04-007)."""
+
+    text: str = dspy.InputField()
+    colour: Colour = dspy.OutputField()
+    tier: Literal["a", "b"] = dspy.OutputField()
+    note: str | None = dspy.OutputField()
+
+
+class HistoryIn(dspy.Signature):
+    """Probe dspy.History carve-out and input rendering (lsl-2026-09-04-007)."""
+
+    history: dspy.History = dspy.InputField()
+    question: str = dspy.InputField()
+    answer: str = dspy.OutputField()
+
+
+class ImageIn(dspy.Signature):
+    """Probe dspy.Image custom-type marker survival (lsl-2026-09-04-007)."""
+
+    img: dspy.Image = dspy.InputField()
+    caption: str = dspy.OutputField()
+
+
 JSON_OUTPUT_HEADER = "Outputs will be a JSON object with the following fields."
 YAML_OUTPUT_HEADER = "Outputs will be in YAML format with the following fields."
 DSPY_OWNED_TEXT = (
@@ -88,10 +147,17 @@ DSPY_OWNED_TEXT = (
     "In adhering to this structure, your objective is:",
 )
 
+REQUIRED_LEGEND = {
+    "jsonish": "// Fields marked with * are required",
+    "yaml": "# Fields marked with * are required",
+}
 
-def make_adapter(mode: OutputMode) -> StructuredOutputAdapter:
-    """Return a StructuredOutputAdapter configured for the given output mode."""
-    return StructuredOutputAdapter(output_mode=mode)
+
+def make_adapter(
+    mode: OutputMode, layout: PromptLayout = PromptLayout.SECTIONS
+) -> StructuredOutputAdapter:
+    """Return a StructuredOutputAdapter configured for the given output mode and layout."""
+    return StructuredOutputAdapter(output_mode=mode, prompt_layout=layout)
 
 
 class SchemaCapableDummyLM(DummyLM):  # type: ignore[misc]

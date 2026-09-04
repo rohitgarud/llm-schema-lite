@@ -7,7 +7,11 @@ import pytest
 pytest.importorskip("dspy", minversion="3.3.1")
 
 from llm_schema_lite import FormatterConfig  # noqa: E402
-from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
+from llm_schema_lite.dspy_integration import (  # noqa: E402
+    OutputMode,
+    PromptLayout,
+    StructuredOutputAdapter,
+)
 from tests.dspy_helpers import Extract  # noqa: E402
 
 
@@ -61,12 +65,39 @@ class TestOutputMode:
         assert [m.value for m in OutputMode] == ["json", "jsonish", "yaml"]
 
 
-class TestIncludeInputSchemas:
-    """include_input_schemas is currently inert (XF-01)."""
+class TestPromptLayout:
+    """PromptLayout enum membership and the prompt_layout constructor option."""
 
-    @pytest.mark.xfail(
-        reason="lsl-2026-09-04-007: include_input_schemas is inert in every mode (research Q2)"
-    )
+    def test_members_and_values(self):
+        """PromptLayout declares exactly sections and json_block, in that order."""
+        assert [m.value for m in PromptLayout] == ["sections", "json_block"]
+
+    def test_default_is_sections(self):
+        """A default adapter renders the sectioned output layout."""
+        assert StructuredOutputAdapter().prompt_layout is PromptLayout.SECTIONS
+
+    def test_explicit_layout_round_trips(self):
+        """Each PromptLayout member round-trips through __init__."""
+        for layout in PromptLayout:
+            assert StructuredOutputAdapter(prompt_layout=layout).prompt_layout is layout
+
+    def test_plain_string_is_accepted(self):
+        """A plain string is accepted because PromptLayout mixes in str."""
+        adapter = StructuredOutputAdapter(prompt_layout="json_block")
+        assert adapter.prompt_layout == PromptLayout.JSON_BLOCK
+
+    def test_positional_call_compatibility_is_preserved(self):
+        """prompt_layout is appended last, so the six pre-007 positional args still work."""
+        adapter = StructuredOutputAdapter(None, True, OutputMode.YAML, False, 3, None)
+        assert adapter.output_mode is OutputMode.YAML
+        assert adapter.include_input_schemas is False
+        assert adapter.max_recursion_depth == 3
+        assert adapter.prompt_layout is PromptLayout.SECTIONS
+
+
+class TestIncludeInputSchemas:
+    """include_input_schemas gates the input-field schema note (lsl-2026-09-04-007)."""
+
     def test_include_input_schemas_false_omits_input_field_schema(self):
         """include_input_schemas=False should drop the input field's schema note."""
         on = StructuredOutputAdapter(output_mode=OutputMode.JSON, include_input_schemas=True)
@@ -86,5 +117,6 @@ class TestIncludeInputSchemas:
         on_input_section = on_out[on_out.index(input_marker) : on_out.index(output_marker)]
         off_input_section = off_out[off_out.index(input_marker) : off_out.index(output_marker)]
 
-        assert "# note: the value you produce must adhere to the JSON schema:" in on_input_section
+        assert "# note: this value adheres to the JSON schema:" in on_input_section
+        assert "the value you produce" not in on_input_section
         assert "# note:" not in off_input_section

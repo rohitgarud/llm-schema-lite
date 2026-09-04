@@ -4,6 +4,6 @@ This module provides adapters for integrating llm-schema-lite with DSPy,
 enabling token-efficient schema representation in DSPy programs.
 """
 
-from .adapters import OutputMode, StructuredOutputAdapter
+from .adapters import OutputMode, PromptLayout, StructuredOutputAdapter
 
-__all__ = ["StructuredOutputAdapter", "OutputMode"]
+__all__ = ["StructuredOutputAdapter", "OutputMode", "PromptLayout"]

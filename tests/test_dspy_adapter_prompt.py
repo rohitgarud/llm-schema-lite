@@ -9,11 +9,20 @@ pytest.importorskip("dspy", minversion="3.3.1")
 import dspy  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
+from llm_schema_lite.dspy_integration import (  # noqa: E402
+    OutputMode,
+    PromptLayout,
+    StructuredOutputAdapter,
+)
 from tests.dspy_helpers import (  # noqa: E402
     QA,
+    Choices,
     Extract,
+    HistoryIn,
+    ListOut,
+    QAOptional,
     assert_has_field_marker,
+    assert_message_roles,
     assert_mode_header,
     assert_no_dspy_owned_text,
     assert_note_clause,
@@ -29,7 +38,8 @@ JSON_HEADER = "Outputs will be a JSON object with the following fields."
 YAML_HEADER = "Outputs will be in YAML format with the following fields."
 
 NOTE_JSON_SCHEMA = "# note: the value you produce must adhere to the JSON schema:"
-NOTE_WILL_FOLLOW = "# note: the value you produce will follow the schema:"
+NOTE_INPUT_SCHEMA = "# note: this value follows the schema:"
+NOTE_INPUT_JSON_SCHEMA = "# note: this value adheres to the JSON schema:"
 NOTE_PARSEABLE = (
     "# note: the value you produce must be parseable according to the following schema:"
 )
@@ -50,14 +60,18 @@ class TestFieldStructure:
         assert_note_clause(out, "score")
         assert NOTE_JSON_SCHEMA in out
         assert NOTE_FLOAT in out
+        assert NOTE_INPUT_JSON_SCHEMA in out
+        json_input_section = out[out.index(INPUTS_HEADER) : out.index(JSON_HEADER)]
+        assert "the value you produce must adhere" not in json_input_section
 
     def test_jsonish_mode_anchors(self):
         """JSONish mode shares the JSON header but uses the simplified-schema note wording."""
         out = make_adapter(OutputMode.JSONISH).format_field_structure(Extract)
         assert_mode_header(out, OutputMode.JSONISH)
-        assert NOTE_WILL_FOLLOW in out
+        assert NOTE_INPUT_SCHEMA in out
         assert NOTE_PARSEABLE in out
         assert NOTE_FLOAT in out
+        assert "the value you produce will follow" not in out
 
     def test_yaml_mode_anchors(self):
         """YAML mode emits the YAML header and never the JSON header."""
@@ -84,35 +98,28 @@ class TestFieldStructure:
             out = make_adapter(mode).format_field_structure(Extract)
             assert_no_dspy_owned_text(out)
 
-    @pytest.mark.xfail(
-        reason="lsl-2026-09-04-007: output schema is embedded in a JSON string value, "
-        "so its newlines and quotes are escaped"
-    )
-    def test_output_schema_is_plain_text_not_escaped_json_string(self):
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    def test_output_schema_is_plain_text_not_escaped_json_string(self, layout):
         """The output section should be plain text, not a JSON string literal."""
-        out = make_adapter(OutputMode.JSONISH).format_field_structure(Extract)
+        out = make_adapter(OutputMode.JSONISH, layout=layout).format_field_structure(Extract)
         section = out[out.index(JSON_HEADER) :]
         assert "\\n" not in section
         assert '\\"' not in section
 
-    @pytest.mark.xfail(
-        reason="lsl-2026-09-04-007: no required-marker legend is emitted for the * suffix"
-    )
-    def test_required_marker_legend_present(self):
-        """A legend should explain that the * suffix marks a required field."""
-        out = make_adapter(OutputMode.JSONISH).format_field_structure(Extract)
-        legend = [ln for ln in out.splitlines() if "*" in ln and "required" in ln.lower()]
-        assert legend, f"No '*' required-marker legend line found. Snippet: {out[:200]!r}"
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    def test_yaml_field_structure_is_plain_text(self, layout):
+        """YAML mode renders nested models as plain text, with no escapes."""
+        out = make_adapter(OutputMode.YAML, layout=layout).format_field_structure(Extract)
+        assert "\\\n" not in out
+        assert "\\n" not in out
+        assert '\\"' not in out
+        assert YAML_HEADER in out
 
-    @pytest.mark.xfail(
-        reason="lsl-2026-09-04-007: YAML mode dumps a schema string through yaml.dump "
-        "(research Q19.3)"
-    )
-    def test_yaml_field_structure_is_plain_text(self):
-        """YAML mode should render nested models as an indented YAML block."""
+    @pytest.mark.xfail(reason="lsl-2026-09-04-006: YAML formatter emits hoisted Class.field keys")
+    def test_yaml_field_structure_has_no_hoisted_class_keys(self):
+        """The hoisted `Address.street` block is the YAML formatter's, not the adapter's."""
         out = make_adapter(OutputMode.YAML).format_field_structure(Extract)
         assert "Address.street" not in out
-        assert "\\\n" not in out
 
     def test_jsonish_schema_comments_have_no_stray_quote(self):
         """JSONish schema comments should not end with a stray double quote."""
@@ -123,6 +130,34 @@ class TestFieldStructure:
                 f"Stray-quote token {token!r} present in JSONish schema comment. "
                 f"Snippet: {out[:200]!r}"
             )
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode,prefix", [(OutputMode.JSONISH, "//"), (OutputMode.YAML, "#")])
+    def test_required_marker_legend_appears_exactly_once(self, mode, prefix, layout):
+        """The legend line is hoisted to the preamble and printed exactly once."""
+        out = make_adapter(mode, layout=layout).format_field_structure(Extract)
+        assert out.count(f"{prefix} Fields marked with * are required") == 1
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_no_legend_when_no_field_uses_the_marker(self, mode, layout):
+        """QA has no complex fields, so no schema uses '*' and no legend is emitted."""
+        assert "are required" not in make_adapter(mode, layout=layout).format_field_structure(QA)
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    def test_json_mode_emits_no_legend(self, layout):
+        """JSON mode never simplifies a schema, so it never emits the legend either."""
+        assert "are required" not in make_adapter(
+            OutputMode.JSON, layout=layout
+        ).format_field_structure(Extract)
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_history_field_carries_no_note_or_schema(self, mode, layout):
+        """dspy.History is a Type-adjacent carve-out: bare placeholder, no note."""
+        out = make_adapter(mode, layout=layout).format_field_structure(HistoryIn)
+        assert "{history}        # note:" not in out
+        assert "conversation history is a list of messages" not in out
 
 
 EXPECTED_EXTRACT_JSON = (
@@ -219,3 +254,94 @@ class TestMaxRecursionDepthForwarding:
         out_shallow = shallow.format_field_structure(RecOutput)
         out_deep = deep.format_field_structure(RecOutput)
         assert out_shallow != out_deep
+
+
+EXPECTED_PERSON_SCHEMA_JSONISH = (
+    "// Person nested under Extract.person; matches the captured fixture.\n"
+    "{\n"
+    "  name*: string // Full name,\n"
+    "  age*: int,\n"
+    "  address: { // Three-field address used to produce every Tier-1 captured string.\n"
+    "    street*: string,\n"
+    "    city*: string,\n"
+    "    country: string // (default='US')\n"
+    "  } OR null  // (default=null)\n"
+    "}"
+)
+
+
+class TestPromptLayouts:
+    """The in-scope prompt snapshot cases, per layout (lsl-2026-09-04-007)."""
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_simple_types_prompt(self, mode, layout):
+        """An all-str signature carries no notes and no legend, in any mode or layout."""
+        out = make_adapter(mode, layout=layout).format_field_structure(QA)
+        assert_mode_header(out, mode)
+        assert_has_field_marker(out, "question")
+        assert_no_dspy_owned_text(out)
+        assert "# note:" not in out
+        assert "are required" not in out
+
+    def test_simple_types_json_block_is_byte_identical_to_upstream_shape(self):
+        """json_block reproduces upstream JSONAdapter's all-str output block exactly."""
+        out = make_adapter(
+            OutputMode.JSONISH, layout=PromptLayout.JSON_BLOCK
+        ).format_field_structure(QA)
+        section = out[out.index(JSON_HEADER) + len(JSON_HEADER) :].strip()
+        assert section == '{\n  "answer": "{answer}"\n}'
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    def test_nested_model_output_prompt(self, layout):
+        """A nested Pydantic output renders as literal multi-line schema text."""
+        out = make_adapter(OutputMode.JSONISH, layout=layout).format_field_structure(Extract)
+        assert_mode_header(out, OutputMode.JSONISH)
+        assert_note_clause(out, "person")
+        assert_no_dspy_owned_text(out)
+        assert "\\n" not in out
+        assert '\\"' not in out
+        assert EXPECTED_PERSON_SCHEMA_JSONISH in out
+        if layout is PromptLayout.SECTIONS:
+            assert_has_field_marker(out, "person")
+        else:
+            assert '"person": {person}' in out
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    def test_single_demo_message_shape(self, layout):
+        """The demo assistant turn is one JSON object, unchanged by the layout (I1)."""
+        messages = make_adapter(OutputMode.JSONISH, layout=layout).format(
+            QA, [{"question": "2+2?", "answer": "4"}], {"question": "3+3?"}
+        )
+        assert_message_roles(messages, ["system", "user", "assistant", "user"])
+        assert messages[2]["content"] == '{\n  "answer": "4"\n}'
+        assert messages[-1]["content"].endswith(
+            "Respond with a JSON object in the following order of fields: `answer`."
+        )
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    def test_list_model_output_prompt(self, layout):
+        """A list[Model] output renders as a bracketed simplified block, not raw $defs."""
+        out = make_adapter(OutputMode.JSONISH, layout=layout).format_field_structure(ListOut)
+        assert '"$defs"' not in out
+        assert "[\n{\n  name*: string // Full name," in out
+        assert "\n}\n]" in out
+        assert "\\n" not in out
+        assert_note_clause(out, "items")
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    def test_optional_literal_enum_output_prompt(self, layout):
+        """Enum, Literal and str | None outputs each render their own note shape."""
+        out = make_adapter(OutputMode.JSONISH, layout=layout).format_field_structure(Choices)
+        assert_mode_header(out, OutputMode.JSONISH)
+        assert "# note: the value you produce must be one of: red; blue" in out
+        assert "must exactly match (no extra characters) one of: a; b" in out
+        assert "string OR null" in out
+        assert "\\n" not in out
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    def test_optional_str_output_uses_the_dict_path(self, layout):
+        """QAOptional.note (str | None) reaches the JSON-schema-dict path, not $defs."""
+        out = make_adapter(OutputMode.JSONISH, layout=layout).format_field_structure(QAOptional)
+        assert "string OR null" in out
+        assert '"anyOf"' not in out

@@ -1,12 +1,16 @@
+import dataclasses
 import enum
 import inspect
 import json
 import logging
+import re
 from typing import Any, Literal, get_origin
 
 import pydantic
 from dspy.adapters.chat_adapter import FieldInfoWithName
 from dspy.adapters.json_adapter import JSONAdapter
+from dspy.adapters.types import Type as DSPyType
+from dspy.adapters.types.history import History as DSPyHistory
 from dspy.adapters.types.tool import ToolCalls
 from dspy.adapters.utils import (
     format_field_value,
@@ -16,7 +20,6 @@ from dspy.adapters.utils import (
 )
 from dspy.clients.lm import LM
 from dspy.signatures.signature import Signature, SignatureMeta
-from dspy.signatures.utils import get_dspy_field_type
 from dspy.utils.callback import BaseCallback
 from dspy.utils.exceptions import AdapterParseError
 from pydantic import TypeAdapter
@@ -34,12 +37,57 @@ class OutputMode(enum.Enum):
 
     - JSON: LLM outputs JSON, schema uses full model_json_schema() (verbose)
     - JSONISH: LLM outputs JSON, schema uses simplified BAML-like format (token-efficient)
-    - YAML: LLM outputs YAML, schema uses simplified YAML format (token-efficient)
+    - YAML: LLM outputs YAML, schema uses simplified YAML format (token-efficient).
+      EXPERIMENTAL - see lsl-2026-09-04-006 for known formatter defects.
     """
 
     JSON = "json"
     JSONISH = "jsonish"
     YAML = "yaml"
+
+
+class PromptLayout(str, enum.Enum):
+    """Output-block layout for :meth:`StructuredOutputAdapter.format_field_structure`.
+
+    - SECTIONS (default): each output field gets its own ``[[ ## field ## ]]`` block,
+      identical in form to how the input section already renders. No field's schema is
+      ever routed through ``json.dumps``.
+    - JSON_BLOCK: a single ``{ "field": ... }``-shaped block, unescaped. A placeholder
+      keeps its surrounding quotes iff the field carries no schema text, and loses them
+      when a multi-line schema follows.
+
+    Both layouts leave the input section, the preamble, the headers and the
+    required-marker legend untouched; only the *output* block's shape changes.
+    Accepted as either the enum member or the plain string value.
+    """
+
+    SECTIONS = "sections"
+    JSON_BLOCK = "json_block"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _FieldBlock:
+    """Neutral, layout-independent description of one signature field.
+
+    Produced once per field by ``StructuredOutputAdapter._describe``; consumed by both
+    ``_render_sections`` and ``_render_json_block`` so the two renderers share 100% of
+    the schema-derivation logic.
+
+    Attributes:
+        name: the field's name, used verbatim in ``[[ ## name ## ]]`` markers and as the
+            JSON key in JSON_BLOCK layout.
+        note_text: text placed after ``        # note: `` (eight spaces), or None when the
+            field carries no note at all.
+        schema_text: the multi-line rendered schema printed on the following line(s), or
+            None when everything is already inside ``note_text``.
+        legend_needed: True iff this field's schema used the ``*`` required marker in
+            field-key position and therefore wants the once-per-prompt legend line.
+    """
+
+    name: str
+    note_text: str | None
+    schema_text: str | None
+    legend_needed: bool = False
 
 
 class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
@@ -51,7 +99,8 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         (compatible with OpenAI structured outputs)
     - JSONish mode: JSON output with simplified BAML-like
         schemas (60-85% token reduction from verbose JSON schemas)
-    - YAML mode: YAML output with simplified schemas
+    - YAML mode (experimental): YAML output with simplified schemas. Known formatter
+      defects are tracked in lsl-2026-09-04-006.
     - Simplified schemas for complex input fields (Pydantic models)
     - Robust parsing with fallback mechanisms
 
@@ -66,6 +115,10 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             When given it wins entirely and max_recursion_depth is ignored; when None a default
             FormatterConfig(max_recursion_depth=self.max_recursion_depth) is used, i.e. all
             metadata on. Pass FormatterConfig(include_descriptions=False) for terser prompts.
+        prompt_layout: PromptLayout.SECTIONS (default) renders each output field as its
+            own [[ ## field ## ]] block; PromptLayout.JSON_BLOCK renders one JSON-shaped
+            block with the schema inlined, unescaped. Input fields always use the
+            sectioned form regardless of this option.
     """
 
     def __init__(
@@ -76,6 +129,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         include_input_schemas: bool = True,
         max_recursion_depth: int = 2,
         formatter_config: FormatterConfig | None = None,
+        prompt_layout: PromptLayout = PromptLayout.SECTIONS,
     ):
         super().__init__(
             callbacks=callbacks, use_native_function_calling=use_native_function_calling
@@ -84,6 +138,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         self.include_input_schemas = include_input_schemas
         self.max_recursion_depth = max_recursion_depth
         self.formatter_config = formatter_config
+        self.prompt_layout = prompt_layout
 
     # ==================== Core Call Methods ====================
 
@@ -157,143 +212,262 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
     # ==================== Schema & Field Formatting ====================
 
     def format_field_structure(self, signature: type[Signature]) -> str:
-        """
-        Format field structure with optional schema simplification.
+        """Build the system-prompt field-structure block.
 
-        - JSON mode: Uses full model_json_schema() (verbose but compatible)
-        - JSONish mode: Uses simplified BAML-like schema (token-efficient)
-        - YAML mode: Uses simplified YAML schema (token-efficient)
+        Every field - input or output - is first reduced to a ``_FieldBlock`` by
+        ``_describe``, then rendered to text. ``self.prompt_layout`` governs only the
+        OUTPUT block's renderer; the input block always uses ``_render_sections``.
+
+        This method never calls ``self.format_field_with_value`` (design invariant I1),
+        which is what keeps the schema out of a ``json.dumps`` string value.
         """
-        parts = []
+        parts: list[str] = []
         parts.append(
             "All interactions will be structured in the following way,"
             " with the appropriate values filled in."
         )
 
-        def format_signature_fields_for_instructions(
-            fields: dict[str, FieldInfo], role: str
-        ) -> str:
-            return self.format_field_with_value(
-                fields_with_values={
-                    FieldInfoWithName(name=field_name, info=field_info): self._translate_field_type(
-                        field_name, field_info
-                    )
-                    for field_name, field_info in fields.items()
-                },
-                role=role,
-            )
+        input_blocks = [
+            self._describe(name, info, "input") for name, info in signature.input_fields.items()
+        ]
+        output_blocks = [
+            self._describe(name, info, "output") for name, info in signature.output_fields.items()
+        ]
+
+        if any(block.legend_needed for block in (*input_blocks, *output_blocks)):
+            parts.append(self._legend_line())
 
         parts.append("Inputs will have the following structure:")
-        parts.append(format_signature_fields_for_instructions(signature.input_fields, role="user"))
+        parts.append(self._render_sections(input_blocks))
 
-        # Output message based on mode
         if self.output_mode == OutputMode.YAML:
             parts.append("Outputs will be in YAML format with the following fields.")
         else:
-            # Both JSON and JSONish output JSON
             parts.append("Outputs will be a JSON object with the following fields.")
 
-        parts.append(
-            format_signature_fields_for_instructions(signature.output_fields, role="assistant")
-        )
+        parts.append(self._render(output_blocks))
         return "\n\n".join(parts).strip()
 
-    def _translate_field_type(self, field_name: str, field_info: FieldInfo) -> str:
-        """
-        Translate field type with mode-specific schema representation.
-        This is the key method that differentiates JSON vs JSONish vs YAML modes.
+    # ---------- describe/render helpers (lsl-2026-09-04-007) ----------
 
-        - JSON mode: Uses full JSON schema (verbose)
-        - JSONish mode: Uses simplified schema (BAML-like)
-        - YAML mode: Uses simplified schema (YAML-style)
+    def _effective_formatter_config(self) -> FormatterConfig:
+        """Return the explicit formatter_config, else the max_recursion_depth default.
+
+        Precedence is unchanged from before this ticket: an explicit ``formatter_config``
+        wins entirely and ``max_recursion_depth`` is ignored.
         """
+        if self.formatter_config is not None:
+            return self.formatter_config
+        return FormatterConfig(max_recursion_depth=self.max_recursion_depth)
+
+    def _comment_prefix(self) -> str:
+        """Return the formatter's comment prefix for the current output mode."""
+        return "#" if self.output_mode == OutputMode.YAML else "//"
+
+    def _legend_line(self) -> str:
+        """Return the once-per-prompt required-marker legend line for this mode."""
+        marker = self._effective_formatter_config().required_marker
+        return f"{self._comment_prefix()} Fields marked with {marker} are required"
+
+    @staticmethod
+    def _legend_needed(schema_text: str, legend_line: str, marker: str) -> bool:
+        """Report whether ``schema_text`` wants the required-marker legend.
+
+        True iff a whole line equals ``legend_line`` (the literal the formatters emit
+        per simplified schema), OR any line carries the marker in field-key position.
+        The second disjunct is required because the JSON-schema-dict path emits ``*``
+        markers without ever emitting a legend line of its own.
+        """
+        lines = schema_text.splitlines()
+        if any(line.strip() == legend_line for line in lines):
+            return True
+        pattern = re.compile(r"^\s*[^\s:]+" + re.escape(marker) + r"\s*:")
+        return any(pattern.match(line) for line in lines)
+
+    def _describe(
+        self,
+        name: str,
+        field_info: FieldInfo,
+        role: Literal["input", "output"],
+    ) -> _FieldBlock:
+        """Build the neutral, layout-independent record for one signature field."""
         field_type = field_info.annotation
 
-        # For input fields or string types, use minimal description
+        # 1. include_input_schemas gate: evaluated per field, before any schema work.
+        if role == "input" and not self.include_input_schemas:
+            return _FieldBlock(name=name, note_text=None, schema_text=None)
+
+        # 2. Unconditional carve-out for dspy.Type subclasses and dspy.History, which
+        #    upstream JSONAdapter also emits nothing for (dspy.Image, dspy.Audio,
+        #    dspy.Tool, ToolCalls, dspy.Code are Type subclasses; History is not).
+        if inspect.isclass(field_type) and issubclass(field_type, DSPyType | DSPyHistory):
+            return _FieldBlock(name=name, note_text=None, schema_text=None)
+
+        voice = "the value you produce " if role == "output" else "this value "
+
+        # 3. Scalar / enum / literal branches - note only, never a schema block.
         if field_type is str:
-            desc = ""
-        elif field_type is bool:
-            desc = "must be True or False"
-        elif field_type in (int, float):
-            desc = f"must be a single {field_type.__name__} value"
-        elif inspect.isclass(field_type) and issubclass(field_type, enum.Enum):
+            return _FieldBlock(name=name, note_text=None, schema_text=None)
+        if field_type is bool:
+            return _FieldBlock(
+                name=name, note_text=f"{voice}must be True or False", schema_text=None
+            )
+        if field_type in (int, float):
+            return _FieldBlock(
+                name=name,
+                note_text=f"{voice}must be a single {field_type.__name__} value",
+                schema_text=None,
+            )
+        if inspect.isclass(field_type) and issubclass(field_type, enum.Enum):
             enum_vals = "; ".join(str(member.value) for member in field_type)
-            desc = f"must be one of: {enum_vals}"
-        elif hasattr(field_type, "__origin__") and field_type.__origin__ is Literal:  # type: ignore[union-attr]
-            desc = f"must exactly match (no extra characters) one of: {'; '.join([str(x) for x in field_type.__args__])}"  # type: ignore[union-attr] # noqa: E501
-        else:
-            # Complex types - this is where mode-specific logic applies
-            desc = self._get_complex_type_description(field_type, field_info)  # type: ignore[arg-type]
+            return _FieldBlock(
+                name=name, note_text=f"{voice}must be one of: {enum_vals}", schema_text=None
+            )
+        if hasattr(field_type, "__origin__") and field_type.__origin__ is Literal:  # type: ignore[union-attr]
+            args = "; ".join(str(x) for x in field_type.__args__)  # type: ignore[union-attr]
+            return _FieldBlock(
+                name=name,
+                note_text=(f"{voice}must exactly match (no extra characters) one of: {args}"),
+                schema_text=None,
+            )
 
-        desc = (" " * 8) + f"# note: the value you produce {desc}" if desc else ""
-        return f"{{{field_name}}}{desc}"
-
-    def _get_complex_type_description(self, field_type: type[Any], field_info: FieldInfo) -> str:
-        """
-        Get description for complex types with mode-specific schema representation.
-
-        Key difference:
-        - JSON mode: Always uses full model_json_schema() (verbose)
-        - JSONish/YAML mode: Uses simplified schema from llm-schema-lite (token-efficient)
-        """
-        is_input_field = get_dspy_field_type(field_info) == "input"
-
-        # For JSON mode, always use full JSON schema (no simplification)
-        if self.output_mode == OutputMode.JSON:
-            try:
-                schema = TypeAdapter(field_type).json_schema()
-                return f"must adhere to the JSON schema: {json.dumps(schema, ensure_ascii=False)}"
-            except Exception:
-                return f"must be a valid {get_annotation_name(field_type)}"
-
-        # For JSONish and YAML modes, use simplified schemas
-        # Also for input fields when include_input_schemas is enabled
-        should_simplify = self.output_mode in (OutputMode.JSONISH, OutputMode.YAML) or (
-            is_input_field and self.include_input_schemas
+        # 4. Complex types.
+        format_type: Literal["jsonish", "typescript", "yaml"] = (
+            "yaml" if self.output_mode == OutputMode.YAML else "jsonish"
+        )
+        note_stem, schema_text = self._resolve_schema_text(field_type, role, format_type)
+        legend_needed = False
+        if schema_text is not None:
+            legend_line = self._legend_line()
+            marker = self._effective_formatter_config().required_marker
+            legend_needed = self._legend_needed(schema_text, legend_line, marker)
+            schema_text = "\n".join(
+                line for line in schema_text.splitlines() if line.strip() != legend_line
+            )
+        return _FieldBlock(
+            name=name,
+            note_text=f"{voice}{note_stem}",
+            schema_text=schema_text,
+            legend_needed=legend_needed,
         )
 
-        if should_simplify:
-            try:
-                # Determine format type for simplification
-                if self.output_mode == OutputMode.YAML:
-                    format_type = "yaml"
-                else:
-                    format_type = "jsonish"  # Default for JSONish mode and input fields
+    def _resolve_schema_text(
+        self,
+        annotation: Any,
+        role: Literal["input", "output"],
+        format_type: Literal["jsonish", "typescript", "yaml"],
+    ) -> tuple[str, str | None]:
+        """Resolve a complex annotation to ``(note_stem, schema_text)``.
 
-                # Simplify using llm-schema-lite
-                format_type_literal: Literal["jsonish", "typescript", "yaml"] = format_type  # type: ignore
-                config = self.formatter_config
-                if config is None:
-                    config = FormatterConfig(max_recursion_depth=self.max_recursion_depth)
-                simplified = simplify_schema(
-                    field_type,
-                    config=config,
-                    format_type=format_type_literal,
+        ``note_stem`` is the sentence fragment placed after the role voice by
+        ``_describe``. ``schema_text`` is the multi-line schema to print on the
+        following line(s), or None when the tier embeds everything in the stem.
+
+        Tiers, each catching Exception, logging at DEBUG and falling through, so no
+        exception ever escapes:
+
+          1. ``simplify_schema(annotation, ...)`` - the bare-BaseModel path.
+          2. ``TypeAdapter(annotation).json_schema()`` fed back into ``simplify_schema``
+             as a dict, with a root-array unwrap. Covers list[Model], Model | None,
+             str | None and dict[str, Model].
+          3. the verbose JSON schema, byte-for-byte the current silent fallback. This
+             is also the tier entered directly in OutputMode.JSON.
+          4. ``must be a valid <name>`` - the terminal fallback.
+        """
+        simplified_stem = (
+            "follows the schema:"
+            if role == "input"
+            else "must be parseable according to the following schema:"
+        )
+        if self.output_mode != OutputMode.JSON:
+            config = self._effective_formatter_config()
+            try:
+                simplified = simplify_schema(annotation, config=config, format_type=format_type)
+                return simplified_stem, simplified.to_string()
+            except Exception as exc:
+                logger.debug(f"simplify_schema failed for {annotation}: {exc}")
+
+            # Tier 2: simplify_schema also accepts a JSON-schema dict, which covers
+            # list[Model], Model | None, str | None and dict[str, Model]. The array
+            # unwrap duplicates a container token the jsonish/YAML formatters will own
+            # once the root-array rendering follow-up lands; delete it then.
+            try:
+                schema = TypeAdapter(annotation).json_schema()
+                if schema.get("type") == "array" and "items" in schema:
+                    inner = dict(schema["items"])
+                    if "$defs" in schema:
+                        inner["$defs"] = schema["$defs"]
+                    body = simplify_schema(
+                        inner, config=config, format_type=format_type
+                    ).to_string()
+                    if format_type == "yaml":
+                        text = "- " + body.replace("\n", "\n  ")
+                    else:
+                        text = "[\n" + body + "\n]"
+                else:
+                    text = simplify_schema(
+                        schema, config=config, format_type=format_type
+                    ).to_string()
+                return simplified_stem, text
+            except Exception as exc:
+                logger.debug(f"json-schema-dict path failed for {annotation}: {exc}")
+
+        verbose_stem = (
+            "adheres to the JSON schema:" if role == "input" else "must adhere to the JSON schema:"
+        )
+        try:
+            schema = TypeAdapter(annotation).json_schema()
+            return f"{verbose_stem} {json.dumps(schema, ensure_ascii=False)}", None
+        except Exception as exc:
+            logger.debug(f"json_schema failed for {annotation}: {exc}")
+
+        return f"must be a valid {get_annotation_name(annotation)}", None
+
+    def _render(self, blocks: list[_FieldBlock]) -> str:
+        """Dispatch ``blocks`` to the renderer selected by ``self.prompt_layout``.
+
+        Used for the OUTPUT block only; the input block always calls
+        ``_render_sections`` directly, in both layouts.
+        """
+        if self.prompt_layout == PromptLayout.JSON_BLOCK:
+            return self._render_json_block(blocks)
+        return self._render_sections(blocks)
+
+    def _render_sections(self, blocks: list[_FieldBlock]) -> str:
+        """Render ``blocks`` as ``[[ ## name ## ]]`` sections joined by a blank line."""
+        rendered: list[str] = []
+        for block in blocks:
+            text = f"[[ ## {block.name} ## ]]\n{{{block.name}}}"
+            if block.note_text is not None:
+                text += f"{' ' * 8}# note: {block.note_text}"
+            if block.schema_text is not None:
+                text += f"\n{block.schema_text}"
+            rendered.append(text)
+        return "\n\n".join(rendered).strip()
+
+    def _render_json_block(self, blocks: list[_FieldBlock]) -> str:
+        """Render ``blocks`` as one ``{ "name": ... }``-shaped block, unescaped.
+
+        A placeholder keeps its surrounding quotes iff the field carries no schema
+        text, which reproduces upstream JSONAdapter's block byte-for-byte for an
+        all-str signature. Schema text is appended verbatim and left-aligned, never
+        re-indented under its JSON key - re-indenting would corrupt the formatter's
+        own significant indentation.
+        """
+        entries: list[str] = []
+        for block in blocks:
+            note_suffix = (
+                f"{' ' * 8}# note: {block.note_text}" if block.note_text is not None else ""
+            )
+            if block.schema_text is None:
+                entries.append(f'  "{block.name}": "{{{block.name}}}{note_suffix}"')
+            else:
+                entries.append(
+                    f'  "{block.name}": {{{block.name}}}{note_suffix}\n{block.schema_text}'
                 )
-                schema_str = simplified.to_string()
-
-                # Adjust wording for input vs output fields
-                if is_input_field:
-                    return f"will follow the schema: {schema_str}"
-                else:
-                    return f"must be parseable according to the following schema: {schema_str}"
-            except Exception as e:
-                logger.debug(f"Failed to simplify schema for {field_type}: {e}")
-                # Fallback to full JSON schema
-                try:
-                    schema = TypeAdapter(field_type).json_schema()
-                    return (
-                        f"must adhere to the JSON schema: {json.dumps(schema, ensure_ascii=False)}"
-                    )
-                except Exception:
-                    return f"must be a valid {get_annotation_name(field_type)}"
-        else:
-            # Fallback for other cases
-            try:
-                schema = TypeAdapter(field_type).json_schema()
-                return f"must adhere to the JSON schema: {json.dumps(schema, ensure_ascii=False)}"
-            except Exception:
-                return f"must be a valid {get_annotation_name(field_type)}"
+        if not entries:
+            return "{}"
+        return "{\n" + ",\n".join(entries) + "\n}"
 
     def user_message_output_requirements(self, signature: type[Signature]) -> str:
         """Specify output format requirements based on mode."""
@@ -319,6 +493,41 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         )
         base_message += "."
         return base_message
+
+    def format_user_message_content(
+        self,
+        signature: type[Signature],
+        inputs: dict[str, Any],
+        prefix: str = "",
+        suffix: str = "",
+        main_request: bool = False,
+    ) -> str:
+        """Pre-serialise plain Pydantic input values, then delegate to ChatAdapter.
+
+        Upstream's chain (ChatAdapter.format_user_message_content ->
+        dspy.adapters.utils.format_field_value -> serialize_for_json) passes neither
+        ``by_alias`` nor ``indent``, so a Pydantic input renders as compact,
+        non-aliased single-line JSON. Replacing qualifying values with a pre-rendered
+        ``str`` makes ``format_field_value`` pass them through untouched.
+
+        The dspy.Type / dspy.History guard is load-bearing: dspy.Image, dspy.Audio,
+        dspy.Tool, ToolCalls and dspy.Code are all pydantic.BaseModel subclasses, and
+        wrapping their ``<<CUSTOM-TYPE-START-IDENTIFIER>>`` marker in JSON string
+        quotes would corrupt the content blocks that
+        ``_expand_legacy_custom_type_markers_in_chat_message`` builds afterwards.
+        dspy.History is a BaseModel but not a dspy.Type, so it needs its own clause.
+        """
+        patched: dict[str, Any] = dict(inputs)
+        for key, value in inputs.items():
+            if (
+                isinstance(value, pydantic.BaseModel)
+                and not isinstance(value, DSPyType)
+                and not isinstance(value, DSPyHistory)
+            ):
+                patched[key] = value.model_dump_json(indent=2, by_alias=True)
+        return super().format_user_message_content(  # type: ignore[no-any-return]
+            signature, patched, prefix, suffix, main_request
+        )
 
     def format_field_with_value(
         self, fields_with_values: dict[FieldInfoWithName, Any], role: str = "user"

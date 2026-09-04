@@ -7,13 +7,19 @@ import pytest
 
 pytest.importorskip("dspy", minversion="3.3.1")
 
+import dspy  # noqa: E402
 from dspy.adapters.chat_adapter import FieldInfoWithName  # noqa: E402
+from dspy.adapters.json_adapter import JSONAdapter  # noqa: E402
 
 from llm_schema_lite.dspy_integration import OutputMode  # noqa: E402
 from tests.dspy_helpers import (  # noqa: E402
     QA,
     Address,
+    AliasedAddress,
+    AliasIn,
     Extract,
+    HistoryIn,
+    ImageIn,
     Person,
     Unordered,
     make_adapter,
@@ -30,7 +36,8 @@ EXPECTED_REQUIREMENTS_YAML = (
     "`score` (must be formatted as a valid Python float)."
 )
 EXPECTED_USER_PREFIX = (
-    '[[ ## text ## ]]\nhi\n\n[[ ## meta ## ]]\n{"street": "a", "city": "b", "country": "US"}\n\n'
+    "[[ ## text ## ]]\nhi\n\n[[ ## meta ## ]]\n"
+    '{\n  "street": "a",\n  "city": "b",\n  "country": "US"\n}\n\n'
 )
 INPUTS = {"text": "hi", "meta": Address(street="a", city="b")}
 
@@ -61,6 +68,36 @@ class TestUserMessage:
         result = make_adapter(OutputMode.JSONISH).format_user_message_content(Extract, INPUTS)
         assert "Respond with" not in result
         assert "[[ ## meta ## ]]" in result
+
+    def test_pydantic_input_is_indented_and_aliased(self):
+        """AliasIn's addr field renders as indented JSON honouring the field's alias."""
+        for mode in OutputMode:
+            result = make_adapter(mode).format_user_message_content(
+                AliasIn,
+                {"text": "hi", "addr": AliasedAddress(street_name="Main St", city="Anytown")},
+                main_request=True,
+            )
+            assert result.startswith(
+                "[[ ## text ## ]]\nhi\n\n[[ ## addr ## ]]\n"
+                '{\n  "streetName": "Main St",\n  "city": "Anytown"\n}\n\n'
+            )
+
+    def test_image_input_marker_survives(self):
+        """A dspy.Image input still yields byte-identical content blocks to JSONAdapter."""
+        img = dspy.Image(url="data:image/png;base64,iVBORw0KGgo=")
+        ours = make_adapter(OutputMode.JSONISH).format(ImageIn, [], {"img": img})
+        upstream = JSONAdapter().format(ImageIn, [], {"img": img})
+        assert ours[-1]["content"] == upstream[-1]["content"]
+
+    def test_history_input_is_not_preserialised(self):
+        """A dspy.History input is left to upstream, byte-identical to JSONAdapter."""
+        inputs = {
+            "history": dspy.History(messages=[{"question": "2+2?", "answer": "4"}]),
+            "question": "3+3?",
+        }
+        assert make_adapter(OutputMode.JSONISH).format_user_message_content(
+            HistoryIn, inputs
+        ) == JSONAdapter().format_user_message_content(HistoryIn, inputs)
 
 
 EXPECTED_ASSISTANT_JSON = (

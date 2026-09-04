@@ -6,7 +6,7 @@ This module provides a unified adapter for integrating llm-schema-lite with DSPy
 
 - **Multiple Output Modes**: Support for JSON, JSONish (BAML-like), and YAML output formats
 - **Token Efficiency**: 60-85% reduction in schema token usage with JSONish mode
-- **Input Schema Simplification**: Automatically simplifies complex Pydantic models in input fields
+- **Input Schema Simplification**: Automatically simplifies complex Pydantic models in input fields, gated by `include_input_schemas`
 - **Robust Parsing**: Handles malformed outputs with automatic repair (`repair=True`) and fallback mechanisms
 - **Full DSPy Compatibility**: Works with all DSPy modules (Predict, ChainOfThought, etc.)
 - **Clean API Integration**: Uses llm-schema-lite's public API (`simplify_schema()`, `loads()`) for maintainability
@@ -150,6 +150,10 @@ JSONish mode (simplified):
 
 ### YAML Mode
 
+> **Experimental.** YAML rendering has known defects tracked in lsl-2026-09-04-006:
+> the YAML formatter hoists nested models to `Class.field` keys and quotes multi-line
+> strings. Prefer JSONish mode for production use.
+
 YAML output with simplified schemas.
 
 ```python
@@ -168,6 +172,8 @@ adapter = StructuredOutputAdapter(
     output_mode=OutputMode.JSONISH,           # Output format mode
     include_input_schemas=True,                # Simplify input field schemas
     use_native_function_calling=True,          # Use native function calling
+    formatter_config=None,                     # FormatterConfig forwarded to simplify_schema
+    prompt_layout=PromptLayout.SECTIONS,       # Output block layout
     callbacks=None                             # Optional callbacks
 )
 ```
@@ -181,7 +187,23 @@ adapter = StructuredOutputAdapter(
 - **include_input_schemas**: `bool`
   - Whether to include simplified schemas for complex input types
   - Useful when input fields are Pydantic models
+  - Set to `False` to render input fields as a bare `{name}` placeholder with no note
   - Default: `True`
+
+- **prompt_layout**: `PromptLayout`
+  - `PromptLayout.SECTIONS` renders each output field as its own `[[ ## field ## ]]`
+    block; `PromptLayout.JSON_BLOCK` renders one JSON-shaped block with the schema
+    inlined, unescaped
+  - Input fields always use the sectioned form, in both layouts
+  - Accepted as either the enum member or the plain string (`"sections"`, `"json_block"`)
+  - Default: `PromptLayout.SECTIONS`
+
+- **formatter_config**: `FormatterConfig | None`
+  - Forwarded unchanged to `simplify_schema`. When given it wins entirely and
+    `max_recursion_depth` is ignored
+  - This is *the* passthrough for schema-rendering options; the adapter deliberately
+    exposes no per-option kwargs
+  - Default: `None`
 
 - **use_native_function_calling**: `bool`
   - Whether to use native function calling for tool calls

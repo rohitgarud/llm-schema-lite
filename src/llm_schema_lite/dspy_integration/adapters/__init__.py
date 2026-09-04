@@ -1,5 +1,5 @@
 """DSPy adapters for llm-schema-lite integration."""
 
-from .structured_output_adapter import OutputMode, StructuredOutputAdapter
+from .structured_output_adapter import OutputMode, PromptLayout, StructuredOutputAdapter
 
-__all__ = ["StructuredOutputAdapter", "OutputMode"]
+__all__ = ["StructuredOutputAdapter", "OutputMode", "PromptLayout"]
