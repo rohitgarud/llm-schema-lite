@@ -1,5 +1,6 @@
 """Base formatter abstract class for schema formatters."""
 
+import dataclasses
 import json
 import re
 import secrets
@@ -245,8 +246,9 @@ class BaseFormatter(ABC):
 
         # Handle backward compatibility for include_metadata parameter
         if include_metadata is not None:
-            # If legacy parameter is provided, it takes precedence
-            self.config.include_metadata = include_metadata
+            # If legacy parameter is provided, it takes precedence. Copy rather than
+            # mutate: the caller's FormatterConfig must survive the call unchanged.
+            self.config = dataclasses.replace(self.config, include_metadata=include_metadata)
 
         # Backward compatibility: expose include_metadata as instance attribute
         self.include_metadata = self.config.include_metadata
@@ -617,6 +619,9 @@ class BaseFormatter(ABC):
 
         This method respects the metadata_inclusion configuration to provide
         fine-grained control over which metadata keywords appear in the output.
+        The decision itself lives in :meth:`FormatterConfig.includes`, which applies
+        the three narrowing gates (``include_metadata``, the category flag, then
+        ``metadata_inclusion``); this method is the formatter-side entry point to it.
 
         Args:
             key: The metadata key to check (e.g., "pattern", "format", "examples").
@@ -624,12 +629,7 @@ class BaseFormatter(ABC):
         Returns:
             True if the metadata key should be included, False otherwise.
         """
-        # If include_metadata is False, exclude everything
-        if not self.include_metadata:
-            return False
-
-        # Check the metadata_inclusion config, defaulting to True if not specified
-        return self._metadata_inclusion.get(key, True)
+        return self.config.includes(key)
 
     def get_required_fields_comment(self) -> str:
         """
@@ -657,10 +657,18 @@ class BaseFormatter(ABC):
 
         comments = []
 
-        if "title" in self.schema and self.schema["title"]:
+        if (
+            "title" in self.schema
+            and self.schema["title"]
+            and self._should_include_metadata("title")
+        ):
             comments.append(f"Title: {self.schema['title']}")
 
-        if "description" in self.schema and self.schema["description"]:
+        if (
+            "description" in self.schema
+            and self.schema["description"]
+            and self._should_include_metadata("description")
+        ):
             comments.append(f"Description: {self.schema['description']}")
 
         if comments:
@@ -1002,6 +1010,10 @@ class BaseFormatter(ABC):
             and/or alias list folded in.
         """
         descriptions, aliases = self._extract_enum_metadata(node)
+        if not self._should_include_metadata("x-enum-descriptions"):
+            descriptions = {}
+        if not self._should_include_metadata("x-enum-aliases"):
+            aliases = {}
         parts: list[str] = []
         for value in values:
             literal = format_literal_value(value)
@@ -1023,20 +1035,66 @@ class BaseFormatter(ABC):
     def _get_title_description_default_value(
         self, value: dict[str, Any]
     ) -> tuple[str, str, str, str]:
-        """Base default: no metadata extraction.
+        """Extract the title / description / default / example fragments of a schema node.
 
-        ``JSONishFormatter`` and ``YAMLFormatter`` both override this with their own
-        formatter-specific extraction and stay byte-identical; this default exists only so
-        the shared ``process_enum``/``process_const`` can call it under mypy for a formatter
-        that does not override it.
+        Every fragment is gated through :meth:`_should_include_metadata`, so a fragment whose
+        keyword has been narrowed away by ``include_metadata``, its category flag, or
+        ``metadata_inclusion`` comes back as the empty string. Each returned fragment is
+        already rendered with its own leading space and punctuation, ready to be concatenated
+        by the caller. It remains a normal (non-abstract) method so a formatter may still
+        override it with a format-specific spelling.
 
         Args:
-            value: Schema node (unused by this default).
+            value: Schema node to read ``title``, ``description``, ``id``, ``$comment``,
+                ``default``, ``example`` and ``examples`` from.
 
         Returns:
-            ``("", "", "", "")``.
+            A ``(title, description, default_value, example)`` tuple of rendered fragments;
+            any fragment that is absent or gated out is the empty string.
         """
-        return "", "", "", ""
+        title = ""
+        description = ""
+        default_value = ""
+        example = ""
+        if (
+            "title" in value
+            and value["title"] is not None
+            and self._should_include_metadata("title")
+        ):
+            title = f" {value['title']}:"
+        if self._should_include_metadata("description"):
+            if "description" in value and value["description"] is not None:
+                description = f" {value['description']}"
+            if "id" in value and value["id"] is not None and value["id"] != "":
+                id_ = value["id"]
+                if isinstance(id_, str):
+                    id_ = f"'{id_}'"
+                description += f" (id: {id_})"
+            if "$comment" in value and value["$comment"] is not None:
+                comment = value["$comment"]
+                if isinstance(comment, str):
+                    comment = f"'{comment}'"
+                description += f" (COMMENT: {comment})"
+        if "default" in value and self._should_include_metadata("default"):
+            default = value["default"]
+            if default is None:
+                default = "null"
+            elif isinstance(default, str):
+                default = f"'{default}'"
+            elif isinstance(default, bool):
+                default = "true" if default else "false"
+            default_value = f" (default={default})"
+        if self._should_include_metadata("examples"):
+            if "example" in value and value["example"] is not None:
+                example = f" (EXAMPLE: {value['example']})"
+            elif "examples" in value and value["examples"] is not None:
+                examples = value["examples"]
+                if isinstance(examples, list):
+                    examples = [json.dumps(ex, indent=2).replace('"', "") for ex in examples]
+                    example = f" (EXAMPLES: {', '.join(examples)})"
+                else:
+                    example = f" (EXAMPLES: {examples})"
+        return title, description, default_value, example
 
     def process_enum(self, enum_value: dict[str, Any]) -> str:
         """
@@ -1057,6 +1115,8 @@ class BaseFormatter(ABC):
             return "string"  # Fallback for empty enum
 
         token = self.enum_type_token(enum_value)
+        if not self._should_include_metadata("enum"):
+            return token
         body = self.build_enum_comment(enum_value, enum_list)
 
         # ``title`` is deliberately read and DISCARDED: appending it is what leaked the
@@ -1532,6 +1592,21 @@ class BaseFormatter(ABC):
             formatted_name = self.format_field_name(prop_name)
             processed_properties[formatted_name] = self.process_property(value)
         return processed_properties
+
+    def emits_closed_world_marker(self, schema: dict[str, Any]) -> bool:
+        """True when ``schema`` declares ``additionalProperties: false``.
+
+        The resulting marker is STRUCTURAL, not metadata: it states which instances validate
+        and is recoverable from nothing else in the output, so it is emitted regardless of
+        ``include_metadata`` / ``include_descriptions`` / ``include_constraints``.
+
+        Args:
+            schema: Schema node to inspect for the closed-world declaration.
+
+        Returns:
+            True if the node sets ``additionalProperties`` to exactly ``False``.
+        """
+        return schema.get("additionalProperties") is False
 
     def process_additional_properties(
         self, schema: dict[str, Any], show_structure: bool = True

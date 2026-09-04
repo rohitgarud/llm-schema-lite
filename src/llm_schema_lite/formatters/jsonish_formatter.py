@@ -100,55 +100,6 @@ class JSONishFormatter(BaseFormatter):
             return f" {self.comment_prefix} {schema['description']}"
         return ""
 
-    def _get_title_description_default_value(
-        self, value: dict[str, Any]
-    ) -> tuple[str, str, str, str]:
-        """Extract title, description, default value, and example from schema value."""
-        title = ""
-        description = ""
-        default_value = ""
-        example = ""
-        if (
-            "title" in value
-            and value["title"] is not None
-            and self._should_include_metadata("title")
-        ):
-            title = f" {value['title']}:"
-        if "description" in value and value["description"] is not None:
-            description = f" {value['description']}"
-        if "id" in value and value["id"] is not None and value["id"] != "":
-            id_ = value["id"]
-            if isinstance(id_, str):
-                id_ = f"'{id_}'"
-            description += f" (id: {id_})"
-        if "$comment" in value and value["$comment"] is not None:
-            comment = value["$comment"]
-            if isinstance(comment, str):
-                comment = f"'{comment}'"
-            description += f" (COMMENT: {comment})"
-        # Filter default based on metadata_inclusion config
-        if "default" in value and self._should_include_metadata("default"):
-            default = value["default"]
-            if default is None:
-                default = "null"
-            elif isinstance(default, str):
-                default = f"'{default}'"
-            elif isinstance(default, bool):
-                default = "true" if default else "false"
-            default_value = f" (default={default})"
-        # Filter examples based on metadata_inclusion config
-        if self._should_include_metadata("examples"):
-            if "example" in value and value["example"] is not None:
-                example = f" (EXAMPLE: {value['example']})"
-            elif "examples" in value and value["examples"] is not None:
-                examples = value["examples"]
-                if isinstance(examples, list):
-                    examples = [json.dumps(ex, indent=2).replace('"', "") for ex in examples]
-                    example = f" (EXAMPLES: {', '.join(examples)})"
-                else:
-                    example = f" (EXAMPLES: {examples})"
-        return title, description, default_value, example
-
     def _get_options_format_pattern(self, value: dict[str, Any]) -> tuple[str, str]:
         """Extract format and pattern from schema value.
 
@@ -227,12 +178,17 @@ class JSONishFormatter(BaseFormatter):
                     self._ref_expansion_path.pop()
             if self._truncation_epoch == entry_epoch:
                 self.processed_ref_cache[_ref] = output
-        if "default" in value:
+        if "default" in value and self._should_include_metadata("default"):
             if isinstance(output, str):
                 output = output + f" (default='{value['default']}')"
 
         # Include description from resolved definition if available
-        if isinstance(_def, dict) and "description" in _def and _def["description"]:
+        if (
+            isinstance(_def, dict)
+            and "description" in _def
+            and _def["description"]
+            and self._should_include_metadata("description")
+        ):
             def_description = f" {self.comment_prefix} {_def['description']}"
             if self.carries_deferred_comment(output):
                 # Plain-scalar invariant: never append a bare `//` comment to a
@@ -861,10 +817,14 @@ class JSONishFormatter(BaseFormatter):
 
         comments = []
 
-        if "title" in schema and schema["title"]:
+        if "title" in schema and schema["title"] and self._should_include_metadata("title"):
             comments.append(f"{self.comment_prefix}Title: {schema['title']}")
 
-        if "description" in schema and schema["description"]:
+        if (
+            "description" in schema
+            and schema["description"]
+            and self._should_include_metadata("description")
+        ):
             comments.append(f"{self.comment_prefix} {schema['description']}")
 
         if comments:

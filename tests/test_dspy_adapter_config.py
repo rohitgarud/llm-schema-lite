@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("dspy", minversion="3.3.1")
 
+from llm_schema_lite import FormatterConfig  # noqa: E402
 from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
 from tests.dspy_helpers import Extract  # noqa: E402
 
@@ -37,6 +38,19 @@ class TestAdapterConfig:
             "Citations",
             "Reasoning",
         ]
+
+    def test_formatter_config_round_trips_by_identity(self):
+        """An explicit formatter_config is stored unmutated as the same object."""
+        config = FormatterConfig()
+        adapter = StructuredOutputAdapter(formatter_config=config)
+        assert adapter.formatter_config is config
+
+    def test_explicit_formatter_config_wins_over_max_recursion_depth(self):
+        """An explicit formatter_config wins entirely; max_recursion_depth is ignored."""
+        config = FormatterConfig(max_recursion_depth=1)
+        adapter = StructuredOutputAdapter(max_recursion_depth=5, formatter_config=config)
+        assert adapter.formatter_config.max_recursion_depth == 1
+        assert adapter.formatter_config.max_recursion_depth != 5
 
 
 class TestOutputMode:

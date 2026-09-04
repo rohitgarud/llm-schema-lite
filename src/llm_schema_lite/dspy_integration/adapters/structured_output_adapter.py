@@ -62,6 +62,10 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         include_input_schemas: Whether to include simplified schemas for complex input types
         max_recursion_depth: How many times a recursive $ref's body is rendered before
             it is replaced by a placeholder, forwarded to FormatterConfig. Default 2.
+        formatter_config: Optional FormatterConfig forwarded unchanged to simplify_schema.
+            When given it wins entirely and max_recursion_depth is ignored; when None a default
+            FormatterConfig(max_recursion_depth=self.max_recursion_depth) is used, i.e. all
+            metadata on. Pass FormatterConfig(include_descriptions=False) for terser prompts.
     """
 
     def __init__(
@@ -71,6 +75,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         output_mode: OutputMode = OutputMode.JSONISH,
         include_input_schemas: bool = True,
         max_recursion_depth: int = 2,
+        formatter_config: FormatterConfig | None = None,
     ):
         super().__init__(
             callbacks=callbacks, use_native_function_calling=use_native_function_calling
@@ -78,6 +83,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         self.output_mode = output_mode
         self.include_input_schemas = include_input_schemas
         self.max_recursion_depth = max_recursion_depth
+        self.formatter_config = formatter_config
 
     # ==================== Core Call Methods ====================
 
@@ -256,12 +262,12 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
 
                 # Simplify using llm-schema-lite
                 format_type_literal: Literal["jsonish", "typescript", "yaml"] = format_type  # type: ignore
+                config = self.formatter_config
+                if config is None:
+                    config = FormatterConfig(max_recursion_depth=self.max_recursion_depth)
                 simplified = simplify_schema(
                     field_type,
-                    config=FormatterConfig(
-                        include_metadata=False,
-                        max_recursion_depth=self.max_recursion_depth,
-                    ),
+                    config=config,
                     format_type=format_type_literal,
                 )
                 schema_str = simplified.to_string()

@@ -6,7 +6,6 @@ Feature parity with JSONish formatter for metadata, enums, unions, types,
 dependencies, and $ref default.
 """
 
-import json
 from typing import Any
 
 import yaml
@@ -63,52 +62,6 @@ class YAMLFormatter(BaseFormatter):
             "object": "dict",
             "null": "None",
         }
-
-    def _get_title_description_default_value(
-        self, value: dict[str, Any]
-    ) -> tuple[str, str, str, str]:
-        """Extract title, description, default value, and example (JSONish-style for metadata)."""
-        title = ""
-        description = ""
-        default_value = ""
-        example = ""
-        if (
-            "title" in value
-            and value["title"] is not None
-            and self._should_include_metadata("title")
-        ):
-            title = f" {value['title']}:"
-        if "description" in value and value["description"] is not None:
-            description = f" {value['description']}"
-        if "id" in value and value["id"] is not None and value["id"] != "":
-            id_ = value["id"]
-            if isinstance(id_, str):
-                id_ = f"'{id_}'"
-            description += f" (id: {id_})"
-        if "$comment" in value and value["$comment"] is not None:
-            comment = value["$comment"]
-            if isinstance(comment, str):
-                comment = f"'{comment}'"
-            description += f" (COMMENT: {comment})"
-        if "default" in value:
-            default = value["default"]
-            if default is None:
-                default = "null"
-            elif isinstance(default, str):
-                default = f"'{default}'"
-            elif isinstance(default, bool):
-                default = "true" if default else "false"
-            default_value = f" (default={default})"
-        if "example" in value and value["example"] is not None:
-            example = f" (EXAMPLE: {value['example']})"
-        elif "examples" in value and value["examples"] is not None:
-            examples = value["examples"]
-            if isinstance(examples, list):
-                examples = [json.dumps(ex, indent=2).replace('"', "") for ex in examples]
-                example = f" (EXAMPLES: {', '.join(examples)})"
-            else:
-                example = f" (EXAMPLES: {examples})"
-        return title, description, default_value, example
 
     def _get_fields_dependencies(self, schema: dict[str, Any], field_name: str) -> str:
         """Extract dependencies for a field from schema (JSONish wording)."""
@@ -609,7 +562,7 @@ class YAMLFormatter(BaseFormatter):
         Process $ref and append (default=...) when ref has default (JSONish parity).
         """
         result = super().process_ref(ref)
-        if "default" in ref and result:
+        if "default" in ref and result and self._should_include_metadata("default"):
             default = ref["default"]
             if isinstance(default, str):
                 result = f"{result} (default='{default}')"
@@ -626,9 +579,17 @@ class YAMLFormatter(BaseFormatter):
         if not self.include_metadata:
             return ""
         comments = []
-        if "title" in self.schema and self.schema["title"]:
+        if (
+            "title" in self.schema
+            and self.schema["title"]
+            and self._should_include_metadata("title")
+        ):
             comments.append(f"Title: {self.schema['title']}")
-        if "description" in self.schema and self.schema["description"]:
+        if (
+            "description" in self.schema
+            and self.schema["description"]
+            and self._should_include_metadata("description")
+        ):
             comments.append(f"Description: {self.schema['description']}")
         if comments:
             return f"{self.comment_prefix} " + ", ".join(comments) + "\n"
@@ -765,6 +726,7 @@ class YAMLFormatter(BaseFormatter):
                     section_str = self._dump_yaml(def_dict)
                     if self.include_metadata:
                         section_str = f"# {def_name}\n{section_str}"
+                    if self.include_metadata or self.emits_closed_world_marker(def_schema):
                         # Add additionalProperties comment if present
                         additional_props_comment = self.process_additional_properties(def_schema)
                         if additional_props_comment:
@@ -799,7 +761,7 @@ class YAMLFormatter(BaseFormatter):
                 additional_props_comment = self.process_additional_properties(
                     self.schema, show_structure=False
                 )
-            elif self.include_metadata:
+            elif self.include_metadata or self.emits_closed_world_marker(self.schema):
                 additional_props_comment = self.process_additional_properties(self.schema)
             else:
                 additional_props_comment = ""
@@ -938,6 +900,7 @@ class YAMLFormatter(BaseFormatter):
                 section_str = self._dump_yaml(def_dict)
                 if self.include_metadata:
                     section_str = f"# {def_name}\n{section_str}"
+                if self.include_metadata or self.emits_closed_world_marker(def_schema):
                     # Add additionalProperties comment if present
                     additional_props_comment = self.process_additional_properties(def_schema)
                     if additional_props_comment:
@@ -1009,7 +972,7 @@ class YAMLFormatter(BaseFormatter):
             additional_props_comment = self.process_additional_properties(
                 self.schema, show_structure=False
             )
-        elif self.include_metadata:
+        elif self.include_metadata or self.emits_closed_world_marker(self.schema):
             additional_props_comment = self.process_additional_properties(self.schema)
         else:
             additional_props_comment = ""

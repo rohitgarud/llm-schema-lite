@@ -300,3 +300,30 @@ class TestMetadataInclusionBackwardCompatibility:
         # Constraints should be included
         assert "PATTERN" in output or "pattern" in output.lower()
         assert "FORMAT" in output or "email" in output
+
+    def test_legacy_include_metadata_does_not_mutate_caller_config(self, patient_model):
+        """The deprecated `include_metadata=` kwarg must not mutate the caller's config.
+
+        Regression for lsl-2026-09-04-005: `BaseFormatter.__init__` now takes a
+        `dataclasses.replace(config)` copy before applying the legacy kwarg override, so the
+        caller's own `FormatterConfig` instance is left untouched.
+        """
+        cfg = FormatterConfig(include_metadata=True)
+        simplify_schema(patient_model, config=cfg, include_metadata=False)
+        assert cfg.include_metadata is True
+
+    def test_metadata_inclusion_description_false_suppresses_descriptions(self, patient_model):
+        """`metadata_inclusion={"description": False}` must suppress descriptions.
+
+        Regression for lsl-2026-09-04-005: before this ticket, the "description" key in
+        `metadata_inclusion` was a documented no-op in both JSONish and YAML because
+        description text was emitted through a separate, ungated extractor. Both formatters
+        now route through `BaseFormatter._should_include_metadata`, so this is a genuine new
+        behaviour guarantee.
+        """
+        config = FormatterConfig(metadata_inclusion={"description": False})
+
+        for fmt in ("jsonish", "yaml"):
+            output = simplify_schema(patient_model, config=config, format_type=fmt).to_string()
+            assert "Full name" not in output, f"{fmt} still leaked the 'name' description"
+            assert "A patient record." not in output, f"{fmt} still leaked the schema description"

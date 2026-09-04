@@ -183,6 +183,10 @@ class TypeScriptFormatter(BaseFormatter):
                 enum_literals.append(str(val))
         type_str = self.config.union_separator.join(enum_literals)
         descs, alias_map = self._extract_enum_metadata(enum_value)
+        if not self._should_include_metadata("x-enum-descriptions"):
+            descs = {}
+        if not self._should_include_metadata("x-enum-aliases"):
+            alias_map = {}
         if not descs and not alias_map:
             return type_str
         # Inline comment: OPTIONS with descriptions and per-value lines
@@ -448,7 +452,7 @@ class TypeScriptFormatter(BaseFormatter):
                     nested_output.write("}")
 
                     # Add additionalProperties comment if present and metadata is enabled
-                    if self.include_metadata:
+                    if self.include_metadata or self.emits_closed_world_marker(def_schema):
                         additional_props_comment = self.process_additional_properties(def_schema)
                         if additional_props_comment:
                             nested_output.write(f"\n{additional_props_comment}")
@@ -487,7 +491,7 @@ class TypeScriptFormatter(BaseFormatter):
             main_output.write("}")
 
             # Add additionalProperties comment if present and metadata is enabled
-            if self.include_metadata:
+            if self.include_metadata or self.emits_closed_world_marker(self.schema):
                 show_structure = not self._is_complex_additional_props(self.schema)
                 additional_props_comment = self.process_additional_properties(
                     self.schema, show_structure=show_structure
@@ -552,7 +556,9 @@ class TypeScriptFormatter(BaseFormatter):
                 type_content = self.process_type_value(self.schema)
                 result = f"type Schema = {type_content};"
                 # Add schema-level features as comments if present
-                if schema_level_features and self.include_metadata:
+                if schema_level_features and (
+                    self.include_metadata or self.emits_closed_world_marker(self.schema)
+                ):
                     result = (
                         f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
                     )
@@ -560,7 +566,9 @@ class TypeScriptFormatter(BaseFormatter):
             elif "oneOf" in self.schema:
                 oneof_content = self.process_oneof(self.schema)
                 result = f"type Schema = {oneof_content};"
-                if schema_level_features and self.include_metadata:
+                if schema_level_features and (
+                    self.include_metadata or self.emits_closed_world_marker(self.schema)
+                ):
                     result = (
                         f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
                     )
@@ -568,7 +576,9 @@ class TypeScriptFormatter(BaseFormatter):
             elif "anyOf" in self.schema:
                 anyof_content = self.process_anyof(self.schema)
                 result = f"type Schema = {anyof_content};"
-                if schema_level_features and self.include_metadata:
+                if schema_level_features and (
+                    self.include_metadata or self.emits_closed_world_marker(self.schema)
+                ):
                     result = (
                         f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
                     )
@@ -576,14 +586,18 @@ class TypeScriptFormatter(BaseFormatter):
             elif "allOf" in self.schema:
                 allof_content = self.process_allof(self.schema)
                 result = f"type Schema = {allof_content};"
-                if schema_level_features and self.include_metadata:
+                if schema_level_features and (
+                    self.include_metadata or self.emits_closed_world_marker(self.schema)
+                ):
                     result = (
                         f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
                     )
                 return result
             else:
                 # Return schema-level features as comments if present
-                if schema_level_features and self.include_metadata:
+                if schema_level_features and (
+                    self.include_metadata or self.emits_closed_world_marker(self.schema)
+                ):
                     return (
                         f"// Schema-level constraints: {schema_level_features.strip()}\n"
                         "interface Schema {}"
@@ -614,7 +628,7 @@ class TypeScriptFormatter(BaseFormatter):
                 nested_output.write("}")
 
                 # Add additionalProperties comment if present and metadata is enabled
-                if self.include_metadata:
+                if self.include_metadata or self.emits_closed_world_marker(def_schema):
                     additional_props_comment = self.process_additional_properties(def_schema)
                     if additional_props_comment:
                         nested_output.write(f"\n{additional_props_comment}")
@@ -656,7 +670,7 @@ class TypeScriptFormatter(BaseFormatter):
         main_output.write("}")
 
         # Add additionalProperties comment if present and metadata is enabled
-        if self.include_metadata:
+        if self.include_metadata or self.emits_closed_world_marker(self.schema):
             show_structure = not self._is_complex_additional_props(self.schema)
             additional_props_comment = self.process_additional_properties(
                 self.schema, show_structure=show_structure

@@ -1,9 +1,11 @@
 """Tests for FormatterConfig functionality."""
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from llm_schema_lite import FormatterConfig, simplify_schema
+from llm_schema_lite.formatters.config import DEFAULT_METADATA_INCLUSION, DESCRIPTION_KEYWORDS
+from tests.formatter_helpers import render_all_formatters
 
 
 class User(BaseModel):
@@ -79,24 +81,69 @@ class TestFormatterConfig:
         assert "Fields marked with" not in output
 
     def test_include_descriptions_false(self):
-        """Test disabling descriptions."""
-        config = FormatterConfig(include_descriptions=False)
-        result = simplify_schema(User, config=config)
+        """Disabling descriptions removes description text but keeps constraints."""
+        config = FormatterConfig(include_descriptions=False, include_constraints=True)
+
+        class DescribedConstrainedModel(BaseModel):
+            value: int = Field(default=5, description="A described value", ge=0, le=10)
+
+        result = simplify_schema(DescribedConstrainedModel, config=config)
         output = result.to_string()
-        # Basic test - should still produce output
-        assert "name" in output
+        # Description text must be gone...
+        assert "A described value" not in output
+        # ...but the constraint category (including the default) must remain.
+        assert "0 to 10" in output
+        assert "(default=" in output
 
     def test_include_constraints_false(self):
-        """Test disabling constraints."""
+        """Disabling constraints removes defaults too (ticket AC#3), keeps descriptions."""
         config = FormatterConfig(include_constraints=False)
 
-        class ConstrainedModel(BaseModel):
-            value: int
+        class DescribedConstrainedModel(BaseModel):
+            value: int = Field(default=5, description="A described value", ge=0, le=10)
 
-        result = simplify_schema(ConstrainedModel, config=config)
+        result = simplify_schema(DescribedConstrainedModel, config=config)
         output = result.to_string()
-        # Basic test - should still produce output
-        assert "value" in output
+        # AC#3: no default text may survive when constraints are disabled.
+        assert "(default=" not in output
+        # Constraint text is gone...
+        assert "0 to 10" not in output
+        # ...but the description remains.
+        assert "A described value" in output
+
+    def test_include_constraints_false_removes_ref_defaults_end_to_end(self, patient_model):
+        """AC#3 end-to-end: no `(default=` text survives `include_constraints=False`.
+
+        Exercises both a `$ref` field carrying a default (`role`, an enum) and a plain
+        optional with `default=None` (`nickname`) -- the two independently-spelled,
+        previously-ungated `$ref` default sites that this ticket gates -- across all three
+        formatters.
+        """
+        config = FormatterConfig(include_constraints=False)
+        rendered = render_all_formatters(patient_model, config)
+
+        assert "(default=" not in rendered["jsonish"]
+        assert "(default=" not in rendered["yaml"]
+        # TypeScript never spells defaults as "(default=" -- it always uses
+        # "(defaults to ...)" -- so asserting only "(default=" absence would be vacuously
+        # true here. Assert the TypeScript spelling too so this leg actually exercises the
+        # gate (unifying the spellings is out of scope, see design FU-3).
+        assert "(default=" not in rendered["typescript"]
+        assert "(defaults to" not in rendered["typescript"]
+
+    def test_include_descriptions_false_narrowing_end_to_end(self, patient_model):
+        """A per-keyword `metadata_inclusion` True cannot restore a category-removed field.
+
+        Phase 1 covers this narrowing rule at the `includes()` unit level only; this
+        exercises the full render pipeline across all three formatters.
+        """
+        config = FormatterConfig(
+            include_descriptions=False, metadata_inclusion={"description": True}
+        )
+        rendered = render_all_formatters(patient_model, config)
+
+        for fmt, output in rendered.items():
+            assert "Full name" not in output, f"{fmt} leaked a description"
 
     def test_prefix_option(self):
         """Test prefix option."""
@@ -209,3 +256,61 @@ class TestFormatterConfigIntegration:
         config = FormatterConfig(hoist_enums=True)
         result = simplify_schema(EnumModel, config=config)
         assert result is not None
+
+
+class TestFormatterConfigIncludes:
+    """Truth table for the three-gate FormatterConfig.includes() category layer."""
+
+    @pytest.mark.parametrize(
+        "im,desc,cons,expect_description,expect_title,expect_default,expect_pattern",
+        [
+            (True, True, True, True, True, True, True),
+            (True, True, False, True, True, False, False),
+            (True, False, True, False, False, True, True),
+            (True, False, False, False, False, False, False),
+            (False, True, True, False, False, False, False),
+            (False, True, False, False, False, False, False),
+            (False, False, True, False, False, False, False),
+            (False, False, False, False, False, False, False),
+        ],
+    )
+    def test_includes_truth_table(
+        self, im, desc, cons, expect_description, expect_title, expect_default, expect_pattern
+    ):
+        cfg = FormatterConfig(
+            include_metadata=im, include_descriptions=desc, include_constraints=cons
+        )
+        assert cfg.includes("description") is expect_description
+        assert cfg.includes("title") is expect_title
+        assert cfg.includes("default") is expect_default
+        assert cfg.includes("pattern") is expect_pattern
+        # `examples` is False in DEFAULT_METADATA_INCLUSION -> third gate always removes it
+        assert cfg.includes("examples") is False
+
+    def test_narrowing_not_overriding(self):
+        """A per-keyword True cannot restore what a category flag removed."""
+        cfg = FormatterConfig(include_descriptions=False, metadata_inclusion={"description": True})
+        assert cfg.includes("description") is False
+
+    def test_default_metadata_inclusion_is_unchanged(self):
+        """INV-2: the 13-entry default table is byte-identical."""
+        assert DEFAULT_METADATA_INCLUSION == {
+            "pattern": True,
+            "format": True,
+            "minimum": True,
+            "maximum": True,
+            "minLength": True,
+            "maxLength": True,
+            "minItems": True,
+            "maxItems": True,
+            "uniqueItems": True,
+            "const": True,
+            "default": True,
+            "title": True,
+            "examples": False,
+        }
+
+    def test_description_keywords_membership(self):
+        assert DESCRIPTION_KEYWORDS == frozenset(
+            {"title", "description", "id", "$comment", "x-enum-descriptions"}
+        )

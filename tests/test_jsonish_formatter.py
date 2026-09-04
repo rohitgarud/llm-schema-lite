@@ -298,7 +298,7 @@ def test_jsonish_formatter_with_string_enum():
         role: Role
 
     schema = RoleModel.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain enum values
@@ -314,7 +314,7 @@ def test_jsonish_formatter_with_int_enum():
     from tests.conftest import IntEnumModel
 
     schema = IntEnumModel.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain priority field
@@ -365,7 +365,7 @@ def test_jsonish_formatter_with_literal_single():
     from tests.conftest import LiteralSingle
 
     schema = LiteralSingle.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain api_version field
@@ -379,7 +379,7 @@ def test_jsonish_formatter_with_literal_union():
     from tests.conftest import LiteralUnion
 
     schema = LiteralUnion.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain status field
@@ -397,7 +397,7 @@ def test_jsonish_formatter_with_int_literals():
     from tests.conftest import IntLiterals
 
     schema = IntLiterals.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain priority field
@@ -419,7 +419,7 @@ def test_jsonish_formatter_with_bool_literals():
     from tests.conftest import BoolLiterals
 
     schema = BoolLiterals.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain flag field
@@ -436,7 +436,7 @@ def test_jsonish_formatter_with_mixed_type_literals():
     from tests.conftest import MixedTypeLiterals
 
     schema = MixedTypeLiterals.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain all three fields
@@ -461,7 +461,7 @@ def test_jsonish_formatter_with_single_const_int():
     from tests.conftest import SingleConstInt
 
     schema = SingleConstInt.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain version field
@@ -475,7 +475,7 @@ def test_jsonish_formatter_with_issue_classification():
     from tests.conftest import IssueClassification
 
     schema = IssueClassification.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
+    formatter = JSONishFormatter(schema)
     result = formatter.transform_schema()
 
     # Should contain both fields
@@ -1421,7 +1421,7 @@ def test_jsonish_formatter_with_const():
     """Test JSONish formatter with const keyword."""
     from tests.conftest import CONST_SCHEMA
 
-    formatter = JSONishFormatter(CONST_SCHEMA, include_metadata=False)
+    formatter = JSONishFormatter(CONST_SCHEMA)
     result = formatter.transform_schema()
 
     # Should contain api_version field

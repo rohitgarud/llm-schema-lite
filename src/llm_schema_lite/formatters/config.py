@@ -3,6 +3,10 @@
 from dataclasses import dataclass
 from typing import Literal
 
+DESCRIPTION_KEYWORDS: frozenset[str] = frozenset(
+    {"title", "description", "id", "$comment", "x-enum-descriptions"}
+)
+
 # Default metadata inclusion configuration
 # Includes all constraint metadata by default, excludes examples for token savings
 DEFAULT_METADATA_INCLUSION: dict[str, bool] = {
@@ -47,10 +51,15 @@ class FormatterConfig:
         indent: Number of spaces for indentation (default: 2)
         optional_marker: Marker for optional fields (default: "" - none)
         required_marker: Marker for required fields (default: "*")
-        include_descriptions: Include field descriptions (default: True)
-        include_constraints: Include validation constraints like min/max (default: True)
-        include_metadata: Include all metadata (default: True) - supersedes
-            include_descriptions and include_constraints
+        include_descriptions: Category flag for the description-family keywords listed in
+            DESCRIPTION_KEYWORDS (default: True). Narrows include_metadata; cannot restore
+            what include_metadata removed.
+        include_constraints: Category flag for every metadata keyword not in
+            DESCRIPTION_KEYWORDS (default: True). Narrows include_metadata; cannot restore
+            what include_metadata removed.
+        include_metadata: Master switch for all metadata (default: True). When False, no
+            metadata keyword is emitted regardless of the category flags or
+            metadata_inclusion.
         max_recursion_depth: How many times a recursive $ref's body is rendered on any one
             path before it is replaced by a placeholder. Default 2. A value of 0 behaves as
             1 (the first expansion of any $ref is always unconditional). Negative values
@@ -59,6 +68,15 @@ class FormatterConfig:
             in output. Keys are metadata keyword names, values are booleans.
             If not provided, defaults to DEFAULT_METADATA_INCLUSION.
             Example: {"pattern": True, "format": True, "examples": False}
+
+    Precedence:
+        A metadata keyword is emitted only if **all** of `include_metadata`, its category flag
+        (`include_descriptions` for the `title`/`description`-family keywords listed in
+        `DESCRIPTION_KEYWORDS`, `include_constraints` for every other keyword), and
+        `metadata_inclusion.get(keyword, True)` are true; a narrower gate can only remove
+        metadata, never restore what a wider gate removed. Structural information —
+        required/optional markers, container tokens, and the `additionalProperties: false`
+        closed-world marker — is not metadata and is emitted regardless of all three flags.
     """
 
     prefix: str | None = None
@@ -73,6 +91,17 @@ class FormatterConfig:
     include_metadata: bool = True
     max_recursion_depth: int = 2
     metadata_inclusion: dict[str, bool] = None  # type: ignore[assignment]
+
+    def includes(self, key: str) -> bool:
+        """Return True iff `key` survives all three narrowing gates."""
+        if not self.include_metadata:
+            return False
+        category_flag = (
+            self.include_descriptions if key in DESCRIPTION_KEYWORDS else self.include_constraints
+        )
+        if not category_flag:
+            return False
+        return self.metadata_inclusion.get(key, True)
 
     def __post_init__(self) -> None:
         """Post-initialization to handle metadata_inclusion defaults."""

@@ -279,14 +279,19 @@ The adapter uses llm-schema-lite's public API for schema simplification and robu
 
 ```python
 # Example: How the adapter uses simplify_schema()
-from llm_schema_lite import simplify_schema
+from llm_schema_lite import FormatterConfig, simplify_schema
 
+# By default the adapter forwards no config, so simplify_schema's default
+# FormatterConfig is used and all metadata (titles, descriptions, defaults) is kept.
 simplified = simplify_schema(
     field_type,
     format_type="jsonish",  # or "typescript", "yaml"
-    include_metadata=False
 )
 schema_str = simplified.to_string()
+
+# Pass formatter_config to StructuredOutputAdapter to override this behavior;
+# when given, it is forwarded to simplify_schema unchanged, e.g. for terser prompts:
+# StructuredOutputAdapter(formatter_config=FormatterConfig(include_descriptions=False))
 ```
 
 **Robust Parsing** (via `loads()`):

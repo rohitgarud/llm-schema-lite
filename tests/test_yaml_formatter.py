@@ -360,7 +360,7 @@ def test_yaml_enum_with_descriptions_and_aliases():
 def test_yaml_literal_single():
     """Test YAML formatter with single literal value."""
     schema = LiteralSingle.model_json_schema()
-    formatter = YAMLFormatter(schema, include_metadata=False)
+    formatter = YAMLFormatter(schema)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
@@ -372,7 +372,7 @@ def test_yaml_literal_single():
 def test_yaml_literal_union():
     """Test YAML formatter with union of literals."""
     schema = LiteralUnion.model_json_schema()
-    formatter = YAMLFormatter(schema, include_metadata=False)
+    formatter = YAMLFormatter(schema)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
@@ -390,7 +390,7 @@ def test_yaml_int_literals():
     from tests.conftest import IntLiterals
 
     schema = IntLiterals.model_json_schema()
-    formatter = YAMLFormatter(schema, include_metadata=False)
+    formatter = YAMLFormatter(schema)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
@@ -412,7 +412,7 @@ def test_yaml_bool_literals():
     from tests.conftest import BoolLiterals
 
     schema = BoolLiterals.model_json_schema()
-    formatter = YAMLFormatter(schema, include_metadata=False)
+    formatter = YAMLFormatter(schema)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
@@ -430,7 +430,7 @@ def test_yaml_mixed_type_literals():
     from tests.conftest import MixedTypeLiterals
 
     schema = MixedTypeLiterals.model_json_schema()
-    formatter = YAMLFormatter(schema, include_metadata=False)
+    formatter = YAMLFormatter(schema)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
@@ -457,7 +457,7 @@ def test_yaml_single_const_int():
     from tests.conftest import SingleConstInt
 
     schema = SingleConstInt.model_json_schema()
-    formatter = YAMLFormatter(schema, include_metadata=False)
+    formatter = YAMLFormatter(schema)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
@@ -471,7 +471,7 @@ def test_yaml_issue_classification():
     from tests.conftest import IssueClassification
 
     schema = IssueClassification.model_json_schema()
-    formatter = YAMLFormatter(schema, include_metadata=False)
+    formatter = YAMLFormatter(schema)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)

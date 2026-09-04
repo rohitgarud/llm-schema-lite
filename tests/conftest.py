@@ -1769,6 +1769,31 @@ def formatter_comment_symbols():
     return {"jsonish": "//", "typescript": "//", "yaml": "#"}
 
 
+@pytest.fixture
+def patient_model() -> type[BaseModel]:
+    class Role(str, Enum):
+        ADMIN = "admin"
+        USER = "user"
+
+    class Address(BaseModel):
+        """A postal address."""
+
+        street: str = Field(..., description="Street line", max_length=80)
+        zip_code: str = Field(..., pattern=r"^\d{5}$", description="ZIP")
+
+    class Patient(BaseModel):
+        """A patient record."""
+
+        name: str = Field(..., description="Full name", pattern=r"^[A-Za-z ]+$", max_length=50)
+        age: int = Field(..., description="Age in years", ge=0, le=130)
+        role: Role = Field(default=Role.USER, description="Role of the user")
+        tags: list[str] = Field(default_factory=list, description="Tags", max_length=5)
+        address: Address = Field(..., description="Home address")
+        nickname: str | None = Field(default=None, description="Optional nickname")
+
+    return Patient
+
+
 # ============================================================================
 # Test Data Factories
 # ============================================================================
