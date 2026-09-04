@@ -1,5 +1,7 @@
 """Tests for schema enrichment (enum metadata injection)."""
 
+from enum import Enum
+
 from pydantic import BaseModel
 
 from llm_schema_lite.schema_enrichment import (
@@ -154,3 +156,58 @@ def test_enrich_schema_returns_same_schema():
     schema = ModelWithPriorityMetadata.model_json_schema()
     out = enrich_schema_with_enum_metadata(ModelWithPriorityMetadata, schema)
     assert out is schema
+
+
+# =============================================================================
+# Recursive model termination (lsl-2026-09-04-014)
+# =============================================================================
+
+
+def test_enrich_terminates_on_self_referencing_model():
+    """A directly self-referencing model enriches without raising RecursionError."""
+
+    class SelfRefNode(BaseModel):
+        name: str
+        children: "list[SelfRefNode]" = []
+
+    SelfRefNode.model_rebuild()
+    schema = SelfRefNode.model_json_schema()
+    result = enrich_schema_with_enum_metadata(SelfRefNode, schema)
+    assert isinstance(result, dict)
+
+
+def test_enrich_terminates_on_mutually_recursive_models():
+    """A mutually recursive pair enriches without raising RecursionError."""
+
+    class MutualRefA(BaseModel):
+        name: str
+        b: "MutualRefB | None" = None
+
+    class MutualRefB(BaseModel):
+        tag: str
+        a: "MutualRefA | None" = None
+
+    MutualRefA.model_rebuild()
+    MutualRefB.model_rebuild()
+    schema = MutualRefA.model_json_schema()
+    result = enrich_schema_with_enum_metadata(MutualRefA, schema)
+    assert isinstance(result, dict)
+
+
+def test_enrich_collects_enum_nested_inside_recursive_model():
+    """The visited set must not over-prune: a nested Enum is still collected."""
+
+    class NestedStatus(Enum):
+        ACTIVE = "active"
+        INACTIVE = "inactive"
+
+    class RecursiveWithEnum(BaseModel):
+        name: str
+        status: NestedStatus
+        children: "list[RecursiveWithEnum]" = []
+
+    RecursiveWithEnum.model_rebuild()
+    schema = RecursiveWithEnum.model_json_schema()
+    enrich_schema_with_enum_metadata(RecursiveWithEnum, schema)
+    assert "NestedStatus" in schema["$defs"]
+    assert "enum" in schema["$defs"]["NestedStatus"]

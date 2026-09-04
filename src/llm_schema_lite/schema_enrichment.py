@@ -25,11 +25,32 @@ def _get_enum_class(annotation: Any) -> type[Enum] | None:
     return None
 
 
-def _collect_enum_classes_from_model(model: type[Any]) -> set[type[Enum]]:
-    """Recursively collect all Enum classes used in a Pydantic model."""
+def _collect_enum_classes_from_model(
+    model: type[Any], _seen: set[type[Any]] | None = None
+) -> set[type[Enum]]:
+    """Recursively collect all Enum classes used in a Pydantic model.
+
+    Args:
+        model: Pydantic BaseModel class (or arbitrary type) to walk.
+        _seen: Internal recursion guard tracking models already visited on
+            this walk. Callers must not pass this argument; it defaults to
+            ``None`` and is lazily initialized to an empty set. A single,
+            global (not per-path) visited set is correct here because enum
+            collection is a pure set union with no path-dependent semantics,
+            so a self-referencing or mutually recursive model graph
+            terminates instead of raising ``RecursionError``.
+
+    Returns:
+        Set of Enum classes reachable from the model's fields.
+    """
     enums: set[type[Enum]] = set()
     if BaseModel is None or not isinstance(model, type) or not issubclass(model, BaseModel):
         return enums
+    if _seen is None:
+        _seen = set()
+    if model in _seen:
+        return enums
+    _seen.add(model)
     for _name, field_info in model.model_fields.items():
         ann = field_info.annotation
         enum_cls = _get_enum_class(ann)
@@ -37,12 +58,12 @@ def _collect_enum_classes_from_model(model: type[Any]) -> set[type[Enum]]:
             enums.add(enum_cls)
         # Recurse into nested BaseModels
         if isinstance(ann, type) and issubclass(ann, BaseModel):
-            enums |= _collect_enum_classes_from_model(ann)
+            enums |= _collect_enum_classes_from_model(ann, _seen)
         origin = get_origin(ann)
         if origin is not None:
             for arg in get_args(ann):
                 if isinstance(arg, type) and issubclass(arg, BaseModel):
-                    enums |= _collect_enum_classes_from_model(arg)
+                    enums |= _collect_enum_classes_from_model(arg, _seen)
     return enums
 
 
