@@ -111,10 +111,6 @@ class TestFieldStructure:
         assert "Address.street" not in out
         assert "\\\n" not in out
 
-    @pytest.mark.xfail(
-        reason="no owning ticket - research Q19.1: stray quote from simplify_schema "
-        "in every JSONish schema comment"
-    )
     def test_jsonish_schema_comments_have_no_stray_quote(self):
         """JSONish schema comments should not end with a stray double quote."""
         out = make_adapter(OutputMode.JSONISH).format_field_structure(Extract)

@@ -877,16 +877,26 @@ class JSONishFormatter(BaseFormatter):
 
     def _remove_quotes(self, json_string: str) -> str:
         """
-        Remove quotes from keys and string values in JSONish format.
+        Remove JSON string-delimiter quotes from keys and values in JSONish format.
+
+        A `"` character is removed iff it is an unescaped JSON string delimiter (i.e. the
+        scanner is not currently inside a string when it is reached); every other character,
+        including escape sequences such as `\\"`, `\\\\`, and `\\n`, is emitted verbatim.
+        This method does not unescape anything -- see lsl-2026-09-04-002 for why partial
+        unescaping is deliberately not performed here.
+
+        Structural lines (`{`, `}`, `[`, `]`, or blank) and lines injected by
+        `_process_additional_properties` (which start with `self.comment_prefix` and are not
+        `json.dumps` output) are passed through unchanged.
 
         Args:
-            json_string: JSON string with quotes.
+            json_string: JSON string with quotes, as produced by `json.dumps` and
+                post-processed by `_process_additional_properties`.
 
         Returns:
-            JSONish string without quotes.
+            JSONish string with delimiter quotes removed and all other characters,
+            including escaped content quotes and backslashes, preserved verbatim.
         """
-        import re
-
         lines = json_string.split("\n")
         result_lines = []
 
@@ -901,28 +911,67 @@ class JSONishFormatter(BaseFormatter):
             leading_space = len(line) - len(line.lstrip())
             content = line.strip()
 
-            # Check if line has a comment (preserve quotes in comments)
-            comment_pos = content.find("//")
-            if comment_pos != -1:
-                main_content = content[:comment_pos]
-                comment_content = content[comment_pos:]
-            else:
-                main_content = content
-                comment_content = ""
+            # Lines injected by _process_additional_properties (e.g. "// Root: ...") are not
+            # json.dumps output; the scanner's precondition does not hold for them, so pass
+            # them through unchanged rather than scanning.
+            if content.startswith(self.comment_prefix):
+                result_lines.append(" " * leading_space + content)
+                continue
 
-            # Remove quotes from keys: "key": -> key:
-            # Pattern: "text": (with optional whitespace)
-            main_content = re.sub(r'"([^"]+)"(\s*:\s*)', r"\1\2", main_content)
-
-            # Remove quotes from string values
-            # After removing key quotes, remaining quotes are on values
-            main_content = main_content.replace('"', "")
+            scanned = self._scan_remove_string_delimiters(content)
 
             # Reconstruct line
-            processed = " " * leading_space + main_content + comment_content
+            processed = " " * leading_space + scanned
             result_lines.append(processed)
 
         return "\n".join(result_lines)
+
+    def _scan_remove_string_delimiters(self, content: str) -> str:
+        """
+        Remove unescaped JSON string-delimiter quotes from one line's content.
+
+        Two-state scan (outside a string / inside a string) over `content`. A `"` reached
+        while outside a string opens one and is dropped; a `"` reached while inside a string
+        closes it and is dropped. A `\\` reached while inside a string consumes itself and the
+        following character verbatim (so an escaped `\\"` is never seen as a closing
+        delimiter). No unescaping is performed: everything other than a delimiter quote is
+        emitted as-is.
+
+        Args:
+            content: One stripped, non-structural, non-comment-only line of `json.dumps`
+                output (leading/trailing whitespace already removed by the caller).
+
+        Returns:
+            `content` with its unescaped string-delimiter quotes removed and every other
+            character, including escape sequences, preserved verbatim.
+        """
+        in_string = False
+        i = 0
+        n = len(content)
+        out: list[str] = []
+
+        while i < n:
+            char = content[i]
+
+            if in_string and char == "\\":
+                if i + 1 < n:
+                    out.append(char)
+                    out.append(content[i + 1])
+                    i += 2
+                else:
+                    out.append(char)
+                    i += 1
+                continue
+
+            if char == '"':
+                in_string = not in_string
+                i += 1
+                continue
+
+            out.append(char)
+            i += 1
+
+        return "".join(out)
 
     def _process_additional_properties(self, json_string: str, is_root: bool = False) -> str:
         """

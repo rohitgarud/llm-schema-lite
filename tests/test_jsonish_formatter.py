@@ -5,16 +5,21 @@ from __future__ import annotations
 import re
 
 import pytest
+from pydantic import BaseModel, Field
 
 from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
 from tests.conftest import (
     EMPTY_SCHEMA,
+    ComplexTypes,
     ConstrainedFormatterModel,
+    ModelWithPriorityMetadata,
     OrderedFieldsModel,
     PersonWithAddress,
+    Product,
     RequiredOptionalModel,
     SimpleFormatterModel,
+    WithFieldDescriptions,
 )
 from tests.formatter_helpers import (
     assert_required_optional_consistent,
@@ -1160,3 +1165,158 @@ def test_jsonish_formatter_consistent_asterisk_usage():
     assert "optional_one*:" not in result
     assert "optional_two:" in result
     assert "optional_two*:" not in result
+
+
+# --- lsl-2026-09-04-002: stray trailing quote after comments -------------------------------
+#
+# A `"` in JSONish `_remove_quotes` output is BAD iff it is an unescaped JSON string
+# delimiter that survived to end-of-line -- i.e. preceded by an even number of backslashes
+# (possibly zero). This predicate expresses a property of `_remove_quotes` output, not of a
+# whole rendered schema: header/notes/links comment lines and `_apply_pending_postfix` text
+# never pass through `_remove_quotes` and may legitimately end in a bare `"`. It is therefore
+# only applied here to fixtures whose model-level title/description/notes/links contain no
+# `"`; field-level quotes are exercised directly via `_QuoteDescriptions` below.
+STRAY_DELIMITER = re.compile(r'(?:^|[^\\])(?:\\\\)*"\s*,?\s*$')
+
+
+class _QuoteDescriptions(BaseModel):
+    """Pathological field descriptions exercising quote and comment edge cases.
+
+    The docstring is deliberately quote-free (see STRAY_DELIMITER's scoping note above).
+    """
+
+    q: str = Field(..., description='say "hi" now')
+    e: str = Field(..., description='ends with quote"')
+    m: str = Field(..., description="see http://x // note")
+    p: str = Field(..., description=r"win path C:\dir\ ")
+    plain: str
+
+
+def _line_with(rendered: str, needle: str) -> str:
+    """Return the single rendered line containing `needle` (stripped)."""
+    matches = [line.strip() for line in rendered.split("\n") if needle in line]
+    assert len(matches) == 1, f"Expected exactly one line containing {needle!r}, got {matches!r}"
+    return matches[0]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        WithFieldDescriptions,
+        PersonWithAddress,
+        Product,
+        ComplexTypes,
+        ModelWithPriorityMetadata,
+    ],
+)
+def test_jsonish_no_line_ends_with_stray_delimiter(model: type[BaseModel]) -> None:
+    """AC-1: no _remove_quotes output line ends with an unescaped string delimiter."""
+    result = JSONishFormatter(model.model_json_schema()).transform_schema()
+
+    for line in result.split("\n"):
+        assert STRAY_DELIMITER.search(line) is None, f"Stray delimiter: {line!r}"
+
+
+def test_jsonish_nested_object_lines_have_no_stray_delimiter() -> None:
+    """AC-1 on the process_ref recursion.
+
+    Nested lines live inside one physical line, so the per-line scan in
+    test_jsonish_no_line_ends_with_stray_delimiter cannot see them.
+    """
+    result = JSONishFormatter(PersonWithAddress.model_json_schema()).transform_schema()
+
+    for token in ['Street:"', 'Street:\\"', 'City:"', 'City:\\"', '\\",\\n']:
+        assert token not in result, f"Stray-quote token {token!r} present in nested render."
+
+
+def test_jsonish_description_with_quote_preserved_once() -> None:
+    """AC-2: a description containing a literal quote is preserved exactly once."""
+    result = JSONishFormatter(_QuoteDescriptions.model_json_schema()).transform_schema()
+    line = _line_with(result, "q*:")
+
+    assert line.count('"') == 2, f"Expected exactly 2 quote characters in {line!r}"
+    assert "hi" in line
+    assert STRAY_DELIMITER.search(line) is None
+
+
+def test_jsonish_description_ending_in_quote_not_truncated() -> None:
+    """AC-2: an escaped trailing content quote is not mistaken for a stray delimiter."""
+    result = JSONishFormatter(_QuoteDescriptions.model_json_schema()).transform_schema()
+    line = _line_with(result, "e*:")
+
+    assert "ends with quote" in line
+    assert line.count('"') == 1, f"Expected exactly 1 quote character in {line!r}"
+    assert STRAY_DELIMITER.search(line) is None
+
+
+def test_jsonish_description_with_double_slash_preserved() -> None:
+    """Guard against reintroducing any `//`-position heuristic."""
+    result = JSONishFormatter(_QuoteDescriptions.model_json_schema()).transform_schema()
+    line = _line_with(result, "m*:")
+
+    assert "see http://x // note" in line
+
+
+def test_jsonish_property_without_comment_is_unchanged() -> None:
+    """Pin the already-working clean path (a field with no description)."""
+    result = JSONishFormatter(_QuoteDescriptions.model_json_schema()).transform_schema()
+    line = _line_with(result, "plain*:")
+
+    assert line.split("//")[0].strip() == "plain*: string"
+    assert '"' not in line
+
+
+@pytest.mark.parametrize(
+    ("input_line", "expected_line"),
+    [
+        # S1 - key + string value, the reported bug
+        ('  "name*": "string // Name: Full name",', "  name*: string // Name: Full name,"),
+        # S2 - key + open object
+        ('  "address*": {', "  address*: {"),
+        # S2b - key + open array
+        ('  "items*": [', "  items*: ["),
+        # S3 - key + empty container
+        ('  "metadata": {},', "  metadata: {},"),
+        # S4 - close container (L1 structural skip)
+        ("  },", "  },"),
+        # S5 - injected comment-only line (L3 guard)
+        ("  // Root: additional: string", "  // Root: additional: string"),
+        # S6 - escaped quote inside the value
+        ('  "q*": "string // Q: say \\"hi\\" now",', '  q*: string // Q: say \\"hi\\" now,'),
+        # S7 - literal backslash immediately before a delimiter
+        ('  "p*": "string // P: path\\\\",', "  p*: string // P: path\\\\,"),
+        # S8 - value containing : and //
+        (
+            '  "m*": "string // M: see http://x // note",',
+            "  m*: string // M: see http://x // note,",
+        ),
+        # S9 - bare string value, no trailing comma (last property)
+        ('  "plain*": "string"', "  plain*: string"),
+        # S10 - value ending in a content quote
+        ('  "e*": "string // E: ends with quote\\""', '  e*: string // E: ends with quote\\"'),
+        # S11 - nested dict-repr carrying \n (ticket 001's shape)
+        ('  "address*": "{\\n street*: string \\n}"', "  address*: {\\n street*: string \\n}"),
+    ],
+)
+def test_remove_quotes_line_shapes(input_line: str, expected_line: str) -> None:
+    """Contract test pinning every line shape in the design's worked table.
+
+    The only new test allowed to know _remove_quotes' internal line representation --
+    it makes the method safe for tickets 001/003/004/005/014/015 to edit around.
+    """
+    formatter = JSONishFormatter({"type": "object", "properties": {}})
+
+    assert formatter._remove_quotes(input_line) == expected_line
+
+
+def test_remove_quotes_does_not_unescape() -> None:
+    """Pin the hard rule: _remove_quotes must not unescape anything.
+
+    Ticket lsl-2026-09-04-001's nested dict-repr `\\n` marker would otherwise become
+    ambiguous with a user's literal `\\n` text.
+    """
+    formatter = JSONishFormatter({"type": "object", "properties": {}})
+
+    result = formatter._remove_quotes('  "p*": "a\\\\b and \\"c\\" end",')
+
+    assert result == '  p*: a\\\\b and \\"c\\" end,'
