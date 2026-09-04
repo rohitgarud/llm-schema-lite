@@ -51,6 +51,10 @@ class FormatterConfig:
         include_constraints: Include validation constraints like min/max (default: True)
         include_metadata: Include all metadata (default: True) - supersedes
             include_descriptions and include_constraints
+        max_recursion_depth: How many times a recursive $ref's body is rendered on any one
+            path before it is replaced by a placeholder. Default 2. A value of 0 behaves as
+            1 (the first expansion of any $ref is always unconditional). Negative values
+            raise ValueError.
         metadata_inclusion: Dictionary to control which metadata keywords are included
             in output. Keys are metadata keyword names, values are booleans.
             If not provided, defaults to DEFAULT_METADATA_INCLUSION.
@@ -67,10 +71,13 @@ class FormatterConfig:
     include_descriptions: bool = True
     include_constraints: bool = True
     include_metadata: bool = True
+    max_recursion_depth: int = 2
     metadata_inclusion: dict[str, bool] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         """Post-initialization to handle metadata_inclusion defaults."""
+        if self.max_recursion_depth < 0:
+            raise ValueError(f"max_recursion_depth must be >= 0, got {self.max_recursion_depth}")
         if self.metadata_inclusion is None:
             # Use default metadata inclusion if not specified
             self.metadata_inclusion = DEFAULT_METADATA_INCLUSION.copy()

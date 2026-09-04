@@ -1,5 +1,6 @@
 """Tests for FormatterConfig functionality."""
 
+import pytest
 from pydantic import BaseModel
 
 from llm_schema_lite import FormatterConfig, simplify_schema
@@ -167,6 +168,21 @@ class TestFormatterConfig:
         config = FormatterConfig(hoist_classes=["SomeClass"])
         result = simplify_schema(User, config=config)
         assert result is not None
+
+    def test_max_recursion_depth_defaults_to_two(self):
+        """Test that max_recursion_depth defaults to 2."""
+        config = FormatterConfig()
+        assert config.max_recursion_depth == 2
+
+    def test_max_recursion_depth_negative_raises(self):
+        """Test that a negative max_recursion_depth raises ValueError."""
+        with pytest.raises(ValueError, match="max_recursion_depth must be >= 0"):
+            FormatterConfig(max_recursion_depth=-1)
+
+    def test_max_recursion_depth_zero_is_accepted(self):
+        """Test that max_recursion_depth=0 constructs successfully."""
+        config = FormatterConfig(max_recursion_depth=0)
+        assert config.max_recursion_depth == 0
 
 
 class TestFormatterConfigIntegration:
