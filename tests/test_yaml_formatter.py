@@ -1254,3 +1254,96 @@ def test_yaml_formatter_prefix_items_tuple_with_variadic_tail():
     result = YAMLFormatter(PREFIX_ITEMS_SCHEMA).transform_schema()
 
     assert result == "tuple[string, int, bool, ...string]"
+
+
+# ============================================================================
+# Recursive models -- depth-limited rendering (lsl-2026-09-04-014)
+# ============================================================================
+
+
+class _ListNode(BaseModel):
+    """Self-referencing model behind the D4 root-unwrap goldens."""
+
+    label: str
+    kids: list[_ListNode] = Field(default_factory=list)
+
+
+class _MapNode(BaseModel):
+    """Self-referencing model reached through a mapping value (D5).
+
+    Deliberately NOT registered in ``all_pydantic_models``: PyYAML folds its
+    rendering onto physical lines that end on ``#``, which would trip
+    ``test_no_empty_comment_marker_across_all_models_yaml``.
+    """
+
+    name: str
+    kids: dict[str, _MapNode] = Field(default_factory=dict)
+
+
+_ListNode.model_rebuild()
+_MapNode.model_rebuild()
+
+
+def test_yaml_recursive_list_golden_default_depth():
+    """Whole-string golden for a recursive list model at the default depth."""
+    from llm_schema_lite import simplify_schema
+
+    result = simplify_schema(_ListNode, format_type="yaml").to_string()
+
+    expected = (
+        "# _ListNode\n"
+        "_ListNode.label*: string\n"
+        "_ListNode.kids: 'list[label*: string\n"
+        "\n"
+        "  kids: list[object  # recursive: _ListNode]]'\n"
+        "\n"
+        "label*: string\n"
+        "kids: 'list[label*: string\n"
+        "\n"
+        "  kids: list[object  # recursive: _ListNode]]'"
+    )
+    assert result == expected
+
+
+def test_yaml_mapping_of_recursive_model_terminates():
+    """D5: ``dict[str, RecursiveModel]`` terminates instead of RecursionError."""
+    from llm_schema_lite import simplify_schema
+
+    result = simplify_schema(
+        _MapNode,
+        config=FormatterConfig(max_recursion_depth=1),
+        format_type="yaml",
+    ).to_string()
+
+    assert "object  # recursive: _MapNode" in result
+
+
+def test_yaml_root_ref_model_renders_properties():
+    """D4: a root-``$ref`` schema renders its properties, not an empty document."""
+    result = YAMLFormatter(_ListNode.model_json_schema()).transform_schema()
+
+    assert result != "{}"
+    assert "label" in result
+
+
+def test_yaml_recursive_output_round_trips_through_safe_load():
+    """The recursion marker stays inert text: PyYAML quotes any scalar with ``#``."""
+    from llm_schema_lite import simplify_schema
+
+    result = simplify_schema(_ListNode, format_type="yaml").to_string()
+
+    loaded = yaml.safe_load(result)
+    assert isinstance(loaded, dict)
+    assert loaded
+    for key, value in loaded.items():
+        assert value is not None, f"{key} round-tripped to None in:\n{result}"
+
+
+def test_yaml_recursive_render_is_idempotent():
+    """C3: the cached ``$defs`` walk seeds the depth counter like the main one."""
+    formatter = YAMLFormatter(_ListNode.model_json_schema())
+
+    first = formatter.transform_schema()
+    second = formatter.transform_schema()
+
+    assert first == second

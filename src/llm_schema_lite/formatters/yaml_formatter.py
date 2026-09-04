@@ -159,8 +159,29 @@ class YAMLFormatter(BaseFormatter):
             return True
         return nested_additional is True
 
+    def _mapping_ref_key(self, value_schema: dict[str, Any]) -> str | None:
+        """Def name a MAPPING value ``$ref``s, or None."""
+        ref = value_schema.get("$ref")
+        if isinstance(ref, str):
+            ref_match = self.REF_PATTERN.search(ref)
+            if ref_match and ref_match.group(1) in self.defs:
+                return ref_match.group(1)
+        return None
+
     def _mapping_value_pairs(self, value_schema: dict[str, Any]) -> dict[str, str] | None:
-        """Marked ``name -> rendered type`` pairs of a structural mapping value, if it has any."""
+        """Marked ``name -> rendered type`` pairs of a structural mapping value, if it has any.
+
+        This path resolves a ``$ref`` directly rather than through ``process_ref``, so it
+        applies ``max_recursion_depth`` itself; returning None on re-entry hands the value
+        back to ``process_property``, which emits the recursion placeholder.
+        """
+        ref_key = self._mapping_ref_key(value_schema)
+        if ref_key is not None:
+            reentries = self._ref_expansion_path.count(ref_key)
+            if reentries >= 1 and reentries >= self.config.max_recursion_depth:
+                self._truncation_epoch += 1
+                return None
+
         resolved = self._resolve_mapping_value(value_schema)
         properties = resolved.get("properties")
         if not isinstance(properties, dict) or not properties:
@@ -168,12 +189,13 @@ class YAMLFormatter(BaseFormatter):
 
         required = set(resolved.get("required", []) or [])
         pairs: dict[str, str] = {}
-        for prop_name, prop_def in properties.items():
-            if prop_name in required:
-                marked = f"{prop_name}{self.config.required_marker}"
-            else:
-                marked = f"{prop_name}{self.config.optional_marker}"
-            pairs[marked] = self.process_property(prop_def)
+        with self._expanding(ref_key):
+            for prop_name, prop_def in properties.items():
+                if prop_name in required:
+                    marked = f"{prop_name}{self.config.required_marker}"
+                else:
+                    marked = f"{prop_name}{self.config.optional_marker}"
+                pairs[marked] = self.process_property(prop_def)
         return pairs
 
     def _build_mapping_block(self, value_schema: dict[str, Any]) -> dict[str, Any] | str:
@@ -734,6 +756,13 @@ class YAMLFormatter(BaseFormatter):
         Returns:
             YAML-style schema definition as a string.
         """
+        self._reset_ref_state()
+        # Root-level $ref: adopt the resolved def as the effective root and count it as
+        # the first expansion of that type, so the depth knob means the same thing for
+        # ``Node`` and for ``Root(root: Node)``.
+        root_ref_key = self._adopt_root_ref()
+        if root_ref_key is not None:
+            self._root_ref_key = root_ref_key
         # First branch: if _processed_data is set, build from cache
         if hasattr(self, "_processed_data") and self._processed_data:
             all_sections = []
@@ -747,7 +776,8 @@ class YAMLFormatter(BaseFormatter):
                     # Build dict for this $def (with per-field DEPENDS ON from def_schema)
                     def_dict = {}
                     for prop_name, prop_def in nested_props.items():
-                        prop_type = self.process_property(prop_def)
+                        with self._expanding(def_name):
+                            prop_type = self.process_property(prop_def)
                         dep = self._get_fields_dependencies(def_schema, prop_name)
                         if dep and self.include_metadata:
                             prop_type = f"{prop_type}  # {dep}"
@@ -912,7 +942,8 @@ class YAMLFormatter(BaseFormatter):
                 # Build dict for this $def (with per-field DEPENDS ON from def_schema)
                 def_dict = {}
                 for prop_name, prop_def in nested_props.items():
-                    prop_type = self.process_property(prop_def)
+                    with self._expanding(def_name):
+                        prop_type = self.process_property(prop_def)
                     dep = self._get_fields_dependencies(def_schema, prop_name)
                     if dep and self.include_metadata:
                         prop_type = f"{prop_type}  # {dep}"
@@ -948,7 +979,8 @@ class YAMLFormatter(BaseFormatter):
             main_parts.append(required_comment)
 
         # Process properties and cache the result
-        processed_properties = self.process_properties(self.properties)
+        with self._expanding(self._root_ref_key):
+            processed_properties = self.process_properties(self.properties)
 
         # Check for complex additionalProperties and add placeholder key if needed
         additional_props = self.schema.get("additionalProperties")
