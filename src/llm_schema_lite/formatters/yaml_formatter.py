@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from .base import BaseFormatter
+from .base import BaseFormatter, ContainerShape, classify_container
 from .config import FormatterConfig
 
 
@@ -125,6 +125,69 @@ class YAMLFormatter(BaseFormatter):
         """Comment prefix for YAML format."""
         return "#"
 
+    def _resolve_mapping_value(self, value_schema: dict[str, Any]) -> dict[str, Any]:
+        """Resolve a ``$ref`` mapping value schema to its ``$defs`` entry, else return it."""
+        ref = value_schema.get("$ref")
+        if isinstance(ref, str):
+            ref_match = self.REF_PATTERN.search(ref)
+            if ref_match:
+                ref_def = self.defs.get(ref_match.group(1))
+                if isinstance(ref_def, dict):
+                    return ref_def
+        return value_schema
+
+    def _mapping_value_is_structural(self, value_schema: dict[str, Any]) -> bool:
+        """True when a MAPPING's value schema needs a nested YAML block, not a one-line token.
+
+        True for: a schema with its own `properties`; a `$ref` whose resolved def has
+        `properties`; or a schema carrying `anyOf`/`oneOf`/`allOf`/a nested (dict-valued or
+        `True`) `additionalProperties`. False for a plain scalar/enum/`Any` value schema.
+        """
+        if not isinstance(value_schema, dict) or not value_schema:
+            return False
+
+        resolved = self._resolve_mapping_value(value_schema)
+        if resolved.get("properties"):
+            return True
+
+        for key in ("anyOf", "oneOf", "allOf"):
+            if value_schema.get(key):
+                return True
+
+        nested_additional = value_schema.get("additionalProperties")
+        if isinstance(nested_additional, dict) and nested_additional:
+            return True
+        return nested_additional is True
+
+    def _mapping_value_pairs(self, value_schema: dict[str, Any]) -> dict[str, str] | None:
+        """Marked ``name -> rendered type`` pairs of a structural mapping value, if it has any."""
+        resolved = self._resolve_mapping_value(value_schema)
+        properties = resolved.get("properties")
+        if not isinstance(properties, dict) or not properties:
+            return None
+
+        required = set(resolved.get("required", []) or [])
+        pairs: dict[str, str] = {}
+        for prop_name, prop_def in properties.items():
+            if prop_name in required:
+                marked = f"{prop_name}{self.config.required_marker}"
+            else:
+                marked = f"{prop_name}{self.config.optional_marker}"
+            pairs[marked] = self.process_property(prop_def)
+        return pairs
+
+    def _build_mapping_block(self, value_schema: dict[str, Any]) -> dict[str, Any] | str:
+        """Build the nested dict `yaml.dump` will render for a *structural* mapping value.
+
+        Resolves a `$ref` value schema to its def's `properties` + `required` directly (rather
+        than embedding `process_ref`'s multi-line `dict_to_string` scalar) so a model-valued
+        mapping renders as a real nested block, not a quoted multi-line string.
+        """
+        pairs = self._mapping_value_pairs(value_schema)
+        if pairs is not None:
+            return dict(pairs)
+        return self.process_property(value_schema)
+
     def _dump_yaml(self, data: dict[str, Any]) -> str:
         """
         Dump a dictionary to YAML format.
@@ -155,6 +218,9 @@ class YAMLFormatter(BaseFormatter):
         item_types = []
         for item in anyof_list:
             if not isinstance(item, dict):
+                continue
+            if not item:
+                item_types.append("any")
                 continue
             if "enum" in item:
                 item_types.append(self.process_enum(item))
@@ -258,6 +324,9 @@ class YAMLFormatter(BaseFormatter):
         item_types = []
         for item in oneof_list:
             if not isinstance(item, dict):
+                continue
+            if not item:
+                item_types.append("any")
                 continue
             if "enum" in item:
                 item_types.append(self.process_enum(item))
@@ -374,7 +443,7 @@ class YAMLFormatter(BaseFormatter):
         Process type with JSONish constraint phrasing: string (min-max chars), (PATTERN: ...),
         number (min to max), array UNIQUE / (min-max UNIQUE items), object {} or expanded.
         """
-        type_name = type_value.get("type", "string")
+        type_name = type_value.get("type", "any")
 
         # Handle array of types (union types like ["string", "null"])
         if isinstance(type_name, list):
@@ -390,6 +459,19 @@ class YAMLFormatter(BaseFormatter):
 
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
+        shape = classify_container(type_value)
+        if shape.kind == "mapping":
+            return self.add_metadata(self.render_mapping(shape), type_value)
+        if shape.kind == "tuple":
+            tuple_str = self.render_tuple(shape)
+            if not (
+                type_value.get("minItems")
+                == type_value.get("maxItems")
+                == len(shape.prefix_schemas)
+            ):
+                tuple_str += self.format_array_constraints(type_value)
+            return self.add_metadata(tuple_str, type_value)
+
         if type_name == "string":
             extra = self._format_string_constraints_jsonish(type_value)
             if extra:
@@ -404,9 +486,9 @@ class YAMLFormatter(BaseFormatter):
         elif type_name == "array":
             items = type_value.get("items")
             if not items:
-                type_str = "list[Any]"
+                type_str = "list[any]"
             elif isinstance(items, bool):
-                type_str = "list[Any]"
+                type_str = "list[any]"
             elif isinstance(items, dict) and "type" in items:
                 items_type = self.process_type_value(items)
                 type_str = f"list[{items_type}]"
@@ -420,34 +502,10 @@ class YAMLFormatter(BaseFormatter):
                 items_type = self.process_oneof(items)
                 type_str = f"list[{items_type}]"
             else:
-                type_str = "list[Any]"
+                type_str = "list[any]"
 
             if self.include_metadata:
-                # Check uniqueItems based on metadata_inclusion config
-                unique_items = type_value.get("_uniqueItems") or type_value.get("uniqueItems")
-                unique_str = "UNIQUE "
-                if unique_items and self._should_include_metadata("uniqueItems"):
-                    unique_str = "UNIQUE "
-                else:
-                    unique_str = ""
-                # Check minItems/maxItems based on metadata_inclusion config
-                include_min_items = self._should_include_metadata("minItems")
-                include_max_items = self._should_include_metadata("maxItems")
-                min_i = type_value.get("minItems")
-                max_i = type_value.get("maxItems")
-                if (
-                    include_min_items
-                    and include_max_items
-                    and min_i is not None
-                    and max_i is not None
-                ):
-                    type_str = f"{type_str} ({min_i}-{max_i} {unique_str}items)".strip()
-                elif include_min_items and min_i is not None:
-                    type_str = f"{type_str} (>= {min_i} {unique_str}items)".strip()
-                elif include_max_items and max_i is not None:
-                    type_str = f"{type_str} (<= {max_i} {unique_str}items)".strip()
-                elif unique_str:
-                    type_str = f"{type_str} ({unique_str}items)".strip()
+                type_str += self.format_array_constraints(type_value)
                 if "contains" in type_value:
                     type_str += self.process_contains(type_value)
             return self.add_metadata(type_str, type_value)
@@ -462,21 +520,36 @@ class YAMLFormatter(BaseFormatter):
 
         return self.add_metadata(str(type_str), type_value)
 
+    def render_mapping(self, shape: ContainerShape) -> str:
+        """``"dict[K, V]"`` in every string context (correction C3); never a nested block."""
+        value_token = (
+            self.render_type_token(shape.value_schema) if shape.value_schema is not None else "any"
+        )
+        if shape.value_schema is not None and self._mapping_value_is_structural(shape.value_schema):
+            value_token = self._flow_mapping_value(shape.value_schema)
+        return f"dict[{self.key_token(shape)}, {value_token}]"
+
+    def render_tuple(self, shape: ContainerShape) -> str:
+        """``"tuple[int, string]"`` / ``"tuple[int, string, ...string]"``."""
+        tokens = [self.render_type_token(s) for s in shape.prefix_schemas]
+        if shape.rest_schema is not None:
+            tokens.append(f"...{self.render_type_token(shape.rest_schema)}")
+        return f"tuple[{', '.join(tokens)}]"
+
+    def _flow_mapping_value(self, value_schema: dict[str, Any]) -> str:
+        """``"{a: int, b: string}"`` -- a YAML flow-mapping rendering of a structural value
+        schema, for use inside a larger one-line string value.
+        """
+        pairs = self._mapping_value_pairs(value_schema)
+        if pairs is None:
+            return self.process_property(value_schema)
+        return "{" + ", ".join(f"{k}: {v}" for k, v in pairs.items()) + "}"
+
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
         Add metadata comments to a field representation (JSONish parity:
         title, description, id, $comment, default, example/examples).
-        Always appends additionalProperties when present (even without include_metadata).
         """
-        # Always show additionalProperties when present (e.g. "additional: string")
-        if isinstance(value, dict) and value.get("additionalProperties") is not None:
-            additional_comment = self.process_additional_properties(value)
-            if additional_comment:
-                representation = (
-                    f"{representation}{additional_comment}"
-                    if representation
-                    else additional_comment.strip()
-                )
         if not self.include_metadata:
             return representation
 
@@ -526,42 +599,19 @@ class YAMLFormatter(BaseFormatter):
         processed_properties: dict[str, Any] = {}
         for prop_name, value in properties.items():
             formatted_name = self.format_field_name(prop_name)
-            if isinstance(value, dict) and value.get("type") == "object":
-                additional_props_raw = value.get("additionalProperties")
-                is_object_with_additional = (
-                    isinstance(additional_props_raw, dict)
-                    and additional_props_raw.get("type") == "object"
-                    and "additionalProperties" in additional_props_raw
-                )
-                is_complex = (
-                    isinstance(additional_props_raw, dict)
-                    and additional_props_raw
-                    and (
-                        "properties" in additional_props_raw
-                        or "anyOf" in additional_props_raw
-                        or "oneOf" in additional_props_raw
-                        or "allOf" in additional_props_raw
-                        or is_object_with_additional
-                    )
-                )
-                if (
-                    is_complex
-                    and isinstance(additional_props_raw, dict)
-                    and not (value.get("properties"))
-                ):
-                    additional_props = additional_props_raw
-                    if "properties" in additional_props and additional_props["properties"]:
-                        inner_required = set(additional_props.get("required", []))
-                        inner = {}
-                        for pname, pdef in additional_props["properties"].items():
-                            fname = f"{pname}*" if pname in inner_required else pname
-                            inner[fname] = self.process_property(pdef)
-                        processed_properties[formatted_name] = {"<key>": inner}
-                    else:
+            if isinstance(value, dict):
+                shape = classify_container(value)
+                if shape.kind == "mapping":
+                    key = f"<{self.key_token(shape)}>"
+                    if shape.value_schema is not None and self._mapping_value_is_structural(
+                        shape.value_schema
+                    ):
                         processed_properties[formatted_name] = {
-                            "<key>": self.process_property(additional_props)
+                            key: self._build_mapping_block(shape.value_schema)
                         }
-                    self._nested_placeholder_count += 1
+                        self._nested_placeholder_count += 1
+                    else:
+                        processed_properties[formatted_name] = self.render_mapping(shape)
                     continue
             prop_str = self.process_property(value)
             dep = self._get_fields_dependencies(self.schema, prop_name)
@@ -617,6 +667,10 @@ class YAMLFormatter(BaseFormatter):
         if additional_props is False:
             return f" {self.comment_prefix} no additional properties"
         if isinstance(additional_props, dict) and additional_props:
+            if not schema.get("properties"):
+                # Pure mapping (classify_container rule 6/C1): the value type is rendered
+                # structurally by the caller's mapping renderer, never as a comment.
+                return ""
             if not show_structure:
                 return f" {self.comment_prefix} any properties allowed"
             type_str = self.process_type_value(additional_props)
@@ -727,8 +781,14 @@ class YAMLFormatter(BaseFormatter):
             # Use cached processed data for main content
             main_parts.append(self._dump_yaml(self._processed_data))
 
-            # Add additionalProperties comment (short if structure already in cached data)
-            if "<key>" in self._processed_data:
+            # Add additionalProperties comment (short if structure already in cached data).
+            # The placeholder key is now the rendered key *type* (e.g. "<string>"), not the
+            # literal "<key>", so match its shape rather than the old sentinel.
+            has_placeholder_key = any(
+                isinstance(k, str) and k.startswith("<") and k.endswith(">")
+                for k in self._processed_data
+            )
+            if has_placeholder_key:
                 additional_props_comment = self.process_additional_properties(
                     self.schema, show_structure=False
                 )
@@ -750,48 +810,25 @@ class YAMLFormatter(BaseFormatter):
         if not self.properties:
             # Check for complex additionalProperties in empty object schemas
             if self.schema.get("type") == "object":
-                additional_props = self.schema.get("additionalProperties")
-                is_object_with_additional = False
-                if isinstance(additional_props, dict):
-                    is_object_with_additional = (
-                        additional_props.get("type") == "object"
-                        and "additionalProperties" in additional_props
-                    )
-                is_complex = (
-                    isinstance(additional_props, dict)
-                    and additional_props
-                    and (
-                        "properties" in additional_props
-                        or "anyOf" in additional_props
-                        or "oneOf" in additional_props
-                        or "allOf" in additional_props
-                        or is_object_with_additional
-                    )
-                )
-
-                if is_complex and isinstance(additional_props, dict):
-                    # Build nested structure for placeholder key
+                shape = classify_container(self.schema)
+                if shape.kind == "mapping":
+                    key = f"<{self.key_token(shape)}>"
                     output_dict: dict[str, Any]
-                    if "properties" in additional_props and additional_props["properties"]:
-                        inner_required = set(additional_props.get("required", []))
-                        inner: dict[str, Any] = {}
-                        for prop_name, prop_def in additional_props["properties"].items():
-                            # Use config markers for formatting
-                            if prop_name in inner_required:
-                                formatted_name = f"{prop_name}{self.config.required_marker}"
-                            else:
-                                formatted_name = f"{prop_name}{self.config.optional_marker}"
-                            inner[formatted_name] = self.process_property(prop_def)
-                        output_dict = {"<key>": inner}
+                    if shape.value_schema is not None and self._mapping_value_is_structural(
+                        shape.value_schema
+                    ):
+                        output_dict = {key: self._build_mapping_block(shape.value_schema)}
                     else:
-                        output_dict = {"<key>": self.process_property(additional_props)}
+                        value_token = (
+                            self.render_type_token(shape.value_schema)
+                            if shape.value_schema is not None
+                            else "any"
+                        )
+                        output_dict = {key: value_token}
 
-                    additional_comment = self.process_additional_properties(
-                        self.schema, show_structure=False
-                    )
                     result = self._dump_yaml(output_dict)
-                    if additional_comment:
-                        result += f"\n{additional_comment}"
+                    # "any properties allowed" is dropped for mappings (design 4.1 / A9) --
+                    # no process_additional_properties(show_structure=False) call here.
                     return self._add_prefix(result)
 
             # Handle schema-level features even when there are no properties
@@ -813,9 +850,9 @@ class YAMLFormatter(BaseFormatter):
                 schema_level_features += self.process_unevaluated_properties(self.schema)
 
             # Add additionalProperties to schema-level features
-            additional_props = self.process_additional_properties(self.schema)
-            if additional_props:
-                schema_level_features += additional_props
+            additional_props_feature = self.process_additional_properties(self.schema)
+            if additional_props_feature:
+                schema_level_features += additional_props_feature
 
             # Handle schema with type but no properties
             if "type" in self.schema:
@@ -933,9 +970,11 @@ class YAMLFormatter(BaseFormatter):
             )
         )
         if is_complex_additional and isinstance(additional_props, dict):
+            key_shape = ContainerShape("mapping", key_schema=self.schema.get("propertyNames"))
+            key = f"<{self.key_token(key_shape)}>"
             if "properties" in additional_props and additional_props["properties"]:
                 inner_required = set(additional_props.get("required", []))
-                inner = {}
+                inner: dict[str, Any] = {}
                 for prop_name, prop_def in additional_props["properties"].items():
                     # Use config markers for formatting
                     if prop_name in inner_required:
@@ -943,9 +982,9 @@ class YAMLFormatter(BaseFormatter):
                     else:
                         formatted_name = f"{prop_name}{self.config.optional_marker}"
                     inner[formatted_name] = self.process_property(prop_def)
-                processed_properties["<key>"] = inner
+                processed_properties[key] = inner
             else:
-                processed_properties["<key>"] = self.process_property(additional_props)
+                processed_properties[key] = self.process_property(additional_props)
 
         # Dump processed properties to YAML
         main_content = self._dump_yaml(processed_properties)

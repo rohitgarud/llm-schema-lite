@@ -3,7 +3,7 @@
 from io import StringIO
 from typing import Any
 
-from .base import BaseFormatter
+from .base import BaseFormatter, ContainerShape, classify_container
 
 
 class TypeScriptFormatter(BaseFormatter):
@@ -72,6 +72,10 @@ class TypeScriptFormatter(BaseFormatter):
         if additional_props is False:
             return " // no additional properties"
         elif isinstance(additional_props, dict) and additional_props:
+            if not schema.get("properties"):
+                # Pure mapping (classify_container rule 6/C1): the value type is rendered
+                # structurally by the caller's mapping renderer, never as a comment.
+                return ""
             if not show_structure:
                 # Structure shown via placeholder key, just indicate it's allowed
                 return " // any properties allowed"
@@ -97,25 +101,8 @@ class TypeScriptFormatter(BaseFormatter):
         return ""
 
     def _is_complex_additional_props(self, schema: dict[str, Any]) -> bool:
-        """Check if schema has complex additionalProperties."""
-        additional_props = schema.get("additionalProperties")
-
-        if not isinstance(additional_props, dict) or not additional_props:
-            return False
-
-        # Check if nested object with additionalProperties
-        is_object_with_additional = (
-            additional_props.get("type") == "object" and "additionalProperties" in additional_props
-        )
-
-        # Complex if has properties, composition keywords, or nested structure
-        return (
-            "properties" in additional_props
-            or "anyOf" in additional_props
-            or "oneOf" in additional_props
-            or "allOf" in additional_props
-            or is_object_with_additional
-        )
+        """True when ``schema`` classifies as a MAPPING (see `classify_container`)."""
+        return classify_container(schema).kind == "mapping"
 
     def process_anyof(self, anyof: dict[str, Any]) -> str:
         """
@@ -134,6 +121,9 @@ class TypeScriptFormatter(BaseFormatter):
         item_types = []
         for item in anyof_list:
             if not isinstance(item, dict):
+                continue
+            if not item:
+                item_types.append("any")
                 continue
 
             # Check for properties BEFORE type, because objects with properties have both
@@ -240,7 +230,7 @@ class TypeScriptFormatter(BaseFormatter):
         Returns:
             Formatted type representation.
         """
-        type_name = type_value.get("type", "string")
+        type_name = type_value.get("type", "any")
 
         # Handle array of types (union types like ["string", "null"])
         if isinstance(type_name, list):
@@ -258,6 +248,19 @@ class TypeScriptFormatter(BaseFormatter):
 
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
+
+        shape = classify_container(type_value)
+        if shape.kind == "mapping":
+            return self.render_mapping(shape)
+        if shape.kind == "tuple":
+            tuple_str = self.render_tuple(shape)
+            if not (
+                type_value.get("minItems")
+                == type_value.get("maxItems")
+                == len(shape.prefix_schemas)
+            ):
+                tuple_str += self.format_array_constraints(type_value)
+            return tuple_str
 
         # Add validation constraints to type description (only if metadata is enabled)
         # Filter based on metadata_inclusion config
@@ -319,32 +322,12 @@ class TypeScriptFormatter(BaseFormatter):
             else:
                 array_type = "Array<any>"
 
-            # Add array constraints (only if metadata is enabled)
-            # Filter based on metadata_inclusion config
             if self.include_metadata:
-                constraints = []
-                # Check if uniqueItems should be included
-                if type_value.get("uniqueItems") and self._should_include_metadata("uniqueItems"):
-                    constraints.append("unique")
-
-                # Check if minItems or maxItems should be included
-                include_min_items = self._should_include_metadata("minItems")
-                include_max_items = self._should_include_metadata("maxItems")
-                if include_min_items or include_max_items:
-                    items_range = self._format_validation_range(
-                        type_value, "minItems", "maxItems", " items"
-                    )
-                    if items_range:
-                        constraints.append(f"length: {items_range}")
-
-                if constraints:
-                    array_type = f"{array_type} ({', '.join(constraints)})"
-
-                # Add contains and unique items metadata
+                array_type += self.format_array_constraints(type_value)
                 if "contains" in type_value:
                     array_type += self.process_contains(type_value)
-                if "uniqueItems" in type_value and self._should_include_metadata("uniqueItems"):
-                    array_type += self.process_unique_items(type_value)
+                # process_unique_items is no longer called here (it is what commented out
+                # the terminating ';').
 
             return array_type
 
@@ -374,6 +357,22 @@ class TypeScriptFormatter(BaseFormatter):
             return text
         safe_tail = tail.replace("*/", "* /")
         return f"{head} /* {safe_tail} */"
+
+    def render_mapping(self, shape: ContainerShape) -> str:
+        """One-line ``Record<K, V>`` token for a MAPPING shape."""
+        if shape.value_schema is not None:
+            value_token = self.render_type_token(shape.value_schema)
+        else:
+            value_token = "any"
+        value_token = self._inline_comment(value_token)
+        return f"Record<{self.key_token(shape)}, {value_token}>"
+
+    def render_tuple(self, shape: ContainerShape) -> str:
+        """One-line ``[A, B]`` / ``[A, B, ...C[]]`` token for a TUPLE shape."""
+        tokens = [self.render_type_token(s) for s in shape.prefix_schemas]
+        if shape.rest_schema is not None:
+            tokens.append(f"...{self.render_type_token(shape.rest_schema)}[]")
+        return "[" + ", ".join(tokens) + "]"
 
     def dict_to_string(self, value: Any, indent: int = 1) -> str:
         """
@@ -465,10 +464,13 @@ class TypeScriptFormatter(BaseFormatter):
 
             # Add placeholder for complex additionalProperties
             if self._is_complex_additional_props(self.schema):
-                additional_props = self.schema.get("additionalProperties")
-                if isinstance(additional_props, dict):
-                    placeholder_type = self.process_property(additional_props)
-                    main_output.write(f"  <key>: {placeholder_type};\n")
+                shape = classify_container(self.schema)
+                value_token = (
+                    self.render_type_token(shape.value_schema)
+                    if shape.value_schema is not None
+                    else "any"
+                )
+                main_output.write(f"  [key: string]: {value_token};\n")
 
             main_output.write("}")
 
@@ -517,10 +519,13 @@ class TypeScriptFormatter(BaseFormatter):
                     if self._is_complex_additional_props(self.schema):
                         # Build interface with placeholder
                         result = "interface Schema {\n"
-                        additional_props = self.schema.get("additionalProperties")
-                        if isinstance(additional_props, dict):
-                            placeholder_type = self.process_property(additional_props)
-                            result += f"  <key>: {placeholder_type};\n"
+                        shape = classify_container(self.schema)
+                        value_token = (
+                            self.render_type_token(shape.value_schema)
+                            if shape.value_schema is not None
+                            else "any"
+                        )
+                        result += f"  [key: string]: {value_token};\n"
                         result += "}"
 
                         # Add comment
@@ -626,10 +631,13 @@ class TypeScriptFormatter(BaseFormatter):
 
         # Add placeholder for complex additionalProperties
         if self._is_complex_additional_props(self.schema):
-            additional_props = self.schema.get("additionalProperties")
-            if isinstance(additional_props, dict):
-                placeholder_type = self.process_property(additional_props)
-                main_output.write(f"  <key>: {placeholder_type};\n")
+            shape = classify_container(self.schema)
+            value_token = (
+                self.render_type_token(shape.value_schema)
+                if shape.value_schema is not None
+                else "any"
+            )
+            main_output.write(f"  [key: string]: {value_token};\n")
 
         main_output.write("}")
 

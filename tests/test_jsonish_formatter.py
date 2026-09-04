@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -12,7 +13,9 @@ from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
 from llm_schema_lite.schema_normalization import auto_title_for_key
 from tests.conftest import (
+    ADDITIONAL_ITEMS_SCHEMA,
     EMPTY_SCHEMA,
+    PREFIX_ITEMS_SCHEMA,
     Address,
     ComplexTypes,
     ConstrainedFormatterModel,
@@ -23,6 +26,7 @@ from tests.conftest import (
     PersonWithAddress,
     Product,
     RequiredOptionalModel,
+    Root,
     SimpleFormatterModel,
     WithFieldDescriptions,
     WithTitleDescription,
@@ -1259,9 +1263,8 @@ def test_jsonish_formatter_object_with_complex_additional_props_shows_placeholde
     result = formatter.transform_schema()
 
     # Should show placeholder key with structure
-    assert "<key>" in result
+    assert "<string>" in result
     assert "value*: any" in result
-    assert "any properties allowed" in result
 
 
 def test_jsonish_formatter_simple_additional_props_still_work():
@@ -1273,8 +1276,9 @@ def test_jsonish_formatter_simple_additional_props_still_work():
     formatter = JSONishFormatter(schema, include_metadata=False)
     result = formatter.transform_schema()
 
-    # Simple additionalProperties should show as comment
-    assert "additional: string" in result
+    # Simple additionalProperties now render structurally, not as a comment (AC-1).
+    assert "<string>: string" in result
+    assert "additional:" not in result
 
 
 def test_jsonish_formatter_additional_props_false_still_works():
@@ -1908,3 +1912,141 @@ def test_order_jsonish_token_count_decreases() -> None:
     from llm_schema_lite import simplify_schema
 
     assert simplify_schema(Order).token_count() < 482
+
+
+# ============================================================================
+# Container types (dict / tuple / set / Any) -- lsl-2026-09-04-015
+# ============================================================================
+
+
+# NOTE (Phase 5a golden deviation): the design v2 5.2 AFTER block was captured against a
+# ``Root``/``Inner``/``Strict`` trio that carried **no docstrings**, so it shows ``//Title: Root``
+# and bare ``inner*: {`` / ``strict*: {`` lines. The Phase 4 conftest fixture is specified *with*
+# docstrings; pydantic turns each into ``description``, which makes ``normalize_schema_titles``
+# drop the now-redundant root ``title`` and adds an inline ``//`` comment to the two nested
+# models. Those three header/comment lines below therefore differ from the design block. They are
+# a fixture artefact, not a container-rendering change: they render identically before and after
+# this ticket. Every container token in this block is the design's verbatim.
+ROOT_JSONISH_DEFAULT = "\n".join(
+    [
+        "// Kitchen-sink fixture for lsl-2026-09-04-015 "
+        "(dict/tuple/set/Any container rendering).",
+        "",
+        "Fields verbatim from the approved design (2026-09-04-design-discussion-v2.md 5.1).",
+        "// Fields marked with * are required",
+        "{",
+        "  extra*: {",
+        "    <string>: int",
+        "  },",
+        "  dict_of_models*: {",
+        "    <string>: {",
+        "      a*: int,",
+        "      b*: string",
+        "    }",
+        "  },",
+        "  by_color*: {",
+        "    <string>: int",
+        "  },",
+        "  pair*: [int, string],",
+        "  var_tuple*: int [],",
+        "  tags*: string [] (unique),",
+        "  anything*: any,",
+        "  described*: any // free form,",
+        "  opt_any: any OR null // (default=null),",
+        "  any_list*: any [],",
+        "  opt_extra: {",
+        "    <string>: int",
+        "  } OR null  // (default=null),",
+        "  inner*: { // Nested model exercising dict/tuple fields one level below Root.",
+        "    d*: {",
+        "      <string>: int",
+        "    },",
+        "    t*: [int, string]",
+        "  },",
+        "  strict*: { // Minimal `extra: forbid` model nested inside "
+        "the container-types Root fixture.",
+        "    s*: string,",
+        "  //no additional properties",
+        "  }",
+        "}",
+    ]
+)
+
+
+def test_jsonish_formatter_root_fixture_default() -> None:
+    """Whole-string golden for the container-types Root fixture (design v2 5.2 AFTER)."""
+    result = JSONishFormatter(Root.model_json_schema()).transform_schema()
+
+    assert result == ROOT_JSONISH_DEFAULT
+
+
+def test_jsonish_formatter_root_fixture_include_metadata_false() -> None:
+    """Structure survives with metadata off; only the header/comment words disappear (R1)."""
+    result = JSONishFormatter(Root.model_json_schema(), include_metadata=False).transform_schema()
+
+    assert "tags*: string []" in result
+    assert "opt_any: any OR null" in result
+    assert "//Title:" not in result
+    assert "Fields marked with" not in result
+
+
+def test_jsonish_formatter_root_fixture_metadata_inclusion_variant() -> None:
+    """Gating array constraints removes the words but never the container structure (R1)."""
+    config = FormatterConfig(
+        metadata_inclusion={"uniqueItems": False, "minItems": False, "maxItems": False}
+    )
+    result = JSONishFormatter(Root.model_json_schema(), config=config).transform_schema()
+
+    assert "tags*: string []" in result
+    assert "(unique)" not in result
+    assert "[int, string]" in result
+
+
+def test_jsonish_formatter_root_fixture_no_forbidden_substrings() -> None:
+    """AC-1: no legacy container vocabulary survives anywhere in the output."""
+    result = JSONishFormatter(Root.model_json_schema()).transform_schema()
+
+    assert "additional:" not in result
+    assert "2-2 items" not in result
+    # PA-5: the two-word phrase only -- the bare word ``unique`` is the new token.
+    assert "unique items" not in result
+    # design 10 risk 2: the ``// Root:`` prefix must not migrate onto nested models.
+    assert "Root:" not in result
+
+
+class _AnyVariants(BaseModel):
+    plain: Any
+    described: Any = Field(..., description="free form")
+    titled: Any = Field(..., title="Custom Title")
+
+
+def test_jsonish_formatter_any_never_renders_as_string() -> None:
+    """AC-2: an ``Any`` field never degrades to ``string``, however it is annotated."""
+    result = JSONishFormatter(_AnyVariants.model_json_schema()).transform_schema()
+
+    for field in ("plain*:", "described*:", "titled*:"):
+        line = _line_with(result, field)
+        assert "string" not in line, f"{field} rendered as string: {line!r}"
+
+
+def test_jsonish_formatter_root_fixture_metadata_off_structure_survives() -> None:
+    """R1: turning metadata off strips words, never mapping/tuple structure."""
+    result = JSONishFormatter(Root.model_json_schema(), include_metadata=False).transform_schema()
+
+    assert "<string>: int" in result
+    assert "[int, string]" in result
+    assert "unique" not in result.lower()
+
+
+def test_jsonish_formatter_draft7_tuple_items_no_crash() -> None:
+    """Crash pin: a draft-7 list-valued ``items`` no longer raises ``AttributeError``."""
+    result = JSONishFormatter(ADDITIONAL_ITEMS_SCHEMA).transform_schema()
+
+    assert "[string, int]" in result
+
+
+def test_jsonish_formatter_prefix_items_tuple_with_variadic_tail() -> None:
+    """``prefixItems`` plus a homogeneous ``items`` tail renders as a variadic tuple."""
+    result = JSONishFormatter(PREFIX_ITEMS_SCHEMA).transform_schema()
+
+    assert "[string, int, bool, ...string]" in result

@@ -4,7 +4,7 @@ import copy
 import json
 from typing import Any
 
-from .base import BaseFormatter
+from .base import BaseFormatter, classify_container
 from .config import FormatterConfig
 
 
@@ -508,6 +508,14 @@ class JSONishFormatter(BaseFormatter):
         """Return True if value is the root schema (skip duplicating title/description)."""
         return value is self.schema
 
+    def _additional_properties_key(self, schema: dict[str, Any]) -> str:
+        """Sentinel dict key for an additionalProperties comment: root schema vs. nested."""
+        return (
+            "__root_additional_properties__"
+            if self._is_root_schema(schema)
+            else "__additional_properties__"
+        )
+
     def process_types(
         self, value: dict[str, Any], key: str | None = None
     ) -> str | dict[str, Any] | list[Any]:
@@ -573,34 +581,32 @@ class JSONishFormatter(BaseFormatter):
                     comment = f" {self.comment_prefix}"
                 return f"{type_name}{comment}{title}{description}{default_value}{example}"
             elif value["type"] == "array":
-                unique_items = ""
-                # Filter uniqueItems based on metadata_inclusion config
-                if self._should_include_metadata("uniqueItems"):
-                    if ("_uniqueItems" in value and value["_uniqueItems"]) or (
-                        "uniqueItems" in value and value["uniqueItems"]
+                shape = classify_container(value)
+                if shape.kind == "tuple":
+                    tuple_str = self.render_tuple(shape)
+                    # Length-suffix suppression (design 4.2): when
+                    # minItems == maxItems == len(prefix_schemas), the length token is
+                    # redundant with the positional list and must not be appended.
+                    if not (
+                        value.get("minItems") == value.get("maxItems") == len(shape.prefix_schemas)
                     ):
-                        unique_items = "UNIQUE"
+                        tuple_str += self.format_array_constraints(value)
+                    if title or description or default_value or example:
+                        comment = f" {self.comment_prefix}"
+                        if key is not None:
+                            self.pending_postfix[key] = (
+                                f"{comment}{title}{description}{default_value}{example}"
+                            )
+                    return tuple_str
 
-                items_range = ""
-                # Filter minItems/maxItems based on metadata_inclusion config
-                check_min_items = self._should_include_metadata("minItems")
-                check_max_items = self._should_include_metadata("maxItems")
-                if check_min_items or check_max_items:
-                    has_min = "minItems" in value and check_min_items
-                    has_max = "maxItems" in value and check_max_items
-                    if has_min and has_max:
-                        items_range = (
-                            f" ({value['minItems']}-{value['maxItems']} {unique_items} items)"
-                        )
-                    elif has_min:
-                        items_range += f" (>= {value['minItems']} {unique_items} items)"
-                    elif has_max:
-                        items_range += f" (<= {value['maxItems']} {unique_items} items)"
-                elif unique_items:
-                    items_range = f" ({unique_items} items)"
+                items_range = self.format_array_constraints(value)
 
                 items: dict[str, Any] | str | list[Any] = {}
-                if "items" in value and value["items"]:
+                if "items" in value and isinstance(value["items"], dict) and not value["items"]:
+                    # ``items: {}`` is ``list[Any]`` -- classify_container rule 1 calls the
+                    # element ``any``, so the list must render ``any []``, not ``[]``.
+                    items = "any"
+                elif "items" in value and value["items"]:
                     item_schema = value["items"]
                     if isinstance(item_schema, dict) and item_schema.get("$ref"):
                         items = self.process_ref(item_schema, key)
@@ -673,6 +679,33 @@ class JSONishFormatter(BaseFormatter):
 
         return ""
 
+    def _render_mapping_value(
+        self, value_schema: dict[str, Any]
+    ) -> str | dict[str, Any] | list[Any]:
+        """Dispatch a MAPPING's value schema through the same per-schema routing used for an
+        object's own properties ($ref / anyOf / oneOf / allOf / enum / const / type / empty),
+        without the required-marker bookkeeping that only applies to named object properties.
+
+        Returns "any" for an empty/None schema (bare ``dict`` / ``additionalProperties: true``).
+        """
+        if not value_schema:
+            return "any"
+        if value_schema.get("$ref"):
+            return self.process_ref(value_schema)
+        if value_schema.get("anyOf"):
+            return self.process_anyof(value_schema)
+        if value_schema.get("oneOf"):
+            return self.process_oneof(value_schema)
+        if value_schema.get("allOf"):
+            return self.process_allof(value_schema)
+        if "const" in value_schema:
+            return self.process_const(value_schema)
+        if value_schema.get("enum"):
+            return self.process_enum(value_schema)
+        if "type" in value_schema:
+            return self.process_types(value_schema)
+        return "any"
+
     def _process_schema_recursive(self, schema: dict[str, Any]) -> dict[str, Any] | str | list[Any]:
         """
         Recursively process schema structure (trial's implementation).
@@ -686,6 +719,12 @@ class JSONishFormatter(BaseFormatter):
         output: dict[str, Any] = {}
         required = schema.get("required", [])
 
+        # Base-case: an empty schema ``{}`` means "any valid JSON value" (design 4.4).
+        # Without this, ``Optional[Any]``'s ``anyOf: [{}, {"type": "null"}]`` drops its
+        # first member and renders ``{} OR null`` instead of ``any OR null``.
+        if not schema:
+            return "any"
+
         # Base-case: an empty object schema like {"type": "object"} should render as
         # an empty object rather than recursing via process_types("object") and back here.
         if (
@@ -697,44 +736,22 @@ class JSONishFormatter(BaseFormatter):
             and not schema.get("enum")
             and not schema.get("$ref")
         ):
-            # Check if additionalProperties is a complex schema
-            additional_props = schema.get("additionalProperties")
-
-            # Consider it complex only if it has nested structure (properties, composition keywords)
-            is_object_with_additional = False
-            if isinstance(additional_props, dict):
-                is_object_with_additional = (
-                    additional_props.get("type") == "object"
-                    and "additionalProperties" in additional_props
+            shape = classify_container(schema)
+            if shape.kind == "mapping":
+                key = f"<{self.key_token(shape)}>"
+                output[key] = (
+                    self._render_mapping_value(shape.value_schema)
+                    if shape.value_schema is not None
+                    else "any"
                 )
-            is_complex = (
-                isinstance(additional_props, dict)
-                and additional_props
-                and (
-                    "properties" in additional_props
-                    or "anyOf" in additional_props
-                    or "oneOf" in additional_props
-                    or "allOf" in additional_props
-                    or is_object_with_additional
-                )
-            )
+                # No __additional_properties__ / "any properties allowed" comment for a
+                # mapping (design 4.1 / 6.2) -- the <string> key + value say everything.
+                return output
 
-            if is_complex and isinstance(additional_props, dict):
-                # Complex additionalProperties - show placeholder key with structure
-                # Process the additionalProperties schema recursively
-                placeholder_value = self._process_schema_recursive(additional_props)
-                output["<key>"] = placeholder_value
-
-                # Add simple comment indicating any keys allowed
-                output["__additional_properties__"] = self.process_additional_properties(
-                    schema, show_structure=False
-                )
-            else:
-                # Simple or false - use comment only
-                additional_props_comment = self.process_additional_properties(schema)
-                if additional_props_comment:
-                    output["__additional_properties__"] = additional_props_comment
-
+            # additionalProperties is False, or absent: unchanged legacy comment path.
+            additional_props_comment = self.process_additional_properties(schema)
+            if additional_props_comment:
+                output[self._additional_properties_key(schema)] = additional_props_comment
             return output
 
         if "properties" in schema and schema["properties"]:
@@ -802,7 +819,7 @@ class JSONishFormatter(BaseFormatter):
             # Set additionalProperties comment for object with properties if present
             additional_props_comment = self.process_additional_properties(schema)
             if additional_props_comment:
-                output["__additional_properties__"] = additional_props_comment
+                output[self._additional_properties_key(schema)] = additional_props_comment
 
         elif "anyOf" in schema and schema["anyOf"]:
             return self.process_anyof(schema)
@@ -1025,16 +1042,22 @@ class JSONishFormatter(BaseFormatter):
         while i < len(lines):
             line = lines[i]
 
-            # Check if line contains __additional_properties__ key
-            if "__additional_properties__" in line:
+            # Check if line contains one of the additionalProperties sentinel keys
+            if "__additional_properties__" in line or "__root_additional_properties__" in line:
                 # Extract the value
                 # Pattern: "key": "value" or "key": "value",
-                match = re.search(r'"__additional_properties__"\s*:\s*"([^"]*)"', line)
+                sentinel = (
+                    "__root_additional_properties__"
+                    if "__root_additional_properties__" in line
+                    else "__additional_properties__"
+                )
+                match = re.search(rf'"{sentinel}"\s*:\s*"([^"]*)"', line)
                 if match:
                     comment_value = match.group(1)
 
-                    # Format comment based on is_root flag
-                    if is_root and not root_comment_used:
+                    # The ``// Root:`` prefix is driven by which sentinel key matched, not by
+                    # the ``is_root`` parameter, so a nested model never inherits it.
+                    if sentinel == "__root_additional_properties__" and not root_comment_used:
                         # Extract content after // if present
                         rest = comment_value.strip()
                         if rest.startswith("//"):

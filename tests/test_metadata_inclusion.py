@@ -242,6 +242,39 @@ class TestMetadataInclusionArrayConstraints:
         assert "minItems" not in output
         assert "maxItems" not in output
 
+    def test_container_type_constraint_words_agree_across_formatters(self):
+        """The three formatters use the same constraint vocabulary for dict/tuple/set fields.
+
+        Regression for lsl-2026-09-04-015: pins that "unique" / "2-2 items" phrasing is now
+        identical (modulo the tuple[] / Record<> / {} wrapper) across jsonish/typescript/yaml.
+        """
+
+        class ContainerModel(BaseModel):
+            tags: set[str]
+            bounded: set[str] = Field(..., min_length=2, max_length=2)
+            mapping: dict[str, int]
+
+        outputs = {
+            fmt: simplify_schema(ContainerModel, format_type=fmt).to_string()
+            for fmt in ("jsonish", "typescript", "yaml")
+        }
+
+        for fmt, output in outputs.items():
+            # uniqueItems is on for a `set` field -- every formatter says the same word.
+            assert "unique" in output, f"{fmt} lost the uniqueItems word: {output!r}"
+            assert output.count("unique") == 2, f"{fmt} has the wrong unique count: {output!r}"
+            # The shared min/max phrasing.
+            assert "2-2 items" in output, f"{fmt} lost the shared items-range phrasing: {output!r}"
+            # The old, per-formatter spellings are gone.
+            assert "UNIQUE" not in output, f"{fmt} still uses YAML's uppercase spelling: {output!r}"
+            assert "length:" not in output, f"{fmt} still uses TS's `length:` spelling: {output!r}"
+            assert "≥" not in output, f"{fmt} still uses TS's >= glyph: {output!r}"
+            assert "≤" not in output, f"{fmt} still uses TS's <= glyph: {output!r}"
+
+        # The mapping field renders structurally in all three, never as `additional:`.
+        for fmt, output in outputs.items():
+            assert "additional:" not in output, f"{fmt} still leaks `additional:`: {output!r}"
+
 
 class TestMetadataInclusionBackwardCompatibility:
     """Test suite for backward compatibility."""

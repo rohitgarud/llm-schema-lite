@@ -3,10 +3,106 @@
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from ..schema_normalization import normalize_schema_titles
 from .config import FormatterConfig
+
+ContainerKind = Literal["mapping", "tuple", "list", "any", "object", "scalar"]
+
+_COMPOSITION_KEYS = ("$ref", "enum", "const", "anyOf", "oneOf", "allOf", "not")
+
+
+@dataclass(frozen=True)
+class ContainerShape:
+    """What shape a property schema is, with the sub-schemas a renderer needs.
+
+    Purely descriptive: carries no rendered text and no formatter state.
+    """
+
+    kind: ContainerKind
+    value_schema: dict[str, Any] | None = None
+    key_schema: dict[str, Any] | None = None
+    prefix_schemas: tuple[dict[str, Any], ...] = ()
+    rest_schema: dict[str, Any] | None = None
+    item_schema: dict[str, Any] | None = None
+
+
+def _as_schema(value: Any) -> dict[str, Any] | None:
+    """Return ``value`` when it is a non-empty schema dict, else ``None``."""
+    if isinstance(value, dict) and value:
+        return value
+    return None
+
+
+def classify_container(schema: Any) -> ContainerShape:
+    """Classify one JSON-Schema node. Pure; never raises; never reads formatter state."""
+    # Rule 1 -- nothing to classify.
+    if not isinstance(schema, dict) or not schema:
+        return ContainerShape(kind="any")
+
+    # Rule 2 -- composition / reference keywords own their own renderers.
+    for key in _COMPOSITION_KEYS:
+        if key in schema:
+            return ContainerShape(kind="scalar")
+
+    prefix_items = schema.get("prefixItems")
+    items = schema.get("items")
+
+    # Rule 3 -- 2020-12 tuple. prefixItems beats items.
+    if isinstance(prefix_items, list) and prefix_items:
+        return ContainerShape(
+            kind="tuple",
+            prefix_schemas=tuple(s for s in prefix_items if isinstance(s, dict)),
+            rest_schema=_as_schema(items),
+        )
+
+    # Rule 4 -- draft-7 tuple: a list-valued ``items`` is never a recursion target.
+    if isinstance(items, list) and items:
+        additional_items = schema.get("additionalItems")
+        return ContainerShape(
+            kind="tuple",
+            prefix_schemas=tuple(s for s in items if isinstance(s, dict)),
+            rest_schema=additional_items if isinstance(additional_items, dict) else None,
+        )
+
+    # Rule 5 -- homogeneous list.
+    if schema.get("type") == "array":
+        return ContainerShape(kind="list", item_schema=_as_schema(items))
+
+    additional_properties = schema.get("additionalProperties")
+    is_object_ish = schema.get("type") == "object" or "additionalProperties" in schema
+    # Decision C1: a schema that declares ``properties`` (or ``patternProperties``)
+    # is an object, never a mapping. This clause must not be loosened.
+    is_open = is_object_ish and not schema.get("properties") and not schema.get("patternProperties")
+
+    # Rule 6 -- mapping with a typed value.
+    if is_open and isinstance(additional_properties, dict) and additional_properties:
+        return ContainerShape(
+            kind="mapping",
+            value_schema=additional_properties,
+            key_schema=_as_schema(schema.get("propertyNames")),
+        )
+
+    # Rule 7 -- mapping open to any value.
+    if is_open and additional_properties is True:
+        return ContainerShape(
+            kind="mapping",
+            value_schema=None,
+            key_schema=_as_schema(schema.get("propertyNames")),
+        )
+
+    # Rule 8 -- closed / structured object.
+    if schema.get("type") == "object":
+        return ContainerShape(kind="object")
+
+    # Rule 9 -- typed leaf.
+    if "type" in schema:
+        return ContainerShape(kind="scalar")
+
+    # Rule 10 -- typeless but non-empty: ``Any`` carrying only annotations.
+    return ContainerShape(kind="any")
 
 
 class BaseFormatter(ABC):
@@ -336,6 +432,9 @@ class BaseFormatter(ABC):
 
             if k == "contains":
                 formatted_parts.append(f"contains: {self._format_contains(value[actual_key])}")
+            elif k == "additionalItems" and classify_container(value).kind == "tuple":
+                # Skip: the tuple renderer already consumed this as the variadic tail.
+                continue
             elif k == "additionalItems":
                 formatted_parts.append(
                     f"additionalItems: {self._format_type_simple(value[actual_key])}"
@@ -360,6 +459,9 @@ class BaseFormatter(ABC):
                 and value["type"] == "array"
             ):
                 # Skip these for arrays as they're integrated into the type description
+                continue
+            elif k == "propertyNames" and classify_container(value).kind == "mapping":
+                # Skip: the mapping renderer already turned this into the key token.
                 continue
             elif k in ["minLength", "maxLength"] and "type" in value and value["type"] == "string":
                 # Skip these for strings as they're integrated into the type description
@@ -690,6 +792,51 @@ class BaseFormatter(ABC):
             # int, float, or other
             return str(const)
 
+    def render_type_token(self, schema: dict[str, Any]) -> str:
+        """One-line type token for a nested position (tuple element / mapping value)."""
+        return self.process_property(schema)
+
+    def key_token(self, shape: ContainerShape) -> str:
+        """Rendered key *type* of a MAPPING (bare word, e.g. ``"string"``). No angle brackets.
+
+        Pure query: reads ``self.defs`` / ``self.TYPE_MAP`` and mutates nothing.
+        """
+        key_schema = shape.key_schema
+        if key_schema is None:
+            return "string"
+
+        ref = key_schema.get("$ref")
+        if isinstance(ref, str):
+            ref_match = self.REF_PATTERN.search(ref)
+            if ref_match:
+                ref_def = self.defs.get(ref_match.group(1))
+                if isinstance(ref_def, dict):
+                    ref_type = ref_def.get("type")
+                    if isinstance(ref_type, str):
+                        return str(self.TYPE_MAP.get(ref_type, ref_type))
+            return "string"
+
+        key_type = key_schema.get("type")
+        if isinstance(key_type, str):
+            return str(self.TYPE_MAP.get(key_type, key_type))
+
+        return "string"
+
+    def render_mapping(self, shape: ContainerShape) -> str:
+        """One-line mapping token, e.g. ``"{ <string>: int }"``."""
+        if shape.value_schema is not None:
+            value_token = self.render_type_token(shape.value_schema)
+        else:
+            value_token = "any"
+        return f"{{ <{self.key_token(shape)}>: {value_token} }}"
+
+    def render_tuple(self, shape: ContainerShape) -> str:
+        """One-line tuple token, e.g. ``"[int, string]"`` / ``"[int, string, ...string]"``."""
+        tokens = [self.render_type_token(s) for s in shape.prefix_schemas]
+        if shape.rest_schema is not None:
+            tokens.append(f"...{self.render_type_token(shape.rest_schema)}")
+        return "[" + ", ".join(tokens) + "]"
+
     def process_type_value(self, type_value: dict[str, Any]) -> str:
         """
         Process a type field.
@@ -762,7 +909,11 @@ class BaseFormatter(ABC):
                     type_str = f"{type_str} ({range_info})"
 
         if type_str == "array":
-            # Safely handle array items
+            shape = classify_container(type_value)
+            if shape.kind == "tuple":
+                return self.render_tuple(shape)
+
+            # Safely handle array items (list-only from here on)
             items = type_value.get("items")
             if not items:
                 type_str = "array"  # Fallback for array without items
@@ -793,25 +944,12 @@ class BaseFormatter(ABC):
             else:
                 type_str = "array"  # Fallback for unknown array item type
 
-            # Add array-specific constraints
-            constraints = []
-            if "uniqueItems" in type_value and type_value["uniqueItems"]:
-                constraints.append("unique")
+            type_str += self.format_array_constraints(type_value)
 
-            items_range = self._format_validation_range(
-                type_value, "minItems", "maxItems", " items"
-            )
-            if items_range:
-                constraints.append(f"length: {items_range}")
-
-            if constraints:
-                type_str = f"{type_str} ({', '.join(constraints)})"
-
-            # Add array-specific metadata (contains, uniqueItems)
             if "contains" in type_value:
                 type_str += self.process_contains(type_value)
-            if "uniqueItems" in type_value:
-                type_str += self.process_unique_items(type_value)
+            # process_unique_items is no longer called from any array path (orphaned;
+            # kept for API stability per R4).
 
         return type_str  # type: ignore[no-any-return]
 
@@ -1012,8 +1150,15 @@ class BaseFormatter(ABC):
         elif "not" in _property:
             prop_str = self.process_not(_property)
         elif "type" in _property:
+            shape = classify_container(_property)
+            if shape.kind == "mapping":
+                prop_str = self.render_mapping(shape)
+            elif shape.kind == "tuple":
+                prop_str = self.render_tuple(shape)
+            elif shape.kind == "any":
+                prop_str = "any"
             # Check if this is an object with nested properties that should be expanded
-            if (
+            elif (
                 _property.get("type") == "object"
                 and "properties" in _property
                 and _property["properties"]
@@ -1044,8 +1189,9 @@ class BaseFormatter(ABC):
             else:
                 prop_str = self.process_type_value(_property)
         else:
-            # Fallback for properties without recognizable type
-            prop_str = "string"
+            # Fallback: a typeless, non-empty schema is `Any` (classify_container rule 10),
+            # e.g. a field annotated only with a description or a title.
+            prop_str = "any"
 
         return self.add_metadata(prop_str, _property)
 
@@ -1110,6 +1256,10 @@ class BaseFormatter(ABC):
         if additional_props is False:
             return " //no additional properties"
         elif isinstance(additional_props, dict) and additional_props:
+            if not schema.get("properties"):
+                # Pure mapping (classify_container rule 6/C1): the value type is rendered
+                # structurally by the caller's mapping renderer, never as a comment.
+                return ""
             if not show_structure:
                 # Structure shown via placeholder key, just indicate it's allowed
                 return " //any properties allowed"
@@ -1202,6 +1352,35 @@ class BaseFormatter(ABC):
         if unique:
             return " //unique items"
         return ""
+
+    def array_constraint_tokens(self, schema: dict[str, Any]) -> list[str]:
+        """Ordered, already-gated constraint words for an array-ish schema.
+
+        Order is fixed: uniqueness first, then the length range. Every token is already
+        filtered through ``_should_include_metadata`` (itself False whenever
+        ``include_metadata`` is False), so callers must not re-gate.
+        """
+        tokens: list[str] = []
+
+        is_unique = schema.get("uniqueItems") or schema.get("_uniqueItems")
+        if is_unique and self._should_include_metadata("uniqueItems"):
+            tokens.append("unique")
+
+        has_min = "minItems" in schema and self._should_include_metadata("minItems")
+        has_max = "maxItems" in schema and self._should_include_metadata("maxItems")
+        if has_min and has_max:
+            tokens.append(f"{schema['minItems']}-{schema['maxItems']} items")
+        elif has_min:
+            tokens.append(f">= {schema['minItems']} items")
+        elif has_max:
+            tokens.append(f"<= {schema['maxItems']} items")
+
+        return tokens
+
+    def format_array_constraints(self, schema: dict[str, Any]) -> str:
+        """``" (a, b)"`` for a non-empty token list, ``""`` otherwise. Never a comment."""
+        tokens = self.array_constraint_tokens(schema)
+        return f" ({', '.join(tokens)})" if tokens else ""
 
     def process_property_names(self, schema: dict[str, Any]) -> str:
         """Process propertyNames constraint."""

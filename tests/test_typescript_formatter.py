@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -11,12 +12,14 @@ from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.typescript_formatter import TypeScriptFormatter
 from llm_schema_lite.schema_normalization import auto_title_for_key
 from tests.conftest import (
+    ADDITIONAL_ITEMS_SCHEMA,
     ALL_OF_SCHEMA,
     ANY_OF_SCHEMA,
     CONST_SCHEMA,
     DEPENDENCY_SCHEMA,
     EMPTY_SCHEMA,
     ONE_OF_SCHEMA,
+    PREFIX_ITEMS_SCHEMA,
     Address,
     AllOfLike,
     ArrayMinMaxItems,
@@ -42,6 +45,7 @@ from tests.conftest import (
     Product,
     RequiredOptionalModel,
     Role,
+    Root,
     SimpleFormatterModel,
     StringFormatEmail,
     StringFormatUri,
@@ -1176,9 +1180,8 @@ def test_typescript_formatter_object_with_complex_additional_props_shows_placeho
     formatter = TypeScriptFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
-    # Should show placeholder field with structure
-    assert "<key>" in result
-    assert "any properties allowed" in result
+    # Should show a real TypeScript index signature, not the old non-TS <key> placeholder.
+    assert "[key: string]" in result
 
 
 def test_typescript_formatter_additional_props_with_object_schema():
@@ -1373,3 +1376,150 @@ def test_cyclic_and_mutually_recursive_refs_terminate() -> None:
             out = cls(schema).transform_schema()
             assert "object" in out  # truncated at the cycle boundary, not expanded
             assert len(out) < 2000  # terminates rather than growing without bound
+
+
+# ============================================================================
+# Container types (dict / tuple / set / Any) -- lsl-2026-09-04-015
+# ============================================================================
+
+
+def test_typescript_formatter_root_fixture_default():
+    """Whole-string golden for the container-types Root fixture (default config).
+
+    NOTE (Phase 5b golden deviation, recorded per the plan's golden-block mismatch
+    protocol): the design v2 5.2 AFTER block was captured against a ``Root`` trio with
+    **no docstrings**, so it shows a plain ``// Title: Root`` header. The Phase 4
+    conftest fixture's ``Root`` carries a real docstring, which pydantic turns into
+    ``description``; `schema_normalization._strip_model_title` (untouched,
+    out-of-scope) then drops the now-redundant auto-generated ``title`` whenever a
+    non-empty ``description`` is present, so `BaseFormatter.get_schema_info_comment`
+    emits ``// Description: <docstring>`` instead of ``// Title: Root`` -- the
+    docstring's own blank line becomes a literal blank line inside the header. This is
+    the same fixture artifact P5a documented for JSONish; it is unrelated to container
+    rendering. Expected (design): ``// Title: Root``. Actual: ``// Description:
+    Kitchen-sink fixture for lsl-2026-09-04-015 (dict/tuple/set/Any container
+    rendering).`` + a blank line + ``Fields verbatim from the approved design
+    (2026-09-04-design-discussion-v2.md 5.1).``. Every container token below this
+    header is the design's verbatim.
+    """
+    result = TypeScriptFormatter(Root.model_json_schema()).transform_schema()
+
+    expected = "\n".join(
+        [
+            "interface Inner {",
+            "  d*: Record<string, number>;",
+            "  t*: [number, string];",
+            "}",
+            "",
+            "interface Strict {",
+            "  s*: string;",
+            "}",
+            " // no additional properties",
+            "",
+            "interface SubModel {",
+            "  a*: number;",
+            "  b*: string;",
+            "}",
+            "",
+            "// Description: Kitchen-sink fixture for lsl-2026-09-04-015 "
+            "(dict/tuple/set/Any container rendering).",
+            "",
+            "Fields verbatim from the approved design (2026-09-04-design-discussion-v2.md 5.1).",
+            "// Fields marked with * are required",
+            "interface Schema {",
+            "  extra*: Record<string, number>;",
+            "  dict_of_models*: Record<string, { a*: number, b*: string }>;",
+            "  by_color*: Record<string, number>;",
+            "  pair*: [number, string];",
+            "  var_tuple*: Array<number>;",
+            "  tags*: Array<string> (unique);",
+            "  anything*: any;",
+            "  described*: any  // free form;",
+            "  opt_any: any | null;",
+            "  any_list*: Array<any>;",
+            "  opt_extra: Record<string, number> | null;",
+            "  inner*: { d*: Record<string, number>, t*: [number, string] };",
+            "  strict*: { s*: string };",
+            "}",
+        ]
+    )
+
+    assert result == expected
+
+
+def test_typescript_formatter_root_fixture_include_metadata_false():
+    """With metadata off, constraint/title comments drop but structure survives."""
+    formatter = TypeScriptFormatter(Root.model_json_schema(), include_metadata=False)
+    result = formatter.transform_schema()
+
+    assert "tags*: Array<string>;" in result
+    assert "described*: any;" in result
+    assert "// Title:" not in result
+
+
+def test_typescript_formatter_root_fixture_metadata_inclusion_variant():
+    """Disabling uniqueItems/minItems/maxItems metadata drops the constraint, keeps structure."""
+    config = FormatterConfig(
+        metadata_inclusion={"uniqueItems": False, "minItems": False, "maxItems": False}
+    )
+    formatter = TypeScriptFormatter(Root.model_json_schema(), config=config)
+    result = formatter.transform_schema()
+
+    assert "tags*: Array<string>;" in result
+    assert "[number, string]" in result
+
+
+def test_typescript_formatter_root_fixture_no_forbidden_substrings():
+    """AC-1: no leaked JSONish/base vocabulary, and the tags line is not truncated by `//`."""
+    result = TypeScriptFormatter(Root.model_json_schema()).transform_schema()
+
+    assert "additional:" not in result
+    assert "length:" not in result
+
+    tags_line = next(line for line in result.splitlines() if "tags" in line)
+    assert tags_line.rstrip().endswith(";")
+
+
+def test_typescript_formatter_any_never_renders_as_string():
+    """AC-2: a bare Any (and its described/titled variants) never render as `string`."""
+
+    class _AnyVariants(BaseModel):
+        plain: Any
+        described: Any = Field(..., description="free form")
+        titled: Any = Field(..., title="Custom Title")
+
+    result = TypeScriptFormatter(_AnyVariants.model_json_schema()).transform_schema()
+
+    for field_name in ("plain", "described", "titled"):
+        line = next(line for line in result.splitlines() if line.strip().startswith(field_name))
+        assert "string" not in line
+
+
+def test_typescript_formatter_dict_of_model_with_described_field_not_split_mid_generic():
+    """Design §10 risk 6: a `//` comment inside a mapping's value must not truncate the generic."""
+
+    class _Described(BaseModel):
+        x: int = Field(..., description="a described field")
+
+    class _Container(BaseModel):
+        m: dict[str, _Described]
+
+    result = TypeScriptFormatter(_Container.model_json_schema()).transform_schema()
+
+    m_line = next(line for line in result.splitlines() if line.strip().startswith("m"))
+    assert "/* a described field */" in m_line
+    assert m_line.strip().endswith(">;")
+
+
+def test_typescript_formatter_draft7_tuple_items_no_crash():
+    """Behaviour-change pin: HEAD rendered ``Array<any>`` for a draft-7 tuple."""
+    result = TypeScriptFormatter(ADDITIONAL_ITEMS_SCHEMA).transform_schema()
+
+    assert result == "type Schema = [string, number];"
+
+
+def test_typescript_formatter_prefix_items_tuple_with_variadic_tail():
+    """``prefixItems`` plus an ``items`` tail renders as a TS variadic tuple."""
+    result = TypeScriptFormatter(PREFIX_ITEMS_SCHEMA).transform_schema()
+
+    assert result == "type Schema = [string, number, boolean, ...string[]];"

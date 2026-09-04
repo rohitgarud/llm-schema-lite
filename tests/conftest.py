@@ -697,6 +697,60 @@ class ArrayOfRefsModel(BaseModel):
 
 
 # ============================================================================
+# Container Types (lsl-2026-09-04-015)
+# ============================================================================
+
+
+class Color(str, Enum):
+    """Enum used as a dict-key type (propertyNames) in the container-types Root fixture."""
+
+    RED = "red"
+    GREEN = "green"
+
+
+class SubModel(BaseModel):
+    """Minimal nested model used as a dict-value type in the container-types Root fixture."""
+
+    a: int
+    b: str
+
+
+class Strict(BaseModel):
+    """Minimal `extra: forbid` model nested inside the container-types Root fixture."""
+
+    model_config = {"extra": "forbid"}
+    s: str
+
+
+class Inner(BaseModel):
+    """Nested model exercising dict/tuple fields one level below Root."""
+
+    d: dict[str, int]
+    t: tuple[int, str]
+
+
+class Root(BaseModel):
+    """Kitchen-sink fixture for lsl-2026-09-04-015 (dict/tuple/set/Any container rendering).
+
+    Fields verbatim from the approved design (2026-09-04-design-discussion-v2.md 5.1).
+    """
+
+    extra: dict[str, int]
+    dict_of_models: dict[str, SubModel]
+    by_color: dict[Color, int]
+    pair: tuple[int, str]
+    var_tuple: tuple[int, ...]
+    tags: set[str]
+    anything: Any
+    described: Any = Field(..., description="free form")
+    opt_any: Any | None = None
+    any_list: list[Any]
+    opt_extra: dict[str, int] | None = None
+    inner: Inner
+    strict: Strict
+
+
+# ============================================================================
 # Test Data and Schemas
 # ============================================================================
 
@@ -1432,6 +1486,12 @@ def anchor_schema():
 def deprecated_examples_schema():
     """Fixture for deprecated/examples schema."""
     return DEPRECATED_EXAMPLES_SCHEMA
+
+
+@pytest.fixture
+def root_model():
+    """Fixture for the container-types Root model (lsl-2026-09-04-015)."""
+    return Root
 
 
 # Registry fixtures for all models and schemas

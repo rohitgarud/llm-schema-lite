@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import yaml
+from pydantic import BaseModel, Field
 
 from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.yaml_formatter import YAMLFormatter
 from llm_schema_lite.schema_normalization import auto_title_for_key
 from tests.conftest import (
+    ADDITIONAL_ITEMS_SCHEMA,
     ALL_OF_SCHEMA,
     ANY_OF_SCHEMA,
     CONST_SCHEMA,
     DEPENDENCY_SCHEMA,
     EMPTY_SCHEMA,
     ONE_OF_SCHEMA,
+    PREFIX_ITEMS_SCHEMA,
     Address,
     AllOfLike,
     ArrayMinMaxItems,
@@ -40,6 +45,7 @@ from tests.conftest import (
     PersonWithAddress,
     RequiredOptionalModel,
     Role,
+    Root,
     SimpleFormatterModel,
     SingleConstInt,
     StringFormatEmail,
@@ -759,10 +765,9 @@ def test_yaml_formatter_object_with_complex_additional_props_shows_placeholder()
     formatter = YAMLFormatter(schema, include_metadata=False)
     result = formatter.transform_schema()
 
-    assert "<key>" in result
+    assert "<string>" in result
     assert "value*" in result or "value:" in result
     assert "any" in result
-    assert "any properties allowed" in result
 
 
 def test_yaml_formatter_additional_props_with_object_schema():
@@ -798,8 +803,8 @@ def test_yaml_formatter_simple_additional_props_still_work():
     formatter = YAMLFormatter(schema, include_metadata=False)
     result = formatter.transform_schema()
 
-    assert "additional:" in result
-    assert "string" in result
+    assert "dict[string, string]" in result
+    assert "additional:" not in result
 
 
 def test_yaml_formatter_additional_props_false_still_works():
@@ -1102,3 +1107,150 @@ def test_order_yaml_token_count_decreases() -> None:
     from llm_schema_lite import simplify_schema
 
     assert simplify_schema(Order, format_type="yaml").token_count() < 2032
+
+
+# ============================================================================
+# Container types (dict / tuple / set / Any) -- lsl-2026-09-04-015
+# ============================================================================
+
+
+class _AnyVariants(BaseModel):
+    """Local model pinning that ``Any`` never renders as ``string`` (AC-2)."""
+
+    plain: Any
+    described: Any = Field(..., description="free form")
+    titled: Any = Field(..., title="Custom Title")
+
+
+class _HasDict(BaseModel):
+    """Local model whose only field is a mapping (correction C3 / design risk 3)."""
+
+    d: dict[str, int]
+
+
+class _Wrapper(BaseModel):
+    """Local model nesting :class:`_HasDict` so the mapping sits one level down."""
+
+    inner: _HasDict
+
+
+def _yaml_line_with(result: str, prefix: str) -> str:
+    """Return the single rendered line whose key matches ``prefix``."""
+    for line in result.splitlines():
+        if line.strip().startswith(prefix):
+            return line
+    raise AssertionError(f"No line starting with {prefix!r} in:\n{result}")
+
+
+def test_yaml_formatter_root_fixture_default():
+    """Golden whole-string rendering of the container-types ``Root`` fixture."""
+    result = YAMLFormatter(Root.model_json_schema()).transform_schema()
+
+    expected = "\n".join(
+        [
+            "# Inner",
+            "Inner.d*: dict[string, int]",
+            "Inner.t*: tuple[int, string]",
+            "",
+            "# Strict",
+            "Strict.s*: string",
+            " # no additional properties",
+            "",
+            "# SubModel",
+            "SubModel.a*: int",
+            "SubModel.b*: string",
+            "",
+            # Deviation from the plan's golden (recorded in the Phase 5c progress notes):
+            # the plan expected "# Title: Root". The `Root` fixture's auto-generated title is
+            # stripped by ticket 003's `normalize_schema_titles`, and its class docstring
+            # (landed with P4) becomes the Description comment instead. Both code paths are
+            # untouched by Phase 5c.
+            "# Description: Kitchen-sink fixture for lsl-2026-09-04-015 "
+            "(dict/tuple/set/Any container rendering).",
+            "",
+            "Fields verbatim from the approved design (2026-09-04-design-discussion-v2.md 5.1).",
+            "",
+            "# Fields marked with * are required",
+            "",
+            "extra*: dict[string, int]",
+            "dict_of_models*:",
+            "  <string>:",
+            "    a*: int",
+            "    b*: string",
+            "by_color*: dict[string, int]",
+            "pair*: tuple[int, string]",
+            "var_tuple*: list[int]",
+            "tags*: list[string] (unique)",
+            "anything*: any",
+            "described*: 'any  # free form'",
+            "opt_any: 'any OR null  # (default=null)'",
+            "any_list*: list[any]",
+            "opt_extra: 'dict[string, int] OR null  # (default=null)'",
+            "inner*: 'd: dict[string, int]",
+            "",
+            "  t: tuple[int, string]'",
+            "strict*: 's: string'",
+        ]
+    )
+
+    assert result == expected
+
+
+def test_yaml_formatter_root_fixture_include_metadata_false():
+    """With metadata off, container tokens survive unquoted and no comment leaks."""
+    result = YAMLFormatter(Root.model_json_schema(), include_metadata=False).transform_schema()
+
+    assert "described*: any\n" in result
+    assert "opt_any: any OR null" in result
+    assert "opt_extra: dict[string, int] OR null" in result
+    assert "tags*: list[string]" in result
+    assert "extra*: dict[string, int]" in result
+
+
+def test_yaml_formatter_root_fixture_metadata_inclusion_variant():
+    """``uniqueItems: False`` removes the ``(unique)`` token from the set field."""
+    config = FormatterConfig(metadata_inclusion={"uniqueItems": False})
+    result = YAMLFormatter(Root.model_json_schema(), config=config).transform_schema()
+
+    assert "tags*: list[string]" in result
+    assert "(unique)" not in result
+
+
+def test_yaml_formatter_root_fixture_no_forbidden_substrings():
+    """AC-1: the old YAML container vocabulary is gone."""
+    result = YAMLFormatter(Root.model_json_schema()).transform_schema()
+
+    assert "additional:" not in result
+    assert "2-2" not in result
+    assert "UNIQUE" not in result
+
+
+def test_yaml_formatter_any_never_renders_as_string():
+    """AC-2: an ``Any`` field never renders as ``string``, with or without metadata."""
+    result = YAMLFormatter(_AnyVariants.model_json_schema()).transform_schema()
+
+    for prefix in ("plain*", "described*", "titled*"):
+        line = _yaml_line_with(result, prefix)
+        assert "string" not in line, f"{prefix} rendered as string: {line!r}"
+
+
+def test_yaml_formatter_no_dict_repr_leak_for_nested_model_dict_field():
+    """Correction C3: a mapping inside a nested model never leaks a Python dict repr."""
+    result = YAMLFormatter(_Wrapper.model_json_schema()).transform_schema()
+
+    assert "{'" not in result
+
+
+def test_yaml_formatter_draft7_tuple_items_no_crash():
+    """Behaviour-change pin: HEAD rendered ``list[Any]  # additionalItems: False``."""
+    result = YAMLFormatter(ADDITIONAL_ITEMS_SCHEMA).transform_schema()
+
+    assert result == "tuple[string, int]"
+    assert "additionalItems" not in result
+
+
+def test_yaml_formatter_prefix_items_tuple_with_variadic_tail():
+    """``prefixItems`` plus an ``items`` tail renders as a variadic tuple."""
+    result = YAMLFormatter(PREFIX_ITEMS_SCHEMA).transform_schema()
+
+    assert result == "tuple[string, int, bool, ...string]"
