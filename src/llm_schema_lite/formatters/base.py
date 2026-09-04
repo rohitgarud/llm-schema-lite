@@ -114,7 +114,8 @@ class BaseFormatter(ABC):
         self._global_expansion_budget = 150  # Max total $ref expansions across entire schema
         self._global_expansion_count = 0  # Track total expansions
         self._ref_expansion_path: list[str] = []  # Track current expansion path for cycle detection
-        self._expansion_fingerprints: set[str] = set()  # Track expansion patterns to detect cycles
+        self._expansion_fingerprints: set[str] = set()
+        self._nested_required_stack: list[set[str]] = []
 
         # Pre-warm cache for common patterns
 
@@ -546,8 +547,14 @@ class BaseFormatter(ABC):
             # Handle different definition types with better structure preservation
             # Prioritize properties when present, as it gives more concrete structure
             if "properties" in ref_def and ref_def["properties"]:
-                # Handle object definitions with properties
-                processed_properties = self.process_properties(ref_def["properties"])
+                # Handle object definitions with properties. The referenced definition owns
+                # its own ``required`` list; expose it so subclasses that mark required
+                # fields inside inline literals do not consult the ROOT required list.
+                self._nested_required_stack.append(set(ref_def.get("required", [])))
+                try:
+                    processed_properties = self.process_properties(ref_def["properties"])
+                finally:
+                    self._nested_required_stack.pop()
                 ref_str = self.dict_to_string(processed_properties, indent=2)
             elif "enum" in ref_def:
                 # Handle enum definitions
@@ -599,6 +606,7 @@ class BaseFormatter(ABC):
             self._ref_depth_tracker[ref_key] = ref_depth
 
             # Priority 1: Clean up expansion path
+            self._expansion_fingerprints.discard(expansion_fingerprint)
             if self._ref_expansion_path and self._ref_expansion_path[-1] == ref_key:
                 self._ref_expansion_path.pop()
 

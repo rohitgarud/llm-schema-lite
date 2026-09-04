@@ -1,5 +1,6 @@
 """JSONish formatter for transforming Pydantic schemas into BAML-like format."""
 
+import copy
 import json
 from typing import Any
 
@@ -46,6 +47,7 @@ class JSONishFormatter(BaseFormatter):
         # Trial-specific state
         self.processed_ref_cache: dict[str, dict[str, Any] | str | list[Any]] = {}
         self.pending_postfix: dict[str, str] = {}
+        self.pending_prefix: dict[str, str] = {}
         self.simplified_schema: str | None = None
 
     @property
@@ -170,7 +172,9 @@ class JSONishFormatter(BaseFormatter):
                     return f"(DEPENDS ON: {dependencies})"
         return ""
 
-    def process_ref(self, value: dict[str, Any], key: str | None = None) -> str:
+    def process_ref(  # type: ignore[override]
+        self, value: dict[str, Any], key: str | None = None
+    ) -> str | dict[str, Any] | list[Any]:
         """
         Process a $ref reference using trial's logic.
 
@@ -202,16 +206,16 @@ class JSONishFormatter(BaseFormatter):
             def_description = f" {self.comment_prefix} {_def['description']}"
             if isinstance(output, str) and def_description not in output:
                 output = str(output) + def_description
-            elif isinstance(output, dict):
-                # For dict output, add description as inline comment
-                output_str = self._jsonish_dump(output, 0)
-                output = output_str + def_description
+            elif isinstance(output, dict | list) and key is not None:
+                self.pending_prefix[key] = def_description.strip()
 
+        if isinstance(output, dict | list):
+            return copy.deepcopy(output)
         return str(output) if not isinstance(output, str) else output
 
     def process_anyof(  # type: ignore[override]
         self, value: dict[str, Any], key: str | None = None
-    ) -> str | dict[str, Any]:
+    ) -> str | dict[str, Any] | list[Any]:
         """
         Process anyOf union types.
 
@@ -233,7 +237,10 @@ class JSONishFormatter(BaseFormatter):
         for item in anyof_list:
             # Include description from individual anyOf items inline
             item_desc = self._extract_description(item)
-            processed_item = self._process_schema_recursive(item)
+            if isinstance(item, dict) and item.get("$ref"):
+                processed_item = self.process_ref(item, key)
+            else:
+                processed_item = self._process_schema_recursive(item)
             if item_desc:
                 if isinstance(processed_item, dict | list):
                     item_str = (
@@ -254,7 +261,7 @@ class JSONishFormatter(BaseFormatter):
                     f"OR null {comment}{title}{description}{default_value}{example}"
                 )
             first_item = items[0]
-            if isinstance(first_item, dict):
+            if isinstance(first_item, dict | list):
                 return first_item
             return str(first_item)
         else:
@@ -269,7 +276,7 @@ class JSONishFormatter(BaseFormatter):
 
     def process_oneof(  # type: ignore[override]
         self, value: dict[str, Any], key: str | None = None
-    ) -> str | dict[str, Any]:
+    ) -> str | dict[str, Any] | list[Any]:
         """
         Process oneOf exclusive choice types.
 
@@ -291,7 +298,10 @@ class JSONishFormatter(BaseFormatter):
         for item in oneof_list:
             # Include description from individual oneOf items inline
             item_desc = self._extract_description(item)
-            processed_item = self._process_schema_recursive(item)
+            if isinstance(item, dict) and item.get("$ref"):
+                processed_item = self.process_ref(item, key)
+            else:
+                processed_item = self._process_schema_recursive(item)
             if item_desc:
                 if isinstance(processed_item, dict | list):
                     item_str = (
@@ -312,7 +322,7 @@ class JSONishFormatter(BaseFormatter):
                     f"ONE OF: {comment}{title}{description}{default_value}{example}"
                 )
             first_item = items[0]
-            if isinstance(first_item, dict):
+            if isinstance(first_item, dict | list):
                 return first_item
             return str(first_item)
         else:
@@ -343,7 +353,7 @@ class JSONishFormatter(BaseFormatter):
 
     def process_allof(  # type: ignore[override]
         self, value: dict[str, Any], key: str | None = None
-    ) -> str | dict[str, Any]:
+    ) -> str | dict[str, Any] | list[Any]:
         """
         Process allOf intersection types.
 
@@ -370,7 +380,10 @@ class JSONishFormatter(BaseFormatter):
         for item in allof_list:
             # Include description from individual allOf items inline
             item_desc = self._extract_description(item)
-            processed_item = self._process_schema_recursive(item)
+            if isinstance(item, dict) and item.get("$ref"):
+                processed_item = self.process_ref(item, key)
+            else:
+                processed_item = self._process_schema_recursive(item)
             if item_desc:
                 if isinstance(processed_item, dict | list):
                     item_str = (
@@ -391,7 +404,7 @@ class JSONishFormatter(BaseFormatter):
                     f"AND null {comment}{title}{description}{default_value}{example}"
                 )
             first_item = items[0]
-            if isinstance(first_item, dict):
+            if isinstance(first_item, dict | list):
                 return first_item
             return str(first_item)
         else:
@@ -588,7 +601,11 @@ class JSONishFormatter(BaseFormatter):
 
                 items: dict[str, Any] | str | list[Any] = {}
                 if "items" in value and value["items"]:
-                    items = self._process_schema_recursive(value["items"])
+                    item_schema = value["items"]
+                    if isinstance(item_schema, dict) and item_schema.get("$ref"):
+                        items = self.process_ref(item_schema, key)
+                    else:
+                        items = self._process_schema_recursive(item_schema)
                 # Note: items.description is now handled in transform_schema array header
                 if items and isinstance(items, dict | list):
                     if items_range or title or description or default_value or example:
@@ -1087,6 +1104,63 @@ class JSONishFormatter(BaseFormatter):
 
         return "\n".join(result_lines)
 
+    def _delimiter_balance(self, line: str) -> int:
+        """Net ``{``/``[`` minus ``}``/``]`` for one line, ignoring any trailing comment."""
+        code = line.split(self.comment_prefix, 1)[0]
+        return code.count("{") - code.count("}") + code.count("[") - code.count("]")
+
+    def _collapse_array_object_brackets(self, output_string: str) -> str:
+        """Collapse ``[``/``{`` and ``}``/``]`` line pairs into compact ``[{`` / ``}]``."""
+        while True:
+            lines = output_string.split("\n")
+            collapsed = self._collapse_array_object_brackets_once(lines)
+            if collapsed is None:
+                return output_string
+            output_string = "\n".join(collapsed)
+
+    def _collapse_array_object_brackets_once(self, lines: list[str]) -> list[str] | None:
+        """One collapse pass. Returns None when no collapsible pair is found."""
+        for i in range(len(lines) - 1):
+            if not lines[i].rstrip().endswith("[") or lines[i + 1].strip() != "{":
+                continue
+            depth = 0
+            for j in range(i + 1, len(lines)):
+                stripped = lines[j].strip()
+                depth += self._delimiter_balance(stripped)
+                if depth == 0:
+                    if stripped != "}" or j + 1 >= len(lines):
+                        return None
+                    closer = lines[j + 1].strip()
+                    if closer not in ("]", "],"):
+                        return None
+                    indent = " " * (len(lines[j + 1]) - len(lines[j + 1].lstrip()))
+                    interior = [
+                        line[2:] if line.startswith("  ") else line for line in lines[i + 2 : j]
+                    ]
+                    return (
+                        lines[:i]
+                        + [lines[i].rstrip() + "{"]
+                        + interior
+                        + [indent + "}" + closer]
+                        + lines[j + 2 :]
+                    )
+            return None
+        return None
+
+    def _apply_pending_prefix(self, output_string: str) -> str:
+        """Append opening-line comments (e.g. a ``$defs`` docstring) to block openers."""
+        if not self.pending_prefix:
+            return output_string
+        lines = output_string.split("\n")
+        for idx, line in enumerate(lines):
+            stripped = line.lstrip()
+            for key, prefix in self.pending_prefix.items():
+                if stripped.startswith(f"{key}:") or stripped.startswith(f"{key}*:"):
+                    if line.rstrip().endswith("{"):
+                        lines[idx] = f"{line.rstrip()} {prefix}"
+                    break
+        return "\n".join(lines)
+
     def _apply_pending_postfix(self, output_string: str) -> str:
         """
         Apply pending postfix comments to output string.
@@ -1117,24 +1191,18 @@ class JSONishFormatter(BaseFormatter):
                 # Check if this line starts with the key (with or without asterisk)
                 stripped = line.lstrip()
                 if stripped.startswith(f"{key}:") or stripped.startswith(f"{key_with_asterisk}:"):
-                    # Check if the value is a dict or list on the same line or next lines
-                    if "{" in line or "[" in line:
-                        # Count braces/brackets to find the matching closing one
-                        open_count = (
-                            line.count("{") - line.count("}") + line.count("[") - line.count("]")
-                        )
+                    # Count braces/brackets to find the matching closing one. A line whose
+                    # delimiters are already balanced (e.g. ``k: {},``) is a single-line
+                    # value and must take the else-branch below.
+                    open_count = self._delimiter_balance(line)
+                    if open_count > 0:
                         j = i + 1
                         processed_lines = [line]
 
                         # Find the line with the matching closing brace/bracket
                         while j < len(lines) and open_count > 0:
                             next_line = lines[j]
-                            open_count += (
-                                next_line.count("{")
-                                - next_line.count("}")
-                                + next_line.count("[")
-                                - next_line.count("]")
-                            )
+                            open_count += self._delimiter_balance(next_line)
                             processed_lines.append(next_line)
                             if open_count == 0:
                                 # Found the closing brace/bracket
@@ -1164,9 +1232,10 @@ class JSONishFormatter(BaseFormatter):
                                 break
                             j += 1
 
-                        # Add all processed lines to result
-                        result_lines.extend(processed_lines)
                         if property_found:
+                            # Add processed lines only on the success path; otherwise fall
+                            # through so the line is emitted exactly once.
+                            result_lines.extend(processed_lines)
                             break
                     else:
                         closing_line = line.rstrip()
@@ -1198,6 +1267,7 @@ class JSONishFormatter(BaseFormatter):
         output_string = ""
         if output and isinstance(output, dict):
             output_string = self._jsonish_dump(output, indent=0, is_root=True)
+            output_string = self._collapse_array_object_brackets(output_string)
         else:
             output_string = str(output)
         if self.schema.get("type") == "array":
@@ -1233,6 +1303,7 @@ class JSONishFormatter(BaseFormatter):
                 )
 
         output_string = self._apply_pending_postfix(output_string)
+        output_string = self._apply_pending_prefix(output_string)
         self.simplified_schema = output_string.replace("  ", " ")
         return self._add_prefix(output_string)
 

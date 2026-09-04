@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from enum import Enum
 
 import pytest
 from pydantic import BaseModel, Field
@@ -74,11 +75,10 @@ def test_jsonish_formatter_with_nested_defs():
     assert "address*:" in result
     assert_required_optional_consistent(result, schema)
 
-    # Should contain nested Address required fields (expanded)
-    # JSONish nested rendering may appear either as `street*:` (object expanded) or
-    # as a python-dict-like string `'<street*>': ...` depending on recursion path.
-    assert ("street*:" in result) or re.search(r"['\"]street\*['\"]\s*:", result)
-    assert ("city*:" in result) or re.search(r"['\"]city\*['\"]\s*:", result)
+    # Nested Address required fields are now expanded onto their own lines; the
+    # python-dict-repr alternative this test used to tolerate is the bug (ticket 001).
+    assert "street*:" in result
+    assert "city*:" in result
 
 
 def test_jsonish_formatter_key_order_preserved():
@@ -546,13 +546,398 @@ def test_jsonish_formatter_with_array_of_refs():
     assert "addresses*:" in result
     assert "products*:" in result
     assert "users:" in result  # optional field
-    # Should expand nested refs or show object notation
-    assert "{" in result or "Address" in result or "object" in result
+    # Nested refs expand inline in compact array-of-object form, with no Python repr
+    assert "addresses*: [{" in result
+    assert "{'" not in result
 
 
 # ============================================================================
 # Nested and Complex Structure Tests
 # ============================================================================
+
+
+def test_jsonish_nested_optional_ref_renders_as_block() -> None:
+    """AC1: a nested optional $ref model expands as a block, not a Python dict repr."""
+    from llm_schema_lite import simplify_schema
+
+    class Country(str, Enum):
+        US = "US"
+        CA = "CA"
+
+    class Address(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+        country: Country = Field(..., description="Country code")
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class Patient(BaseModel):
+        name: str = Field(..., description="Patient name")
+        address: Address | None = Field(None, description="Home address")
+
+    class P1(BaseModel):
+        name: str = Field(..., description="Patient name")
+        address: Addr | None = Field(None, description="Home address")
+
+    result = simplify_schema(Patient, format_type="jsonish").to_string()
+    assert result == "\n".join(
+        [
+            "//Title: Patient",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  address: {",
+            "    street*: string // Street,",
+            "    city*: string // City,",
+            "    country*: OPTIONS: US| CA Country:",
+            "  } OR null  // Home address (default=null)",
+            "}",
+        ]
+    )
+    assert "{'" not in result
+
+    result_p1 = simplify_schema(P1, format_type="jsonish").to_string()
+    assert result_p1 == "\n".join(
+        [
+            "//Title: P1",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  address: {",
+            "    street*: string // Street,",
+            "    city*: string // City",
+            "  } OR null  // Home address (default=null)",
+            "}",
+        ]
+    )
+
+
+def test_jsonish_nested_list_ref_renders_as_compact_brackets() -> None:
+    """AC2: a nested list[$ref] field renders as compact array-of-object brackets."""
+    from llm_schema_lite import simplify_schema
+
+    class Country(str, Enum):
+        US = "US"
+        CA = "CA"
+
+    class Address(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+        country: Country = Field(..., description="Country code")
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class PatientList(BaseModel):
+        name: str = Field(..., description="Patient name")
+        addresses: list[Address] = Field(..., description="Addresses")
+
+    class P2(BaseModel):
+        name: str = Field(..., description="Patient name")
+        addresses: list[Addr] = Field(..., description="Addresses")
+
+    result = simplify_schema(PatientList, format_type="jsonish").to_string()
+    assert result == "\n".join(
+        [
+            "//Title: PatientList",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  addresses*: [{",
+            "    street*: string // Street,",
+            "    city*: string // City,",
+            "    country*: OPTIONS: US| CA Country:",
+            "  }]  // Addresses",
+            "}",
+        ]
+    )
+
+    result_p2 = simplify_schema(P2, format_type="jsonish").to_string()
+    assert result_p2 == "\n".join(
+        [
+            "//Title: P2",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  addresses*: [{",
+            "    street*: string // Street,",
+            "    city*: string // City",
+            "  }]  // Addresses",
+            "}",
+        ]
+    )
+
+
+def test_jsonish_nested_optional_list_ref_renders_as_compact_brackets() -> None:
+    """An optional list[$ref] field renders as compact brackets with an ``OR null`` tail."""
+    from llm_schema_lite import simplify_schema
+
+    class Country(str, Enum):
+        US = "US"
+        CA = "CA"
+
+    class Address(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+        country: Country = Field(..., description="Country code")
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class PatientOptList(BaseModel):
+        name: str = Field(..., description="Patient name")
+        addresses: list[Address] | None = Field(None, description="Addresses")
+
+    class P3(BaseModel):
+        name: str = Field(..., description="Patient name")
+        addresses: list[Addr] | None = Field(None, description="Addresses")
+
+    result = simplify_schema(PatientOptList, format_type="jsonish").to_string()
+    assert result == "\n".join(
+        [
+            "//Title: PatientOptList",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  addresses: [{",
+            "    street*: string // Street,",
+            "    city*: string // City,",
+            "    country*: OPTIONS: US| CA Country:",
+            "  }] OR null  // Addresses (default=null)",
+            "}",
+        ]
+    )
+
+    result_p3 = simplify_schema(P3, format_type="jsonish").to_string()
+    assert result_p3 == "\n".join(
+        [
+            "//Title: P3",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  addresses: [{",
+            "    street*: string // Street,",
+            "    city*: string // City",
+            "  }] OR null  // Addresses (default=null)",
+            "}",
+        ]
+    )
+
+
+def test_jsonish_nested_required_ref_renders_as_block() -> None:
+    """A direct required $ref field (design v2 A-7) renders as an expanded block."""
+    from llm_schema_lite import simplify_schema
+
+    class Country(str, Enum):
+        US = "US"
+        CA = "CA"
+
+    class Address(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+        country: Country = Field(..., description="Country code")
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class PatientReq(BaseModel):
+        name: str = Field(..., description="Patient name")
+        address: Address = Field(..., description="Home address")
+
+    class P4(BaseModel):
+        name: str = Field(..., description="Patient name")
+        address: Addr = Field(..., description="Home address")
+
+    result = simplify_schema(PatientReq, format_type="jsonish").to_string()
+    assert result == "\n".join(
+        [
+            "//Title: PatientReq",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  address*: {",
+            "    street*: string // Street,",
+            "    city*: string // City,",
+            "    country*: OPTIONS: US| CA Country:",
+            "  }",
+            "}",
+        ]
+    )
+
+    result_p4 = simplify_schema(P4, format_type="jsonish").to_string()
+    assert result_p4 == "\n".join(
+        [
+            "//Title: P4",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  address*: {",
+            "    street*: string // Street,",
+            "    city*: string // City",
+            "  }",
+            "}",
+        ]
+    )
+
+
+def test_jsonish_nested_ref_two_sibling_fields_both_inline() -> None:
+    """AC3: two sibling fields sharing a $ref type both render inline, not just the first."""
+    from llm_schema_lite import simplify_schema
+
+    class Country(str, Enum):
+        US = "US"
+        CA = "CA"
+
+    class Address(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+        country: Country = Field(..., description="Country code")
+
+    class TwoSiblings(BaseModel):
+        home: Address = Field(..., description="Home")
+        work: Address = Field(..., description="Work")
+
+    result = simplify_schema(TwoSiblings, format_type="jsonish").to_string()
+    assert result == "\n".join(
+        [
+            "//Title: TwoSiblings",
+            "// Fields marked with * are required",
+            "{",
+            "  home*: {",
+            "    street*: string // Street,",
+            "    city*: string // City,",
+            "    country*: OPTIONS: US| CA Country:",
+            "  },",
+            "  work*: {",
+            "    street*: string // Street,",
+            "    city*: string // City,",
+            "    country*: OPTIONS: US| CA Country:",
+            "  }",
+            "}",
+        ]
+    )
+
+
+def test_jsonish_nested_ref_defs_docstring_becomes_opening_line_comment() -> None:
+    """A $defs model docstring attaches as a comment on the block's opening line."""
+    from llm_schema_lite import simplify_schema
+
+    class AddressD(BaseModel):
+        """An address."""
+
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class WithDoc(BaseModel):
+        name: str = Field(..., description="Patient name")
+        address: AddressD | None = Field(None, description="Home address")
+
+    class WithDocList(BaseModel):
+        addresses: list[AddressD] = Field(..., description="Addresses")
+
+    result = simplify_schema(WithDoc, format_type="jsonish").to_string()
+    assert result == "\n".join(
+        [
+            "//Title: WithDoc",
+            "// Fields marked with * are required",
+            "{",
+            "  name*: string // Patient name,",
+            "  address: { // An address.",
+            "    street*: string // Street,",
+            "    city*: string // City",
+            "  } OR null  // Home address (default=null)",
+            "}",
+        ]
+    )
+
+    result_list = simplify_schema(WithDocList, format_type="jsonish").to_string()
+    assert result_list == "\n".join(
+        [
+            "//Title: WithDocList",
+            "// Fields marked with * are required",
+            "{",
+            "  addresses*: [{ // An address.",
+            "    street*: string // Street,",
+            "    city*: string // City",
+            "  }]  // Addresses",
+            "}",
+        ]
+    )
+
+
+def test_jsonish_nested_ref_deep_nesting_four_levels() -> None:
+    """R2 / design v2 4.10: the fixpoint collapse loop pins four levels of nesting."""
+    deep = {
+        "type": "object",
+        "properties": {"l1": {"$ref": "#/$defs/L1"}},
+        "required": ["l1"],
+        "$defs": {
+            "L1": {
+                "type": "object",
+                "properties": {"l2": {"type": "array", "items": {"$ref": "#/$defs/L2"}}},
+                "required": ["l2"],
+            },
+            "L2": {
+                "type": "object",
+                "properties": {"l3": {"$ref": "#/$defs/L3"}},
+                "required": ["l3"],
+            },
+            "L3": {
+                "type": "object",
+                "properties": {"l4": {"type": "array", "items": {"$ref": "#/$defs/L4"}}},
+                "required": ["l4"],
+            },
+            "L4": {
+                "type": "object",
+                "properties": {"v": {"type": "string"}},
+                "required": ["v"],
+            },
+        },
+    }
+    result = JSONishFormatter(deep).transform_schema()
+    assert result == "\n".join(
+        [
+            "// Fields marked with * are required",
+            "{",
+            "  l1*: {",
+            "    l2*: [{",
+            "      l3*: {",
+            "        l4*: [{",
+            "          v*: string",
+            "        }]",
+            "      }",
+            "    }]",
+            "  }",
+            "}",
+        ]
+    )
+
+
+def test_jsonish_empty_model_optional_renders_once() -> None:
+    """R1: an empty nested model wrapped as optional renders once, not duplicated."""
+    from llm_schema_lite import simplify_schema
+
+    class Empty(BaseModel):
+        pass
+
+    class WithEmpty(BaseModel):
+        empt: Empty | None = None
+
+    result = simplify_schema(WithEmpty, format_type="jsonish").to_string()
+    assert result == "\n".join(
+        [
+            "//Title: WithEmpty",
+            "{",
+            "  empt: {} OR null  // (default=null)",
+            "}",
+        ]
+    )
+    assert result.count("empt: {} OR null") == 1
 
 
 def test_jsonish_formatter_with_deep_nesting():
@@ -1382,6 +1767,80 @@ def test_remove_quotes_does_not_unescape() -> None:
     assert result == '  p*: a\\\\b and \\"c\\" end,'
 
 
+def test_collapse_array_object_brackets_handles_braces_in_descriptions() -> None:
+    """R6: brace characters inside a description must not desync the bracket scan."""
+    formatter = JSONishFormatter({"type": "object", "properties": {}})
+
+    # (a) a description containing an unbalanced open brace
+    src_open = "\n".join(
+        ["{", "  xs*: [", "    {", "      k*: string // open { brace", "    }", "  ]", "}"]
+    )
+    out_open = "\n".join(["{", "  xs*: [{", "    k*: string // open { brace", "  }]", "}"])
+    assert formatter._collapse_array_object_brackets(src_open) == out_open
+
+    # (b) a description containing an unbalanced close brace
+    src_close = "\n".join(
+        ["{", "  xs*: [", "    {", "      k*: string // close } brace", "    }", "  ]", "}"]
+    )
+    out_close = "\n".join(["{", "  xs*: [{", "    k*: string // close } brace", "  }]", "}"])
+    assert formatter._collapse_array_object_brackets(src_close) == out_close
+
+    # (c) four-level nesting, proving the fixpoint loop collapses every level
+    src_deep = "\n".join(
+        [
+            "{",
+            "  l1*: {",
+            "    l2*: [",
+            "      {",
+            "        l3*: {",
+            "          l4*: [",
+            "            {",
+            "              v*: string",
+            "            }",
+            "          ]",
+            "        }",
+            "      }",
+            "    ]",
+            "  }",
+            "}",
+        ]
+    )
+    out_deep = "\n".join(
+        [
+            "{",
+            "  l1*: {",
+            "    l2*: [{",
+            "      l3*: {",
+            "        l4*: [{",
+            "          v*: string",
+            "        }]",
+            "      }",
+            "    }]",
+            "  }",
+            "}",
+        ]
+    )
+    assert formatter._collapse_array_object_brackets(src_deep) == out_deep
+
+    # Pin _delimiter_balance directly for the line shapes exercised above.
+    assert formatter._delimiter_balance("  xs*: [") == 1
+    assert formatter._delimiter_balance("    {") == 1
+    assert formatter._delimiter_balance("      k*: string // open { brace") == 0
+    assert formatter._delimiter_balance("  }],") == -2
+    assert formatter._delimiter_balance("  empt: {},") == 0
+    assert formatter._delimiter_balance("  a: string") == 0
+
+
+def test_apply_pending_postfix_balanced_line_not_duplicated() -> None:
+    """R7 / D5: a balanced `{}` line gets its pending postfix once, not duplicated."""
+    formatter = JSONishFormatter({"type": "object", "properties": {}})
+    formatter.pending_postfix = {"ao": "// note"}
+    result = formatter._apply_pending_postfix("{\n  ao: {},\n  z: string\n}")
+
+    assert result == "{\n  ao: {} // note,\n  z: string\n}"
+    assert result.count("ao: {}") == 1
+
+
 def test_raw_array_schema_no_empty_comment_marker() -> None:
     """Arrays with no title/description/range/default/example must not emit a bare `//`.
 
@@ -1427,6 +1886,15 @@ def test_no_empty_comment_marker_across_all_models_jsonish(all_pydantic_models) 
             assert not bare_marker_pattern.search(
                 line
             ), f"{_name}: bare comment marker in line: {line!r}"
+
+
+def test_no_dict_repr_across_all_models_jsonish(all_pydantic_models) -> None:
+    """No registered model may render a Python dict repr in JSONish output (AC1)."""
+    for name, model in all_pydantic_models:
+        result = JSONishFormatter(
+            model.model_json_schema(), include_metadata=True
+        ).transform_schema()
+        assert "{'" not in result, f"{name}: python dict repr in JSONish output"
 
 
 def test_order_jsonish_token_count_decreases() -> None:

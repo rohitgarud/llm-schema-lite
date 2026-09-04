@@ -350,6 +350,31 @@ class TypeScriptFormatter(BaseFormatter):
 
         return str(type_str)
 
+    def format_field_name(self, field_name: str) -> str:
+        """Format a field name, honouring the innermost ``$defs`` required list if any."""
+        if self._nested_required_stack:
+            marker = (
+                self.config.required_marker
+                if field_name in self._nested_required_stack[-1]
+                else self.config.optional_marker
+            )
+            return f"{field_name}{marker}"
+        return super().format_field_name(field_name)
+
+    @staticmethod
+    def _inline_comment(value: Any) -> str:
+        """Rewrite a trailing ``// ...`` comment as a block comment.
+
+        A ``//`` comment inside a single-line inline object literal would swallow the
+        remainder of the line, including the closing brace and every later field.
+        """
+        text = str(value)
+        head, sep, tail = text.partition("  // ")
+        if not sep:
+            return text
+        safe_tail = tail.replace("*/", "* /")
+        return f"{head} /* {safe_tail} */"
+
     def dict_to_string(self, value: Any, indent: int = 1) -> str:
         """
         Convert a dictionary or list to a formatted string representation.
@@ -367,11 +392,10 @@ class TypeScriptFormatter(BaseFormatter):
             if not value:  # Empty dict
                 return "{}"
 
-            # Format as TypeScript object representation (inline style)
-            pairs = []
-            for k, v in value.items():
-                pairs.append(f"'{k}': '{v}'")
-            return "{" + ", ".join(pairs) + "}"
+            # Format as a TypeScript inline object literal, matching the convention already
+            # used for anyOf object members and inline array items.
+            pairs = [f"{k}: {self._inline_comment(v)}" for k, v in value.items()]
+            return "{ " + ", ".join(pairs) + " }"
         elif isinstance(value, list):
             return "[" + ", ".join(str(v) for v in value) + "]"
         else:

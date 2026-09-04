@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from pydantic import BaseModel, Field
 
 from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.typescript_formatter import TypeScriptFormatter
@@ -586,11 +587,198 @@ def test_typescript_array_of_refs():
     # Should have array fields
     assert "addresses*:" in result
     assert "products*:" in result
+    assert "Array<object>" not in result
 
 
 # ============================================================================
 # Nested and Complex Types
 # ============================================================================
+
+
+def test_typescript_nested_optional_ref_renders_as_inline_object() -> None:
+    """A nested optional `$ref` renders as an inline TS object literal, not a dict repr."""
+    from llm_schema_lite import simplify_schema
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class P1(BaseModel):
+        name: str = Field(..., description="Patient name")
+        address: Addr | None = Field(None, description="Home address")
+
+    expected = "\n".join(
+        [
+            "interface Addr {",
+            "  street*: string  // Street;",
+            "  city*: string  // City;",
+            "}",
+            "",
+            "// Title: P1",
+            "// Fields marked with * are required",
+            "interface Schema {",
+            "  name*: string  // Patient name;",
+            (
+                "  address: { street*: string /* Street */, "
+                "city*: string /* City */ } | null  // Home address;"
+            ),
+            "}",
+        ]
+    )
+
+    assert simplify_schema(P1, format_type="typescript").to_string() == expected
+
+
+def test_typescript_nested_list_ref_renders_as_array_of_object() -> None:
+    """A list of `$ref` objects renders as `Array<{ ... }>`, not `Array<object>`."""
+    from llm_schema_lite import simplify_schema
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class P2(BaseModel):
+        name: str = Field(..., description="Patient name")
+        addresses: list[Addr] = Field(..., description="Addresses")
+
+    expected = "\n".join(
+        [
+            "interface Addr {",
+            "  street*: string  // Street;",
+            "  city*: string  // City;",
+            "}",
+            "",
+            "// Title: P2",
+            "// Fields marked with * are required",
+            "interface Schema {",
+            "  name*: string  // Patient name;",
+            (
+                "  addresses*: Array<{ street*: string /* Street */, "
+                "city*: string /* City */ }>  // Addresses;"
+            ),
+            "}",
+        ]
+    )
+
+    assert simplify_schema(P2, format_type="typescript").to_string() == expected
+
+
+def test_typescript_nested_optional_list_ref_renders_as_array_of_object() -> None:
+    """An optional list of `$ref` objects renders as `Array<{ ... }> | null`."""
+    from llm_schema_lite import simplify_schema
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class P3(BaseModel):
+        name: str = Field(..., description="Patient name")
+        addresses: list[Addr] | None = Field(None, description="Addresses")
+
+    expected = "\n".join(
+        [
+            "interface Addr {",
+            "  street*: string  // Street;",
+            "  city*: string  // City;",
+            "}",
+            "",
+            "// Title: P3",
+            "// Fields marked with * are required",
+            "interface Schema {",
+            "  name*: string  // Patient name;",
+            (
+                "  addresses: Array<{ street*: string /* Street */, "
+                "city*: string /* City */ }> | null  // Addresses;"
+            ),
+            "}",
+        ]
+    )
+
+    assert simplify_schema(P3, format_type="typescript").to_string() == expected
+
+
+def test_typescript_nested_required_ref_renders_as_inline_object() -> None:
+    """A required nested `$ref` renders as an inline TS object literal."""
+    from llm_schema_lite import simplify_schema
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+
+    class P4(BaseModel):
+        name: str = Field(..., description="Patient name")
+        address: Addr = Field(..., description="Home address")
+
+    expected = "\n".join(
+        [
+            "interface Addr {",
+            "  street*: string  // Street;",
+            "  city*: string  // City;",
+            "}",
+            "",
+            "// Title: P4",
+            "// Fields marked with * are required",
+            "interface Schema {",
+            "  name*: string  // Patient name;",
+            (
+                "  address*: { street*: string /* Street */, "
+                "city*: string /* City */ }  // Home address;"
+            ),
+            "}",
+        ]
+    )
+
+    assert simplify_schema(P4, format_type="typescript").to_string() == expected
+
+
+def test_typescript_nested_ref_two_sibling_fields_both_inline() -> None:
+    """Two sibling fields sharing a `$ref` type both render inline (AC3).
+
+    Before the fingerprint-discard fix, the second sibling (`work`) degraded to the
+    bare `object` type instead of the full inline object literal the first sibling
+    (`home`) gets.
+    """
+    from enum import Enum
+
+    from llm_schema_lite import simplify_schema
+
+    class Country(str, Enum):
+        US = "US"
+        CA = "CA"
+
+    class Address(BaseModel):
+        street: str = Field(..., description="Street")
+        city: str = Field(..., description="City")
+        country: Country = Field(..., description="Country code")
+
+    class TwoSiblings(BaseModel):
+        home: Address = Field(..., description="Home")
+        work: Address = Field(..., description="Work")
+
+    expected = "\n".join(
+        [
+            "interface Address {",
+            "  street*: string  // Street;",
+            "  city*: string  // City;",
+            '  country*: "US" | "CA"  // Country code;',
+            "}",
+            "",
+            "// Title: TwoSiblings",
+            "// Fields marked with * are required",
+            "interface Schema {",
+            (
+                "  home*: { street*: string /* Street */, city*: string /* City */, "
+                'country*: "US" | "CA" /* Country code */ }  // Home;'
+            ),
+            (
+                "  work*: { street*: string /* Street */, city*: string /* City */, "
+                'country*: "US" | "CA" /* Country code */ }  // Work;'
+            ),
+            "}",
+        ]
+    )
+
+    assert simplify_schema(TwoSiblings, format_type="typescript").to_string() == expected
 
 
 def test_typescript_deep_nesting():
@@ -1103,3 +1291,85 @@ def test_product_typescript_token_count_decreases() -> None:
     from llm_schema_lite import simplify_schema
 
     assert simplify_schema(Product, format_type="typescript").token_count() < 109
+
+
+def test_typescript_inline_comment_splits_on_add_metadata_separator() -> None:
+    """`_inline_comment` rewrites a trailing `// ...` line comment as a block comment.
+
+    A `//` comment inside a single-line inline object literal would swallow the
+    remainder of the line, including the closing brace and every later field.
+    """
+    assert TypeScriptFormatter._inline_comment("string  // Street") == "string /* Street */"
+    assert TypeScriptFormatter._inline_comment("string") == "string"
+    assert (
+        TypeScriptFormatter._inline_comment("number  // min: 0, max: 5")
+        == "number /* min: 0, max: 5 */"
+    )
+    # a description containing a literal */ must not terminate the block comment early
+    assert (
+        TypeScriptFormatter._inline_comment("string  // ends with */ here")
+        == "string /* ends with * / here */"
+    )
+
+
+def test_typescript_format_field_name_consults_nested_required_stack() -> None:
+    """`format_field_name` honours the innermost `$defs` required set when one is live."""
+    formatter = TypeScriptFormatter({"type": "object", "properties": {}, "required": ["root_only"]})
+    formatter._nested_required_stack.append({"street"})
+    assert formatter.format_field_name("street") == "street" + formatter.config.required_marker
+    assert (
+        formatter.format_field_name("root_only") == "root_only" + formatter.config.optional_marker
+    )
+    formatter._nested_required_stack.pop()
+    assert (
+        formatter.format_field_name("root_only") == "root_only" + formatter.config.required_marker
+    )
+
+
+def test_no_array_of_object_across_all_models_typescript(all_pydantic_models) -> None:
+    """No registered model's TypeScript output degrades a `$ref` to `Array<object>`.
+
+    Cross-cutting invariant over every model in the shared fixture registry: a `$ref`
+    reached through a list slot must render as `Array<{ ... }>`, never as the bare
+    `Array<object>` type or a hand-built `'k': 'v'` dict repr.
+    """
+    for name, model in all_pydantic_models:
+        result = TypeScriptFormatter(
+            model.model_json_schema(), include_metadata=True
+        ).transform_schema()
+        assert "Array<object>" not in result, f"{name}: Array<object> in TS output"
+        assert "': '" not in result, f"{name}: quoted dict repr in TS output"
+
+
+def test_cyclic_and_mutually_recursive_refs_terminate() -> None:
+    """The fingerprint-discard fix must not turn a cycle into unbounded expansion."""
+    from llm_schema_lite.formatters.yaml_formatter import YAMLFormatter
+
+    cyclic = {
+        "type": "object",
+        "properties": {"root": {"$ref": "#/$defs/Node"}},
+        "required": ["root"],
+        "$defs": {
+            "Node": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "child": {"$ref": "#/$defs/Node"},
+                },
+                "required": ["name"],
+            }
+        },
+    }
+    mutual = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/A"}},
+        "$defs": {
+            "A": {"type": "object", "properties": {"b": {"$ref": "#/$defs/B"}}},
+            "B": {"type": "object", "properties": {"a": {"$ref": "#/$defs/A"}}},
+        },
+    }
+    for schema in (cyclic, mutual):
+        for cls in (TypeScriptFormatter, YAMLFormatter):
+            out = cls(schema).transform_schema()
+            assert "object" in out  # truncated at the cycle boundary, not expanded
+            assert len(out) < 2000  # terminates rather than growing without bound
