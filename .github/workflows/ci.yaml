@@ -38,18 +38,8 @@ jobs:
         run: uv run pytest --cov=src --cov-report=xml --cov-report=term-missing
       # --no-cov is REQUIRED: pyproject addopts force --cov-report=xml, and a second
       # instrumented run here would overwrite coverage.xml before the Codecov upload below.
-      # TODO(lsl-2026-09-04-011): drop the exit-5 tolerance once DSPy tests exist.
       - name: Run DSPy integration tests
-        run: |
-          set +e
-          uv run pytest tests -k dspy -v --no-cov
-          rc=$?
-          set -e
-          if [ "$rc" -eq 5 ]; then
-            echo "::warning::No DSPy tests collected yet (ticket lsl-2026-09-04-011)."
-            exit 0
-          fi
-          exit $rc
+        run: uv run pytest tests -k dspy -v --no-cov
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -77,18 +67,8 @@ jobs:
       # silently roll DSPy back to the pinned version, making this job a no-op.
       - name: Show resolved DSPy version
         run: uv run --no-sync python -c "from importlib.metadata import version; print('dspy', version('dspy'))"
-      # TODO(lsl-2026-09-04-011): drop the exit-5 tolerance once DSPy tests exist.
       - name: Run DSPy integration tests against latest DSPy
-        run: |
-          set +e
-          uv run --no-sync pytest tests -k dspy -v --no-cov
-          rc=$?
-          set -e
-          if [ "$rc" -eq 5 ]; then
-            echo "::warning::No DSPy tests collected yet (ticket lsl-2026-09-04-011)."
-            exit 0
-          fi
-          exit $rc
+        run: uv run --no-sync pytest tests -k dspy -v --no-cov
 
   lint:
     runs-on: ubuntu-latest

@@ -42,7 +42,7 @@ test-cov-full:  ## Run tests with full coverage including DSPy integration
 
 test-dspy:  ## Run only DSPy integration tests
 	@uv pip install -e ".[dspy]" > /dev/null 2>&1 || echo "DSPy already installed"
-	.venv/bin/python -m pytest tests/test_dspy*.py -v
+	.venv/bin/python -m pytest tests -k dspy -v --no-cov
 
 test-parallel:  ## Run tests in parallel (alias for test)
 	pytest -rP -n auto
