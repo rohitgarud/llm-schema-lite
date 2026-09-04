@@ -47,6 +47,7 @@ class JSONishFormatter(BaseFormatter):
         # Trial-specific state
         self.processed_ref_cache: dict[str, dict[str, Any] | str | list[Any]] = {}
         self.pending_postfix: dict[str, str] = {}
+        self.pending_recursion: dict[str, str] = {}
         self.pending_prefix: dict[str, str] = {}
         self.simplified_schema: str | None = None
 
@@ -192,11 +193,30 @@ class JSONishFormatter(BaseFormatter):
         else:
             return "object"
 
+        # Same rule as BaseFormatter.process_ref: same-type re-entries on the active path.
+        reentries = self._ref_expansion_path.count(_ref)
+        if reentries >= 1 and reentries >= self.config.max_recursion_depth:
+            self._truncation_epoch += 1
+            if key is not None:
+                self.pending_recursion[key] = f"recursive: {_ref}"
+                return "object"
+            # No field key to hang a trailing comment on (nested array element, mapping
+            # value, deep anyOf member). A `//` here would swallow the rest of the line,
+            # so use the block form, which is terminated and cannot.
+            return f"object /* recursive: {_ref} */"
+
         if _ref in self.processed_ref_cache:
             output = self.processed_ref_cache[_ref]
         else:
-            output = self._process_schema_recursive(_def)
-            self.processed_ref_cache[_ref] = output
+            entry_epoch = self._truncation_epoch
+            self._ref_expansion_path.append(_ref)
+            try:
+                output = self._process_schema_recursive(_def)
+            finally:
+                if self._ref_expansion_path and self._ref_expansion_path[-1] == _ref:
+                    self._ref_expansion_path.pop()
+            if self._truncation_epoch == entry_epoch:
+                self.processed_ref_cache[_ref] = output
         if "default" in value:
             if isinstance(output, str):
                 output = output + f" (default='{value['default']}')"
@@ -1184,6 +1204,36 @@ class JSONishFormatter(BaseFormatter):
                     break
         return "\n".join(lines)
 
+    def _join_postfix(self, line: str, postfix: str) -> str:
+        """Append ``postfix`` to ``line``, keeping at most one comment marker on the line.
+
+        When both the line and the postfix already carry ``comment_prefix``, the postfix's
+        comment body is folded into the line's existing comment as a comma-separated
+        continuation, and any segment already present on the line is dropped.
+        """
+        marker = self.comment_prefix
+        if marker not in postfix or marker not in line:
+            return f"{line} {postfix}"
+        head, _, body = postfix.partition(marker)
+        head = head.strip()
+        if head and head in line:
+            head = ""
+        segments = [s.strip() for s in body.split(",") if s.strip() and s.strip() not in line]
+        out = f"{line} {head}" if head else line
+        return f"{out}, " + ", ".join(segments) if segments else out
+
+    def _merge_pending_recursion(self) -> None:
+        """Fold recursion notes into ``pending_postfix`` without overwriting an existing one."""
+        for key, note in self.pending_recursion.items():
+            existing = self.pending_postfix.get(key)
+            if not existing:
+                self.pending_postfix[key] = f"{self.comment_prefix} {note}"
+            elif self.comment_prefix in existing:
+                self.pending_postfix[key] = f"{existing.rstrip()}, {note}"
+            else:
+                self.pending_postfix[key] = f"{existing.rstrip()} {self.comment_prefix} {note}"
+        self.pending_recursion.clear()
+
     def _apply_pending_postfix(self, output_string: str) -> str:
         """
         Apply pending postfix comments to output string.
@@ -1245,9 +1295,12 @@ class JSONishFormatter(BaseFormatter):
                                 # Append postfix on closing line
                                 closing_line = processed_lines[-1].rstrip()
                                 if closing_line.endswith(","):
-                                    closing_line = closing_line[:-1].rstrip() + f" {postfix},"
+                                    closing_line = (
+                                        self._join_postfix(closing_line[:-1].rstrip(), postfix)
+                                        + ","
+                                    )
                                 else:
-                                    closing_line = closing_line + f" {postfix}"
+                                    closing_line = self._join_postfix(closing_line, postfix)
                                 processed_lines[-1] = closing_line
                                 # Skip this line in the next iteration
                                 i = j
@@ -1263,9 +1316,11 @@ class JSONishFormatter(BaseFormatter):
                     else:
                         closing_line = line.rstrip()
                         if closing_line.endswith(","):
-                            closing_line = closing_line[:-1].rstrip() + f" {postfix},"
+                            closing_line = (
+                                self._join_postfix(closing_line[:-1].rstrip(), postfix) + ","
+                            )
                         else:
-                            closing_line = closing_line + f" {postfix}"
+                            closing_line = self._join_postfix(closing_line, postfix)
                         result_lines.append(closing_line)
                         property_found = True
                         break
@@ -1286,6 +1341,8 @@ class JSONishFormatter(BaseFormatter):
         """
         if self.simplified_schema is not None:
             return self._add_prefix(self.simplified_schema)
+        self._reset_ref_state()
+        self.processed_ref_cache.clear()
         output = self._process_schema_recursive(self.schema)
         output_string = ""
         if output and isinstance(output, dict):
@@ -1325,6 +1382,7 @@ class JSONishFormatter(BaseFormatter):
                     f"{self.comment_prefix} {L}" for L in link_lines
                 )
 
+        self._merge_pending_recursion()
         output_string = self._apply_pending_postfix(output_string)
         output_string = self._apply_pending_prefix(output_string)
         self.simplified_schema = output_string.replace("  ", " ")

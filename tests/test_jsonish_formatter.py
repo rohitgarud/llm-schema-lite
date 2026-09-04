@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-from llm_schema_lite import FormatterConfig
+from llm_schema_lite import FormatterConfig, simplify_schema
 from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
 from llm_schema_lite.schema_normalization import auto_title_for_key
 from tests.conftest import (
@@ -2050,3 +2050,117 @@ def test_jsonish_formatter_prefix_items_tuple_with_variadic_tail() -> None:
     result = JSONishFormatter(PREFIX_ITEMS_SCHEMA).transform_schema()
 
     assert "[string, int, bool, ...string]" in result
+
+
+# Recursive golden models: the placeholder embeds the class name, so these names
+# must match the measured goldens exactly, and they must carry no docstring (a
+# docstring becomes the model description and is rendered as a comment).
+class ListNode(BaseModel):
+    label: str
+    kids: list[ListNode] = Field(default_factory=list)
+
+
+ListNode.model_rebuild()
+
+
+# A recursive ``$ref`` two array levels deep: the C4 key-less placeholder case.
+class LLNode(BaseModel):
+    name: str
+    grid: list[list[LLNode]] = Field(default=[])
+
+
+LLNode.model_rebuild()
+
+
+# Recursive optional model exercising the recursion/postfix merge.
+class Tree(BaseModel):
+    value: str
+    left: Tree | None = None
+    right: Tree | None = None
+
+
+Tree.model_rebuild()
+
+
+_MAPPING_ANYOF_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "m": {
+            "type": "object",
+            "additionalProperties": {"anyOf": [{"$ref": "#/$defs/N"}, {"type": "null"}]},
+        }
+    },
+    "$defs": {
+        "N": {
+            "type": "object",
+            "properties": {
+                "m": {
+                    "type": "object",
+                    "additionalProperties": {"anyOf": [{"$ref": "#/$defs/N"}, {"type": "null"}]},
+                }
+            },
+        }
+    },
+}
+
+
+def test_jsonish_recursive_list_golden_default_depth() -> None:
+    """AC2: the default config renders two expansions then a recursion placeholder."""
+    result = simplify_schema(ListNode, format_type="jsonish").to_string()
+
+    assert result == (
+        "{\n"
+        "  label*: string,\n"
+        "  kids: [{\n"
+        "    label*: string,\n"
+        "    kids: object [] // recursive: ListNode\n"
+        "  }] // recursive: ListNode\n"
+        "}"
+    )
+
+
+def test_jsonish_placeholder_does_not_swallow_array_brackets() -> None:
+    """C4: a key-less placeholder uses the block form so ``[] []`` survives it."""
+    result = JSONishFormatter(
+        LLNode.model_json_schema(), config=FormatterConfig(max_recursion_depth=1)
+    ).transform_schema()
+
+    line = _line_with(result, "grid:")
+    assert line == "grid: object /* recursive: LLNode */ [] [] // (default=[])"
+
+    head, sep, tail = line.partition("*/")
+    assert sep == "*/", f"key-less placeholder must use the block form, got {line!r}"
+    assert "[]" not in head, f"comment swallowed the array brackets: {line!r}"
+    assert "default" not in head, f"comment swallowed the default note: {line!r}"
+    assert tail.strip() == "[] [] // (default=[])"
+
+
+def test_jsonish_placeholder_does_not_swallow_or_null() -> None:
+    """C4: ``OR null`` after a key-less placeholder stays outside the comment."""
+    result = JSONishFormatter(
+        _MAPPING_ANYOF_SCHEMA, config=FormatterConfig(max_recursion_depth=1)
+    ).transform_schema()
+
+    line = _line_with(result, "recursive: N")
+    assert line == "<string>: object /* recursive: N */ OR null"
+
+    head, sep, tail = line.partition("*/")
+    assert sep == "*/", f"key-less placeholder must use the block form, got {line!r}"
+    assert "OR null" not in head, f"comment swallowed the union tail: {line!r}"
+    assert tail.strip() == "OR null"
+
+
+def test_jsonish_recursive_optional_postfix_merge() -> None:
+    """A field that already has a postfix gains one merged comment, not two."""
+    result = simplify_schema(
+        Tree, config=FormatterConfig(max_recursion_depth=1), format_type="jsonish"
+    ).to_string()
+
+    expected = "object OR null // (default=null), recursive: Tree"
+    left_line = _line_with(result, "left:").rstrip(",")
+    right_line = _line_with(result, "right:").rstrip(",")
+
+    assert left_line == f"left: {expected}"
+    assert right_line == f"right: {expected}"
+    assert left_line.count("//") == 1, f"duplicated comment marker: {left_line!r}"
+    assert left_line.count("OR null") == 1, f"duplicated union tail: {left_line!r}"
