@@ -1,8 +1,8 @@
 ```
 arm: prompt-cost
-generated: 2026-09-05T11:53:37.048292+00:00
+generated: 2026-09-05T12:07:39.445038+00:00
 command: python -m benchmarking.dspy_adapters --offline
-git_head: 52d59c9
+git_head: e9e8204
 dspy_version: 3.3.1
 llm_schema_lite_version: 0.6.1
 encoding: cl100k_base
