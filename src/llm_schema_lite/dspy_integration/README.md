@@ -174,6 +174,8 @@ adapter = StructuredOutputAdapter(
     use_native_function_calling=True,          # Use native function calling
     formatter_config=None,                     # FormatterConfig forwarded to simplify_schema
     prompt_layout=PromptLayout.SECTIONS,       # Output block layout
+    use_json_object_response_format=True,      # Request {"type": "json_object"} in JSONish
+    parallel_tool_calls=None,                  # Forwarded to the DSPy adapter base
     callbacks=None                             # Optional callbacks
 )
 ```
@@ -208,6 +210,26 @@ adapter = StructuredOutputAdapter(
 - **use_native_function_calling**: `bool`
   - Whether to use native function calling for tool calls
   - Default: `True`
+
+- **use_json_object_response_format**: `bool`
+  - JSONish mode only. When `True` the adapter sends
+    `response_format={"type": "json_object"}` so the model is constrained to emit a JSON
+    object
+  - Set to `False` for OpenAI-compatible local servers (LM Studio, some Ollama builds)
+    that advertise `response_format` but reject the `json_object` type
+    ([stanfordnlp/dspy#1871](https://github.com/stanfordnlp/dspy/issues/1871))
+  - Ignored in JSON mode (which reproduces upstream `JSONAdapter`'s structured-outputs
+    behaviour) and in YAML mode (which never sets `response_format`). Even in JSONish
+    mode, `response_format` is omitted when the signature carries `dspy.Tool` /
+    `dspy.ToolCalls` fields
+  - Default: `True`
+
+- **parallel_tool_calls**: `bool | None`
+  - Forwarded unchanged to the DSPy adapter base. When not `None` and native function
+    calling is active on an LM that supports it, DSPy sets
+    `lm_kwargs["parallel_tool_calls"]`
+  - `None` leaves the provider option unset
+  - Default: `None`
 
 - **callbacks**: `list[BaseCallback] | None`
   - Optional callbacks for monitoring

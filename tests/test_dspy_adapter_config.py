@@ -32,9 +32,12 @@ class TestAdapterConfig:
             assert StructuredOutputAdapter(output_mode=mode).output_mode is mode
 
     def test_inherited_defaults_not_exposed(self):
-        """Inherited defaults the constructor does not expose keep their upstream values."""
+        """Inherited defaults the constructor still does not expose keep upstream values.
+
+        parallel_tool_calls used to be listed here; lsl-2026-09-04-009 promoted it to a
+        constructor option, so it is covered by TestResponseFormatFlags instead.
+        """
         adapter = StructuredOutputAdapter()
-        assert adapter.parallel_tool_calls is None
         # use_json_adapter_fallback is dead for this class: ChatAdapter.__call__
         # short-circuits on isinstance(self, JSONAdapter).
         assert adapter.use_json_adapter_fallback is True
@@ -55,6 +58,45 @@ class TestAdapterConfig:
         adapter = StructuredOutputAdapter(max_recursion_depth=5, formatter_config=config)
         assert adapter.formatter_config.max_recursion_depth == 1
         assert adapter.formatter_config.max_recursion_depth != 5
+
+
+class TestResponseFormatFlags:
+    """The two constructor options added by lsl-2026-09-04-009 (design D3, D4)."""
+
+    def test_use_json_object_response_format_default_is_true(self):
+        """JSONish requests {"type": "json_object"} unless the caller opts out."""
+        assert StructuredOutputAdapter().use_json_object_response_format is True
+
+    def test_use_json_object_response_format_round_trips(self):
+        """Both boolean values are stored verbatim on the instance."""
+        for value in (True, False):
+            adapter = StructuredOutputAdapter(use_json_object_response_format=value)
+            assert adapter.use_json_object_response_format is value
+
+    def test_parallel_tool_calls_default_is_none(self):
+        """None leaves the provider option unset (replaces the old inherited-default test)."""
+        assert StructuredOutputAdapter().parallel_tool_calls is None
+
+    def test_parallel_tool_calls_round_trips(self):
+        """True, False and None each reach the instance via Adapter.__init__."""
+        for value in (True, False, None):
+            adapter = StructuredOutputAdapter(parallel_tool_calls=value)
+            assert adapter.parallel_tool_calls is value
+
+    def test_new_flags_are_appended_after_prompt_layout(self):
+        """Nine positional args land on the nine options, pinning slots 8 and 9."""
+        adapter = StructuredOutputAdapter(
+            None, True, OutputMode.YAML, False, 3, None, PromptLayout.JSON_BLOCK, False, True
+        )
+        assert adapter.callbacks == []
+        assert adapter.use_native_function_calling is True
+        assert adapter.output_mode is OutputMode.YAML
+        assert adapter.include_input_schemas is False
+        assert adapter.max_recursion_depth == 3
+        assert adapter.formatter_config is None
+        assert adapter.prompt_layout is PromptLayout.JSON_BLOCK
+        assert adapter.use_json_object_response_format is False
+        assert adapter.parallel_tool_calls is True
 
 
 class TestOutputMode:
@@ -93,6 +135,8 @@ class TestPromptLayout:
         assert adapter.include_input_schemas is False
         assert adapter.max_recursion_depth == 3
         assert adapter.prompt_layout is PromptLayout.SECTIONS
+        assert adapter.use_json_object_response_format is True
+        assert adapter.parallel_tool_calls is None
 
 
 class TestIncludeInputSchemas:

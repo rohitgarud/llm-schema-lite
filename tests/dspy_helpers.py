@@ -29,6 +29,7 @@ pytest.importorskip("dspy", minversion="3.3.1")
 
 import dspy  # noqa: E402
 from dspy.utils.dummies import DummyLM  # noqa: E402
+from dspy.utils.exceptions import LMError  # noqa: E402
 from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 
 from llm_schema_lite.dspy_integration import (  # noqa: E402
@@ -140,6 +141,49 @@ class ImageIn(dspy.Signature):
     caption: str = dspy.OutputField()
 
 
+def _echo(text: str) -> str:
+    """Echo the input.
+
+    A named function rather than a lambda so ruff stays quiet and the description
+    dspy.Tool derives from it stays stable across runs.
+    """
+    return text
+
+
+ECHO_TOOL = dspy.Tool(_echo, name="echo", desc="Echo the input.")
+
+TOOL_INPUTS = {"question": "?", "tools": [ECHO_TOOL]}
+
+# A ToolCalls payload the adapter's own parser accepts, so a tool-signature call
+# completes in exactly one LM call instead of falling back. See plan correction C2.
+TOOL_ANSWER = {"tool_calls": {"tool_calls": [{"name": "echo", "args": {"text": "hi"}}]}}
+
+
+class ToolCallSig(dspy.Signature):
+    """Tool input plus ToolCalls output.
+
+    The list[Tool] INPUT is mandatory, not decoration: Adapter._call_preprocess
+    (dspy/adapters/base.py:100-105) raises ValueError for a ToolCalls output field with
+    no Tool input.
+    """
+
+    question: str = dspy.InputField()
+    tools: list[dspy.Tool] = dspy.InputField()
+    tool_calls: dspy.ToolCalls = dspy.OutputField()
+
+
+class ToolInputSig(dspy.Signature):
+    """Tool input with NO ToolCalls output.
+
+    The only fixture that discriminates the BROAD tool predicate (_has_tool_fields,
+    JSONish) from the NARROW one (_has_tool_calls_output, JSON mode) — design D5.
+    """
+
+    question: str = dspy.InputField()
+    tools: list[dspy.Tool] = dspy.InputField()
+    answer: str = dspy.OutputField()
+
+
 JSON_OUTPUT_HEADER = "Outputs will be a JSON object with the following fields."
 YAML_OUTPUT_HEADER = "Outputs will be in YAML format with the following fields."
 DSPY_OWNED_TEXT = (
@@ -154,10 +198,15 @@ REQUIRED_LEGEND = {
 
 
 def make_adapter(
-    mode: OutputMode, layout: PromptLayout = PromptLayout.SECTIONS
+    mode: OutputMode, layout: PromptLayout = PromptLayout.SECTIONS, **kwargs: Any
 ) -> StructuredOutputAdapter:
-    """Return a StructuredOutputAdapter configured for the given output mode and layout."""
-    return StructuredOutputAdapter(output_mode=mode, prompt_layout=layout)
+    """Return a StructuredOutputAdapter configured for the given output mode and layout.
+
+    Extra keyword arguments are forwarded verbatim to the constructor (for example
+    use_json_object_response_format=False or parallel_tool_calls=True), which keeps the
+    existing two-positional call sites working untouched.
+    """
+    return StructuredOutputAdapter(output_mode=mode, prompt_layout=layout, **kwargs)
 
 
 class SchemaCapableDummyLM(DummyLM):  # type: ignore[misc]
@@ -190,6 +239,46 @@ class SchemaCapableDummyLM(DummyLM):  # type: ignore[misc]
         return super().forward(*args, **kwargs)
 
 
+class JsonObjectOnlyDummyLM(SchemaCapableDummyLM):  # type: ignore[misc]
+    """Advertises response_format but cannot do structured-output schemas.
+
+    This is LM Studio's shape, and the reason JSON mode must still fall back to
+    {"type": "json_object"} rather than sending a Pydantic model.
+    """
+
+    @property
+    def supports_response_schema(self) -> bool:
+        """Return False, overriding SchemaCapableDummyLM's True."""
+        return False
+
+
+class SchemaCapableRaisingLM(SchemaCapableDummyLM):  # type: ignore[misc]
+    """Schema-capable LM that records lm_kwargs, then raises LMError (design D8).
+
+    Recording happens *before* the raise; otherwise the "exactly one LM call"
+    assertion has nothing to count.
+    """
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        """Record lm_kwargs into lm_kwargs_history, then raise LMError."""
+        self.lm_kwargs_history.append(dict(kwargs))
+        raise LMError("boom")
+
+
+class FunctionCallingDummyLM(SchemaCapableDummyLM):  # type: ignore[misc]
+    """Schema-capable LM that also advertises native function-calling support.
+
+    DummyLM.supports_function_calling is False (dspy/clients/base_lm.py:266-269), which
+    makes parallel_tool_calls unobservable; without this double the pass-through test
+    would pass vacuously.
+    """
+
+    @property
+    def supports_function_calling(self) -> bool:
+        """Return True, overriding DummyLM's False."""
+        return True
+
+
 def call_sync_and_async(
     adapter: StructuredOutputAdapter,
     lm: DummyLM,
@@ -201,6 +290,35 @@ def call_sync_and_async(
     sync_result = adapter(lm, {}, signature, demos, inputs)
     async_result = asyncio.run(adapter.acall(lm, {}, signature, demos, inputs))
     return sync_result, async_result
+
+
+def recorded_calls(lm: DummyLM) -> list[dict[str, Any]]:
+    """Return the lm_kwargs recorded for every call this LM received, oldest first.
+
+    SchemaCapableDummyLM and its subclasses record into lm_kwargs_history; a plain
+    DummyLM does not, so its BaseLM history is read instead. One lookup serves both.
+    """
+    history = getattr(lm, "lm_kwargs_history", None)
+    if history is not None:
+        return history
+    return [entry["kwargs"] for entry in lm.history]
+
+
+def recorded_response_format(lm: DummyLM, index: int = 0) -> Any:
+    """Return the response_format recorded for call `index`, or None if never set."""
+    return recorded_calls(lm)[index].get("response_format")
+
+
+def response_format_projection(value: Any) -> Any:
+    """Project a recorded response_format into something comparable with `==`.
+
+    A class produced by pydantic.create_model is never `==` another instance of itself,
+    so a pydantic class projects to (class name, sorted field names). None and dict
+    values pass through unchanged.
+    """
+    if value is None or isinstance(value, dict):
+        return value
+    return (value.__name__, sorted(value.model_fields))
 
 
 def assert_mode_header(text: str, mode: OutputMode) -> None:

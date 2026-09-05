@@ -11,17 +11,17 @@ from dspy.adapters.chat_adapter import FieldInfoWithName
 from dspy.adapters.json_adapter import JSONAdapter
 from dspy.adapters.types import Type as DSPyType
 from dspy.adapters.types.history import History as DSPyHistory
-from dspy.adapters.types.tool import ToolCalls
+from dspy.adapters.types.tool import Tool, ToolCalls
 from dspy.adapters.utils import (
     format_field_value,
     get_annotation_name,
     parse_value,
     serialize_for_json,
 )
-from dspy.clients.lm import LM
+from dspy.clients.base_lm import BaseLM
 from dspy.signatures.signature import Signature, SignatureMeta
 from dspy.utils.callback import BaseCallback
-from dspy.utils.exceptions import AdapterParseError
+from dspy.utils.exceptions import AdapterParseError, LMError
 from pydantic import TypeAdapter
 from pydantic.fields import FieldInfo
 
@@ -90,6 +90,14 @@ class _FieldBlock:
     legend_needed: bool = False
 
 
+class _ResponseFormatPlan(enum.Enum):
+    """What, if anything, this call should put in lm_kwargs["response_format"]."""
+
+    NONE = "none"  # never write the key
+    JSON_OBJECT = "json_object"  # write {"type": "json_object"}
+    SCHEMA = "schema"  # build the Pydantic model; fall back on failure
+
+
 class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
     """
     Unified adapter for structured output with multiple format support.
@@ -119,6 +127,17 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             own [[ ## field ## ]] block; PromptLayout.JSON_BLOCK renders one JSON-shaped
             block with the schema inlined, unescaped. Input fields always use the
             sectioned form regardless of this option.
+        use_json_object_response_format: JSONish mode only. When True (default) the adapter
+            sends response_format={"type": "json_object"} so the model is constrained to emit
+            a JSON object. Set False for OpenAI-compatible local servers (LM Studio, some
+            Ollama builds) that advertise response_format but reject the json_object type
+            (see stanfordnlp/dspy#1871). Ignored in JSON mode, which reproduces upstream
+            JSONAdapter's structured-outputs behaviour, and in YAML mode, which never sets
+            response_format. Even in JSONish mode, response_format is omitted when the
+            signature carries dspy.Tool / dspy.ToolCalls fields.
+        parallel_tool_calls: Forwarded unchanged to the DSPy adapter base. When not None and
+            native function calling is active on an LM that supports it, DSPy sets
+            lm_kwargs["parallel_tool_calls"]. None (default) leaves the provider option unset.
     """
 
     def __init__(
@@ -130,84 +149,143 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         max_recursion_depth: int = 2,
         formatter_config: FormatterConfig | None = None,
         prompt_layout: PromptLayout = PromptLayout.SECTIONS,
+        use_json_object_response_format: bool = True,
+        parallel_tool_calls: bool | None = None,
     ):
         super().__init__(
-            callbacks=callbacks, use_native_function_calling=use_native_function_calling
+            callbacks=callbacks,
+            use_native_function_calling=use_native_function_calling,
+            parallel_tool_calls=parallel_tool_calls,
         )
         self.output_mode = output_mode
         self.include_input_schemas = include_input_schemas
         self.max_recursion_depth = max_recursion_depth
         self.formatter_config = formatter_config
         self.prompt_layout = prompt_layout
+        self.use_json_object_response_format = use_json_object_response_format
+        # parallel_tool_calls is stored by Adapter.__init__ (dspy/adapters/base.py:73);
+        # do not re-assign it here.
 
     # ==================== Core Call Methods ====================
 
+    def _plan_response_format(self, lm: BaseLM, signature: type[Signature]) -> _ResponseFormatPlan:
+        """Decide what this call should put in lm_kwargs["response_format"].
+
+        Pure: makes no LM call, mutates nothing and raises nothing. The gate order below
+        is load-bearing and must not be reordered for readability.
+
+        Args:
+            lm: The language model the call will be issued against.
+            signature: The DSPy signature being served.
+
+        Returns:
+            NONE to leave lm_kwargs["response_format"] untouched, JSON_OBJECT to write
+            {"type": "json_object"}, or SCHEMA to build the structured-outputs model.
+        """
+        # Gate 0 - upstream's first early exit (dspy/adapters/json_adapter.py:57). An LM
+        # that does not advertise response_format never receives one, in any mode.
+        if "response_format" not in lm.supported_params:
+            return _ResponseFormatPlan.NONE
+
+        if self.output_mode == OutputMode.YAML:
+            # YAML never sets response_format.
+            return _ResponseFormatPlan.NONE
+
+        if self.output_mode == OutputMode.JSONISH:
+            if not self.use_json_object_response_format:
+                return _ResponseFormatPlan.NONE
+            # BROAD predicate (design D5): tools + json_object is the combination that
+            # 400s on OpenAI-compatible servers, so JSONish backs off for *any*
+            # tool-carrying signature, not just the ToolCalls-output case upstream checks.
+            # JSONish deliberately does NOT consult _has_open_ended_mapping: an open-ended
+            # mapping is still a JSON object, and no schema is ever sent in this mode.
+            if _has_tool_fields(signature):
+                return _ResponseFormatPlan.NONE
+            return _ResponseFormatPlan.JSON_OBJECT
+
+        # JSON mode - must equal upstream JSONAdapter 3.3.1 exactly. Same three
+        # conditions, same left-to-right order, NARROW predicate (design D5), and no
+        # consultation of use_json_object_response_format.
+        if (
+            _has_open_ended_mapping(signature)
+            or (not self.use_native_function_calling and _has_tool_calls_output(signature))
+            or not lm.supports_response_schema
+        ):
+            return _ResponseFormatPlan.JSON_OBJECT
+
+        return _ResponseFormatPlan.SCHEMA
+
     def __call__(
         self,
-        lm: LM,
+        lm: BaseLM,
         lm_kwargs: dict[str, Any],
         signature: type[Signature],
         demos: list[dict[str, Any]],
         inputs: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Synchronous call with format-specific handling."""
-        result = self._json_adapter_call_common(
-            lm, lm_kwargs, signature, demos, inputs, super().__call__
-        )
-        if result:
-            return result  # type: ignore[no-any-return]
+        """Synchronous call with format-specific response_format handling."""
+        # Dispatch past JSONAdapter.__call__ to ChatAdapter.__call__: upstream re-derives
+        # and overwrites lm_kwargs["response_format"], which we replace wholesale here.
+        # We remain a JSONAdapter subclass on purpose (isinstance contracts).
+        chat_call = super(JSONAdapter, self).__call__
 
-        # For JSON mode, try structured outputs (OpenAI native)
-        if self.output_mode == OutputMode.JSON:
+        plan = self._plan_response_format(lm, signature)
+
+        if plan is _ResponseFormatPlan.SCHEMA:
             try:
-                structured_output_model = _get_structured_outputs_response_format(
+                lm_kwargs["response_format"] = _get_structured_outputs_response_format(
                     signature, self.use_native_function_calling
                 )
-                lm_kwargs["response_format"] = structured_output_model
-                return super().__call__(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
+                return chat_call(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
+            except LMError:
+                # Provider/backend failure: propagate. Retrying in json_object mode would
+                # issue a second, equally doomed LM call (upstream json_adapter.py:86-89).
+                raise
             except Exception:
                 logger.warning("Failed to use structured output format, falling back to JSON mode.")
                 lm_kwargs["response_format"] = {"type": "json_object"}
-                return super().__call__(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
-        else:
-            # For JSONish and YAML modes
-            if self.output_mode == OutputMode.JSONISH:
-                lm_kwargs["response_format"] = {"type": "json_object"}
-            # For YAML, we don't set response_format (let LLM output YAML naturally)
-            return super().__call__(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
+                return chat_call(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
+
+        if plan is _ResponseFormatPlan.JSON_OBJECT:
+            lm_kwargs["response_format"] = {"type": "json_object"}
+
+        return chat_call(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
 
     async def acall(
         self,
-        lm: LM,
+        lm: BaseLM,
         lm_kwargs: dict[str, Any],
         signature: type[Signature],
         demos: list[dict[str, Any]],
         inputs: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Asynchronous call with format-specific handling."""
-        result = self._json_adapter_call_common(
-            lm, lm_kwargs, signature, demos, inputs, super().acall
-        )
-        if result:
-            return await result  # type: ignore[no-any-return]
+        """Asynchronous call with format-specific response_format handling."""
+        # Dispatch past JSONAdapter.acall to ChatAdapter.acall - see __call__'s comment.
+        # The try/except cannot be shared with __call__: the async LM exception surfaces
+        # at `await`, not at coroutine creation.
+        chat_acall = super(JSONAdapter, self).acall
 
-        # For JSON mode, try structured outputs (OpenAI native)
-        if self.output_mode == OutputMode.JSON:
+        plan = self._plan_response_format(lm, signature)
+
+        if plan is _ResponseFormatPlan.SCHEMA:
             try:
-                structured_output_model = _get_structured_outputs_response_format(
+                lm_kwargs["response_format"] = _get_structured_outputs_response_format(
                     signature, self.use_native_function_calling
                 )
-                lm_kwargs["response_format"] = structured_output_model
-                return await super().acall(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
+                return await chat_acall(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
+            except LMError:
+                # Provider/backend failure: propagate. Retrying in json_object mode would
+                # issue a second, equally doomed LM call (upstream json_adapter.py:113-116).
+                raise
             except Exception:
                 logger.warning("Failed to use structured output format, falling back to JSON mode.")
                 lm_kwargs["response_format"] = {"type": "json_object"}
-                return await super().acall(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
-        else:
-            # For JSONish and YAML modes
-            if self.output_mode == OutputMode.JSONISH:
-                lm_kwargs["response_format"] = {"type": "json_object"}
-            return await super().acall(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
+                return await chat_acall(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
+
+        if plan is _ResponseFormatPlan.JSON_OBJECT:
+            lm_kwargs["response_format"] = {"type": "json_object"}
+
+        return await chat_acall(lm, lm_kwargs, signature, demos, inputs)  # type: ignore[no-any-return]
 
     # ==================== Schema & Field Formatting ====================
 
@@ -696,13 +774,74 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
 # ==================== Helper Functions ====================
 
 
+def _has_open_ended_mapping(signature: SignatureMeta) -> bool:
+    """Return True if any output field is an open-ended mapping (``dict[...]``).
+
+    Vendored from DSPy 3.3.1 ``json_adapter.py:28-38``. Structured Outputs require
+    explicit properties, so such fields are incompatible. The name deliberately matches
+    upstream's so the two can be diffed mechanically.
+
+    Args:
+        signature: The DSPy signature to inspect.
+
+    Returns:
+        True if at least one output field is annotated with a ``dict`` origin.
+    """
+    return any(get_origin(f.annotation) is dict for f in signature.output_fields.values())
+
+
+def _has_tool_calls_output(signature: SignatureMeta) -> bool:
+    """Return True if any OUTPUT field is annotated ``dspy.ToolCalls``.
+
+    NARROW predicate - upstream's inline check (``json_adapter.py:60``). Used by JSON
+    mode only, where byte-for-byte upstream parity is a hard requirement.
+
+    Args:
+        signature: The DSPy signature to inspect.
+
+    Returns:
+        True if at least one output field is annotated ``ToolCalls``.
+    """
+    return any(f.annotation == ToolCalls for f in signature.output_fields.values())
+
+
+def _has_tool_fields(signature: SignatureMeta) -> bool:
+    """Return True if the signature carries tools at all.
+
+    That is: a ``dspy.Tool`` or ``list[dspy.Tool]`` INPUT field, or a ``dspy.ToolCalls``
+    OUTPUT field.
+
+    BROAD predicate - ours, not upstream's. Used by JSONish mode only. A ``Tool`` input
+    alone is enough for DSPy to inject ``lm_kwargs["tools"]``
+    (``dspy/adapters/base.py:114``), and tools + ``json_object`` is the provider
+    combination that 400s, so JSONish backs off for the input-only case too.
+
+    Args:
+        signature: The DSPy signature to inspect.
+
+    Returns:
+        True if the signature declares tools on either side.
+    """
+    if _has_tool_calls_output(signature):
+        return True
+    for field in signature.input_fields.values():
+        annotation = field.annotation
+        if annotation == Tool:
+            return True
+        args = getattr(annotation, "__args__", ())
+        if get_origin(annotation) is list and args and args[0] == Tool:
+            return True
+    return False
+
+
 def _get_structured_outputs_response_format(
     signature: SignatureMeta,
     use_native_function_calling: bool = True,
 ) -> type[pydantic.BaseModel]:
     """
     Builds a Pydantic model from a DSPy signature's output_fields for structured outputs.
-    (Copied from JSONAdapter for compatibility with DSPy 3.0.3)
+    Vendored: kept as our own copy even after DSPy 3.3.1's upstream helper changed shape,
+    per lsl-2026-09-04-009 decision D6 (the package always owns this builder).
     """
     for name, field in signature.output_fields.items():
         annotation = field.annotation
