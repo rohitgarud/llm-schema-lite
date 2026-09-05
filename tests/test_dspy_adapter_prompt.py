@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("dspy", minversion="3.3.1")
 
 import dspy  # noqa: E402
+from dspy.adapters.json_adapter import JSONAdapter  # noqa: E402
+from dspy.adapters.utils import translate_field_type  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
+from llm_schema_lite import FormatterConfig  # noqa: E402
 from llm_schema_lite.dspy_integration import (  # noqa: E402
     OutputMode,
     PromptLayout,
@@ -19,8 +24,12 @@ from tests.dspy_helpers import (  # noqa: E402
     Choices,
     Extract,
     HistoryIn,
+    ImageListIn,
     ListOut,
+    OptImageIn,
     QAOptional,
+    ToolCallSig,
+    ToolInputSig,
     assert_has_field_marker,
     assert_message_roles,
     assert_mode_header,
@@ -44,6 +53,7 @@ NOTE_PARSEABLE = (
     "# note: the value you produce must be parseable according to the following schema:"
 )
 NOTE_FLOAT = "# note: the value you produce must be a single float value"
+NOTE_TOOLCALLS_HINT = '{"tool_calls": [{"name": "...", "args": {...}}]}'
 
 
 class TestFieldStructure:
@@ -158,6 +168,89 @@ class TestFieldStructure:
         assert "{history}        # note:" not in out
         assert "conversation history is a list of messages" not in out
 
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_tool_calls_output_carries_a_schema_note(self, mode, layout):
+        """A ToolCalls OUTPUT is no longer a bare placeholder in any mode/layout."""
+        out = make_adapter(mode, layout=layout).format_field_structure(ToolCallSig)
+        assert "{tool_calls}        # note:" in out
+
+    def test_tool_calls_json_mode_note_stem_matches_upstream(self):
+        """JSON mode carries our verbatim JSON-schema note stem for tool_calls."""
+        out = make_adapter(OutputMode.JSON).format_field_structure(ToolCallSig)
+        assert NOTE_JSON_SCHEMA in out
+
+    def test_tool_calls_json_schema_is_object_equivalent_to_upstream(self):
+        """Our tool_calls JSON schema is object-equal to upstream JSONAdapter's (AC-1)."""
+        out = make_adapter(OutputMode.JSON).format_field_structure(ToolCallSig)
+        ours = json.loads(out.split(NOTE_JSON_SCHEMA, 1)[1].splitlines()[0].strip())
+        upstream = translate_field_type("tool_calls", ToolCallSig.output_fields["tool_calls"])
+        theirs = json.loads(upstream.split(NOTE_JSON_SCHEMA, 1)[1].splitlines()[0].strip())
+        assert ours == theirs
+
+    def test_tool_calls_simplified_schema_in_jsonish(self):
+        """JSONish mode renders our simplified ToolCalls schema block."""
+        out = make_adapter(OutputMode.JSONISH).format_field_structure(ToolCallSig)
+        assert "//Title: ToolCalls" in out
+        assert "tool_calls*: [{" in out
+
+    def test_tool_calls_simplified_schema_in_yaml(self):
+        """YAML mode renders our simplified ToolCalls schema block."""
+        out = make_adapter(OutputMode.YAML).format_field_structure(ToolCallSig)
+        assert "# Title: ToolCalls" in out
+        assert "tool_calls*:" in out
+        assert "- name*: string" in out
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_tool_input_field_carries_no_note(self, mode, layout):
+        """list[dspy.Tool] inputs are carved out: no note on the {tools} placeholder."""
+        for signature in (ToolCallSig, ToolInputSig):
+            out = make_adapter(mode, layout=layout).format_field_structure(signature)
+            assert "{tools}        # note:" not in out
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_image_list_input_carries_no_note(self, mode, layout):
+        """list[dspy.Image] inputs are carved out: no note and no legend (AC-3)."""
+        out = make_adapter(mode, layout=layout).format_field_structure(ImageListIn)
+        assert "{images}        # note:" not in out
+        assert "are required" not in out
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_optional_image_input_carries_no_note(self, mode, layout):
+        """Optional[dspy.Image] inputs are carved out: no note and no legend."""
+        out = make_adapter(mode, layout=layout).format_field_structure(OptImageIn)
+        assert "{image}        # note:" not in out
+        assert "are required" not in out
+
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_ordinary_model_inputs_still_carry_notes(self, mode):
+        """Ordinary Pydantic inputs keep their notes after the carve-out change."""
+        out = make_adapter(mode).format_field_structure(Extract)
+        assert_note_clause(out, "meta")
+        if mode == OutputMode.JSON:
+            assert NOTE_INPUT_JSON_SCHEMA in out
+        else:
+            assert NOTE_INPUT_SCHEMA in out
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode,prefix", [(OutputMode.JSONISH, "//"), (OutputMode.YAML, "#")])
+    def test_default_required_marker_legend_unaffected(self, mode, prefix, layout):
+        """The default '*' marker still hoists exactly one legend line (C3 guard)."""
+        out = make_adapter(mode, layout=layout).format_field_structure(Extract)
+        assert out.count(f"{prefix} Fields marked with * are required") == 1
+
+    @pytest.mark.parametrize("layout", list(PromptLayout))
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_empty_required_marker_emits_no_legend(self, mode, layout):
+        """An empty required_marker disables markers, so no legend is emitted (AC-4)."""
+        out = make_adapter(
+            mode, layout=layout, formatter_config=FormatterConfig(required_marker="")
+        ).format_field_structure(Extract)
+        assert "are required" not in out
+
 
 EXPECTED_EXTRACT_JSON = (
     "Respond with a JSON object in the following order of fields: "
@@ -171,6 +264,16 @@ EXPECTED_EXTRACT_YAML = (
 )
 EXPECTED_QA_JSON = "Respond with a JSON object in the following order of fields: `answer`."
 EXPECTED_QA_YAML = "Respond with a YAML-style object in the following order of fields: `answer`."
+EXPECTED_TOOLCALLS_JSON = (
+    "Respond with a JSON object in the following order of fields: "
+    '`tool_calls` (must be a JSON object like {"tool_calls": [{"name": "...", '
+    '"args": {...}}]}).'
+)
+EXPECTED_TOOLCALLS_YAML = (
+    "Respond with a YAML-style object in the following order of fields: "
+    '`tool_calls` (must be a JSON object like {"tool_calls": [{"name": "...", '
+    '"args": {...}}]}).'
+)
 
 
 class TestOutputRequirements:
@@ -205,6 +308,43 @@ class TestOutputRequirements:
         )
         assert (
             make_adapter(OutputMode.YAML).user_message_output_requirements(QA) == EXPECTED_QA_YAML
+        )
+
+    def test_tool_calls_requirements_matches_upstream_json_adapter(self):
+        """JSON mode reproduces upstream JSONAdapter's ToolCalls sentence byte for byte."""
+        assert make_adapter(OutputMode.JSON).user_message_output_requirements(
+            ToolCallSig
+        ) == JSONAdapter().user_message_output_requirements(ToolCallSig)
+
+    @pytest.mark.parametrize("mode", list(OutputMode))
+    def test_tool_calls_requirements_hint_in_all_modes(self, mode):
+        """Every mode carries upstream's ToolCalls hint with the mode-correct prefix."""
+        sentence = make_adapter(mode).user_message_output_requirements(ToolCallSig)
+        assert NOTE_TOOLCALLS_HINT in sentence
+        if mode == OutputMode.YAML:
+            assert sentence == EXPECTED_TOOLCALLS_YAML
+        else:
+            assert sentence == EXPECTED_TOOLCALLS_JSON
+
+    def test_non_tool_calls_requirements_unchanged(self):
+        """Non-ToolCalls signatures are untouched by the new type_info branch."""
+        assert (
+            make_adapter(OutputMode.JSON).user_message_output_requirements(Extract)
+            == EXPECTED_EXTRACT_JSON
+        )
+        assert (
+            make_adapter(OutputMode.YAML).user_message_output_requirements(Extract)
+            == EXPECTED_EXTRACT_YAML
+        )
+        assert (
+            make_adapter(OutputMode.JSON).user_message_output_requirements(QA) == EXPECTED_QA_JSON
+        )
+        assert (
+            make_adapter(OutputMode.YAML).user_message_output_requirements(QA) == EXPECTED_QA_YAML
+        )
+        assert (
+            make_adapter(OutputMode.JSON).user_message_output_requirements(ToolInputSig)
+            == "Respond with a JSON object in the following order of fields: `answer`."
         )
 
 

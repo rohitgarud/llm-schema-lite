@@ -528,8 +528,11 @@ print(loads("answer: '42'\nconfidence: 0.9\n", mode="yaml", repair=True))
   3. the verbose `json.dumps` JSON Schema — the tier entered directly in `OutputMode.JSON`
   4. the literal text `must be a valid <name>`
 - Scalar annotations never get a schema block, only a note (`bool` → "must be True or
-  False", `Enum` → "must be one of: a; b", and so on). `dspy.Type` subclasses (Image,
-  Audio, Tool, ToolCalls, Code) and `dspy.History` emit nothing, matching upstream
+  False", `Enum` → "must be one of: a; b", and so on). Annotations that are — or wrap,
+  as in `list[...]` / `Optional[...]` / `dict[str, ...]` — a `dspy.Type` (Image, Audio,
+  Tool, Code) or `dspy.History` emit nothing, matching upstream. The one exception is a
+  `dspy.ToolCalls` **output** field, which falls through to the normal schema chain so
+  the prompt carries the same tool-call guidance upstream `JSONAdapter` emits
 
 ## Token Efficiency Comparison
 

@@ -420,13 +420,31 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         True iff a whole line equals ``legend_line`` (the literal the formatters emit
         per simplified schema), OR any line carries the marker in field-key position.
         The second disjunct is required because the JSON-schema-dict path emits ``*``
-        markers without ever emitting a legend line of its own.
+        markers without ever emitting a legend line of its own. An empty marker means
+        "no field is markable," so no legend can ever be needed.
         """
+        if not marker:
+            return False
         lines = schema_text.splitlines()
         if any(line.strip() == legend_line for line in lines):
             return True
         pattern = re.compile(r"^\s*[^\s:]+" + re.escape(marker) + r"\s*:")
         return any(pattern.match(line) for line in lines)
+
+    @staticmethod
+    def _is_dspy_special_annotation(annotation: Any) -> bool:
+        """True iff the annotation is, or contains, a dspy.Type or dspy.History.
+
+        Uses the public ``DSPyType.extract_custom_type_from_annotation`` classmethod,
+        which walks arbitrarily nested annotations (``list[X]``, ``Optional[X]``,
+        ``dict[str, X]``) to find any wrapped ``dspy.Type`` subclass (Image, Audio,
+        Tool, ToolCalls, Code). ``dspy.History`` is not a ``Type`` subclass, so it is
+        checked separately via ``inspect.isclass``/``issubclass`` - this second check
+        is load-bearing, not redundant.
+        """
+        if DSPyType.extract_custom_type_from_annotation(annotation):
+            return True
+        return inspect.isclass(annotation) and issubclass(annotation, DSPyHistory)
 
     def _describe(
         self,
@@ -441,10 +459,12 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         if role == "input" and not self.include_input_schemas:
             return _FieldBlock(name=name, note_text=None, schema_text=None)
 
-        # 2. Unconditional carve-out for dspy.Type subclasses and dspy.History, which
-        #    upstream JSONAdapter also emits nothing for (dspy.Image, dspy.Audio,
-        #    dspy.Tool, ToolCalls, dspy.Code are Type subclasses; History is not).
-        if inspect.isclass(field_type) and issubclass(field_type, DSPyType | DSPyHistory):
+        # 2. Carve-out for dspy.Type-wrapping / dspy.History annotations, EXCEPT a
+        #    ToolCalls OUTPUT field, which falls through to the normal schema chain
+        #    (upstream JSONAdapter renders a full schema for ToolCalls).
+        if self._is_dspy_special_annotation(field_type) and not (
+            role == "output" and field_type == ToolCalls
+        ):
             return _FieldBlock(name=name, note_text=None, schema_text=None)
 
         voice = "the value you produce " if role == "output" else "this value "
@@ -617,6 +637,11 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         """Specify output format requirements based on mode."""
 
         def type_info(v: Any) -> str:
+            if v.annotation == ToolCalls:
+                return (
+                    ' (must be a JSON object like {"tool_calls": '
+                    '[{"name": "...", "args": {...}}]})'
+                )
             return (
                 f" (must be formatted as a valid Python {get_annotation_name(v.annotation)})"
                 if v.annotation is not str

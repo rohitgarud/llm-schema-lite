@@ -158,6 +158,20 @@ class ImageIn(dspy.Signature):
     caption: str = dspy.OutputField()
 
 
+class ImageListIn(dspy.Signature):
+    """Probe list[dspy.Image] input carve-out (lsl-2026-09-05-007, AC-3)."""
+
+    images: list[dspy.Image] = dspy.InputField()
+    caption: str = dspy.OutputField()
+
+
+class OptImageIn(dspy.Signature):
+    """Probe Optional[dspy.Image] input carve-out (lsl-2026-09-05-007, ticket Risk)."""
+
+    image: dspy.Image | None = dspy.InputField()
+    caption: str = dspy.OutputField()
+
+
 def _echo(text: str) -> str:
     """Echo the input.
 
