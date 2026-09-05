@@ -177,7 +177,7 @@ class YAMLFormatter(BaseFormatter):
             return dict(pairs)
         return self.process_property(value_schema)
 
-    def _dump_yaml(self, data: dict[str, Any]) -> str:
+    def _dump_yaml(self, data: dict[str, Any] | list[Any]) -> str:
         """
         Dump a dictionary to YAML format, then resolve deferred comment markers.
 
@@ -185,6 +185,8 @@ class YAMLFormatter(BaseFormatter):
         marker it contains no ``": "`` and no ``" #"``, so PyYAML emits it as a bare plain
         scalar on one physical line. Substituting the comment text before the dump would
         reintroduce both and PyYAML would re-quote (and possibly fold) the line.
+
+        A root array serializes as a YAML sequence, not a mapping.
 
         Args:
             data: Dictionary to serialize to YAML.
@@ -613,6 +615,38 @@ class YAMLFormatter(BaseFormatter):
         # Rule 5 -- not block-eligible.
         return None, []
 
+    def _root_structural_render(self) -> str | None:
+        """Render a non-object ROOT in BLOCK form, or None to fall through to today's paths.
+
+        Delegates the whole shape decision to ``_structural_block`` (:558), which already
+        encodes exactly the rule root parity demands, at the PROPERTY level: rule 1 a ``$ref``
+        to an object def, rule 2 a two-member ``X | None`` whose non-null half is
+        block-eligible, rule 3 an array of block-eligible items, rule 4 an inline object.
+        Scalar items, tuples (``prefixItems``) and pure mappings decline on their own and
+        keep today's rendering untouched.
+
+        ``structural_notes`` (already ordered ``OR null`` first, then the closed-world note)
+        become one ``# <note>`` comment line each, immediately above the body with no blank
+        line -- the root's stand-in for the key slot a property would have used.
+
+        Returns:
+            The assembled block, or None when ``_structural_block`` declines.
+        """
+        block, notes = self._structural_block(self.schema)
+        if block is None:
+            return None
+        info, legend = self.root_decorations()
+        parts: list[str] = []
+        if info:
+            parts.append(info)
+        if legend:
+            parts.append(legend)
+        body = self._dump_yaml(block)
+        for note in reversed(notes):
+            body = f"{self.comment_prefix} {note}\n{body}"
+        parts.append(body)
+        return self._add_prefix("\n".join(parts))
+
     @staticmethod
     def _token_owned_metadata_keys(value: dict[str, Any]) -> tuple[str, ...]:
         """Metadata keys this formatter's TYPE TOKEN already states for ``value``.
@@ -877,18 +911,15 @@ class YAMLFormatter(BaseFormatter):
         if not self.include_metadata:
             return ""
         comments = []
+        schema = self.effective_root_schema()
+        if "title" in schema and schema["title"] and self._should_include_metadata("title"):
+            comments.append(f"Title: {schema['title']}")
         if (
-            "title" in self.schema
-            and self.schema["title"]
-            and self._should_include_metadata("title")
-        ):
-            comments.append(f"Title: {self.schema['title']}")
-        if (
-            "description" in self.schema
-            and self.schema["description"]
+            "description" in schema
+            and schema["description"]
             and self._should_include_metadata("description")
         ):
-            comments.append(f"Description: {self.schema['description']}")
+            comments.append(f"Description: {schema['description']}")
         if comments:
             # D8: a multi-line ``description`` puts real newlines inside ``body``. Prefixing
             # only the joined string leaves every line after the first as a bare, uncommented
@@ -902,7 +933,7 @@ class YAMLFormatter(BaseFormatter):
         """Required fields comment with configurable marker."""
         if not self.include_metadata:
             return ""
-        if not self.schema.get("required", None):
+        if not self.effective_root_schema().get("required", None):
             return ""
         marker = self.config.required_marker
         return f"{self.comment_prefix} Fields marked with {marker} are required\n"
@@ -1011,14 +1042,13 @@ class YAMLFormatter(BaseFormatter):
             main_parts = []
 
             # Add schema info comment if present
-            schema_info_comment = self.get_schema_info_comment()
-            if schema_info_comment:
-                main_parts.append(schema_info_comment)
+            info, legend = self.root_decorations()
+            if info:
+                main_parts.append(info)
 
             # Add required fields comment if there are required fields
-            required_comment = self.get_required_fields_comment()
-            if required_comment:
-                main_parts.append(required_comment)
+            if legend:
+                main_parts.append(legend)
 
             # Use cached processed data for main content
             main_parts.append(self._dump_yaml(self._processed_data))
@@ -1045,6 +1075,9 @@ class YAMLFormatter(BaseFormatter):
 
         # Second branch: no properties - handle schema-level-only cases
         if not self.properties:
+            rendered = self._root_structural_render()
+            if rendered is not None:
+                return rendered
             # Check for complex additionalProperties in empty object schemas
             if self.schema.get("type") == "object":
                 shape = classify_container(self.schema)
@@ -1142,14 +1175,13 @@ class YAMLFormatter(BaseFormatter):
         main_parts = []
 
         # Add schema info comment if present
-        schema_info_comment = self.get_schema_info_comment()
-        if schema_info_comment:
-            main_parts.append(schema_info_comment)
+        info, legend = self.root_decorations()
+        if info:
+            main_parts.append(info)
 
         # Add required fields comment if there are required fields
-        required_comment = self.get_required_fields_comment()
-        if required_comment:
-            main_parts.append(required_comment)
+        if legend:
+            main_parts.append(legend)
 
         # Process properties and cache the result
         with self._expanding(self._root_ref_key):

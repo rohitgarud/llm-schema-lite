@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.yaml_formatter import YAMLFormatter
@@ -1314,6 +1314,11 @@ def test_yaml_recursive_list_golden_default_depth():
     result = simplify_schema(_ListNode, format_type="yaml").to_string()
 
     expected = (
+        "# Title: _ListNode, Description: Self-referencing model behind the D4"
+        " root-unwrap goldens.\n"
+        "\n"
+        "# Fields marked with * are required\n"
+        "\n"
         "label*: string\n"
         "kids:\n"
         "- label*: string\n"
@@ -1788,3 +1793,155 @@ def test_yaml_hash_pattern_model_whole_render_is_stable() -> None:
         "shade: 'string (PATTERN: ^#[0-9a-f]{3,6}$)'  # (default='#ffffff')\n"
         "spaced*: 'string (PATTERN: ^a #b$)'  # Whitespace before the hash\n"
     ).rstrip("\n")
+
+
+class Item(BaseModel):
+    name: str = Field(description="Item name")
+    qty: int = Field(default=1, description="Quantity")
+
+
+class Node(BaseModel):
+    """A tree node."""
+
+    value: str = Field(description="Node value")
+    children: list[Node] = Field(default_factory=list, description="Child nodes")
+
+
+Node.model_rebuild()
+
+
+@pytest.mark.parametrize(
+    ("annotation", "expected"),
+    [
+        (
+            list[Item],
+            "- name*: string  # Item name\n  qty: int  # Quantity, (default=1)",
+        ),
+        (
+            Item | None,
+            "# OR null\nname*: string  # Item name\nqty: int  # Quantity, (default=1)",
+        ),
+        (
+            list[Item] | None,
+            "# OR null\n- name*: string  # Item name\n  qty: int  # Quantity, (default=1)",
+        ),
+        (
+            Node,
+            "# Title: Node, Description: A tree node.\n"
+            "\n"
+            "# Fields marked with * are required\n"
+            "\n"
+            "value*: string  # Node value\n"
+            "children:  # Child nodes\n"
+            "- value*: string  # Node value\n"
+            "  children: list[object]  # recursive: Node; Child nodes",
+        ),
+        (list[list[int]], "list[list[int]]"),
+        (tuple[int, str], "tuple[int, string]"),
+        (
+            dict[str, Item],
+            "<string>:\n  name*: string  # Item name\n  qty: int  # Quantity, (default=1)",
+        ),
+        (
+            Item | str | None,
+            "{name*: string, qty: int} OR string OR null  # Item name; Quantity, (default=1)",
+        ),
+    ],
+)
+def test_root_shape_golden(annotation: Any, expected: str) -> None:
+    """Whole-string golden for a root-level shape, byte-for-byte against a measured run."""
+    from llm_schema_lite import simplify_schema
+
+    result = simplify_schema(TypeAdapter(annotation).json_schema(), format_type="yaml").to_string()
+
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        list[Item],
+        Item | None,
+        list[Item] | None,
+        dict[str, Item],
+        Node,
+    ],
+)
+def test_root_render_matches_nested_rendering(annotation: Any) -> None:
+    """Root-parity companion (decision A-2): every substantive root line also appears nested.
+
+    Part (a) -- whole-string equality against the pinned golden -- lives in
+    ``test_root_shape_golden``. This is part (b): every non-comment, non-blank line of the
+    root render, whitespace-stripped and with a trailing ``,`` stripped, occurs as a substring
+    of the render of the same shape embedded as a nested property ``f``.
+    """
+    from llm_schema_lite import simplify_schema
+
+    root_render = simplify_schema(
+        TypeAdapter(annotation).json_schema(), format_type="yaml"
+    ).to_string()
+
+    root_schema = TypeAdapter(annotation).json_schema()
+    defs = root_schema.pop("$defs", None)
+    nested = {"type": "object", "properties": {"f": root_schema}}
+    if defs is not None:
+        nested["$defs"] = defs
+    nested_render = simplify_schema(nested, format_type="yaml").to_string()
+
+    for line in root_render.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        normalized = stripped.rstrip(",")
+        assert normalized in nested_render, f"{normalized!r} not found in nested render"
+
+
+def test_list_of_optional_differs_from_optional_list() -> None:
+    """AC: ``list[Item | None]`` and ``list[Item] | None`` must not collapse to one rendering.
+
+    Reference values (design v2 §4.9):
+      - ``list[Item | None]`` ->
+        ``"list[{name*: string, qty: int} OR null]  # Item name; Quantity, (default=1)"``
+      - ``list[Item] | None`` ->
+        ``"# OR null\\n- name*: string  # Item name\\n  qty: int  # Quantity, (default=1)"``
+    """
+    from llm_schema_lite import simplify_schema
+
+    render_a = simplify_schema(
+        TypeAdapter(list[Item | None]).json_schema(), format_type="yaml"
+    ).to_string()
+    render_b = simplify_schema(
+        TypeAdapter(list[Item] | None).json_schema(), format_type="yaml"
+    ).to_string()
+
+    assert render_a != render_b
+
+
+def test_every_titled_root_is_decorated(
+    all_pydantic_models: list[tuple[str, type[BaseModel]]],
+) -> None:
+    """The invariant that makes root cause #4 unrepeatable -- every root return path
+    reaches ``root_decorations()``.
+    """
+    from llm_schema_lite import simplify_schema
+    from llm_schema_lite.schema_normalization import normalize_schema_titles
+
+    exercised = 0
+    for name, model in all_pydantic_models:
+        # Effective title, i.e. after the pre-existing auto-title-stripping normalization
+        # every formatter applies -- see `formatter_helpers.assert_schema_info_comment_presence`
+        # for the same computation. `model_json_schema()` always sets a raw root `title`
+        # (Pydantic defaults it to the class name), so a *raw* truthy-title filter would
+        # select every model in the corpus, including ones whose title is legitimately
+        # dropped before rendering by unrelated, already-landed behaviour.
+        schema = normalize_schema_titles(model.model_json_schema())
+        title = schema.get("title")
+        if not schema.get("properties") or not title:
+            continue
+        exercised += 1
+        result = simplify_schema(model, format_type="yaml").to_string()
+        assert result.startswith(
+            f"# Title: {title}"
+        ), f"{name}: expected render to start with '# Title: {title}', got {result[:80]!r}"
+
+    assert exercised > 0, "guard exercised zero models -- fixture or filter is broken"

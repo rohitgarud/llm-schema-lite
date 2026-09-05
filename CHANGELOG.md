@@ -62,6 +62,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Root-level `list[Model]`, `Model | None` and `list[Model] | None` schemas now render
+  with the same block conventions as nested ones.** JSONish no longer leaks a Python dict
+  repr at the root, no longer drops `OR null` for a root `anyOf`, and no longer prints a
+  stray `// Array of (items):` header; YAML renders root arrays and root optionals as
+  block form with per-field metadata on its own field and nullability as a leading
+  `# OR null`. (`lsl-2026-09-05-002`)
+- **A recursive root model keeps its title/docstring header and required-marker legend**
+  in all three formats, and TypeScript no longer emits a duplicated `interface <Def>`
+  beside `interface Schema`. (`lsl-2026-09-05-002`)
+- **The DSPy adapter's required-marker legend now appears for YAML block sequences**
+  (`- name*: …`), closing a latent gap that also affected nested list blocks. The adapter's
+  temporary tier-2 root-array unwrap is deleted — the formatters own root-array rendering
+  now, and the adapter's rendered block equals `simplify_schema(...).to_string()` for every
+  probed shape in both modes. (`lsl-2026-09-05-002`)
 - Stray trailing quote after schema comments in JSONish output. (`32145bb`)
 - Pydantic auto-generated titles no longer leak into comments: property titles are dropped
   at every depth when the title merely restates the field name, and the root title is

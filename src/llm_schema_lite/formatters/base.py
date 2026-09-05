@@ -291,6 +291,42 @@ class BaseFormatter(ABC):
 
         # Pre-warm cache for common patterns
 
+    def _resolve_root_ref(self) -> tuple[str, dict[str, Any]] | None:
+        """Return ``(def_name, def_schema)`` when the root is a bare ``$ref`` to an object def.
+
+        The side-effect-free half of :meth:`_adopt_root_ref`. Pydantic emits
+        ``{"$defs": ..., "$ref": "#/$defs/T"}`` (no ``properties``) for every root model that
+        participates in a cycle; this answers "which def IS the root?" without mutating
+        ``self.properties`` / ``self.required_fields``.
+
+        Exists as a separate query because JSONish must read the effective root's metadata but
+        must NOT adopt its properties (it renders the root through
+        ``_process_schema_recursive``, not through ``self.properties``), so it cannot call
+        ``_adopt_root_ref``.
+
+        The inline-properties guard reads ``self.schema["properties"]``, NOT the mutable
+        ``self.properties`` attribute: ``__init__`` seeds the latter from the former, so the two
+        are identical before adoption, but ``_adopt_root_ref`` overwrites ``self.properties``
+        with the resolved def's. Guarding on the attribute would make this query answer None to
+        every caller that runs *after* adoption -- i.e. every ``effective_root_schema()`` call in
+        YAML and TypeScript -- which is the opposite of being side-effect-free.
+
+        Returns:
+            ``(ref_key, ref_def)``, or None when the root is not a bare ``$ref`` to a def with
+            ``properties``.
+        """
+        ref_str = self.schema.get("$ref", "")
+        if not ref_str or self.schema.get("properties"):
+            return None
+        ref_match = self.REF_PATTERN.search(ref_str)
+        if not ref_match:
+            return None
+        ref_key = ref_match.group(1)
+        ref_def = self.defs.get(ref_key)
+        if not isinstance(ref_def, dict) or not ref_def.get("properties"):
+            return None
+        return ref_key, ref_def
+
     def _adopt_root_ref(self) -> str | None:
         """Adopt a root-level ``$ref``'s definition as the effective root.
 
@@ -301,16 +337,10 @@ class BaseFormatter(ABC):
         Mutates ``self.properties`` / ``self.required_fields`` and returns the def name,
         or returns None when the schema is not a bare root ``$ref`` to an object def.
         """
-        ref_str = self.schema.get("$ref", "")
-        if not ref_str or self.properties:
+        resolved = self._resolve_root_ref()
+        if resolved is None:
             return None
-        ref_match = self.REF_PATTERN.search(ref_str)
-        if not ref_match:
-            return None
-        ref_key = ref_match.group(1)
-        ref_def = self.defs.get(ref_key)
-        if not isinstance(ref_def, dict) or not ref_def.get("properties"):
-            return None
+        ref_key, ref_def = resolved
         self.properties = ref_def["properties"]
         self.required_fields = set(ref_def.get("required", []))
         return ref_key
@@ -638,6 +668,36 @@ class BaseFormatter(ABC):
         """
         return self.config.includes(key)
 
+    def effective_root_schema(self) -> dict[str, Any]:
+        """The schema whose ``title`` / ``description`` / ``required`` describe the ROOT.
+
+        ``self.schema`` for an ordinary root; the resolved def when the root is a bare
+        ``$ref``. THE single source for every root-level header and legend decision, in all
+        three formatters. Replaces the pre-existing three-way split in which base read
+        ``self.required_fields`` while JSONish and YAML read ``self.schema["required"]``.
+
+        Returns:
+            ``self._resolve_root_ref()[1]`` when that is not None, else ``self.schema``.
+        """
+        resolved = self._resolve_root_ref()
+        return resolved[1] if resolved is not None else self.schema
+
+    def root_decorations(self) -> tuple[str, str]:
+        """The ``(info_comment, legend_comment)`` pair a ROOT render owes, decided once.
+
+        The shared DECISION seam. Assembly -- separators, trailing newlines, surrounding
+        blank lines -- deliberately stays in each formatter's ``transform_schema``, because
+        the three formats disagree about it and that disagreement is pinned by existing
+        goldens.
+
+        Every root return path in every formatter goes through this call, including the
+        degenerate branches that skip decoration today.
+
+        Returns:
+            ``(self.get_schema_info_comment(), self.get_required_fields_comment())``.
+        """
+        return self.get_schema_info_comment(), self.get_required_fields_comment()
+
     def get_required_fields_comment(self) -> str:
         """
         Get a comment explaining the required field notation.
@@ -647,7 +707,7 @@ class BaseFormatter(ABC):
         """
         if not self.include_metadata:
             return ""
-        if not self.required_fields:
+        if not self.effective_root_schema().get("required"):
             return ""
         marker = self.config.required_marker
         return f"{self.comment_prefix} Fields marked with {marker} are required"
@@ -663,20 +723,17 @@ class BaseFormatter(ABC):
             return ""
 
         comments = []
+        schema = self.effective_root_schema()
+
+        if "title" in schema and schema["title"] and self._should_include_metadata("title"):
+            comments.append(f"Title: {schema['title']}")
 
         if (
-            "title" in self.schema
-            and self.schema["title"]
-            and self._should_include_metadata("title")
-        ):
-            comments.append(f"Title: {self.schema['title']}")
-
-        if (
-            "description" in self.schema
-            and self.schema["description"]
+            "description" in schema
+            and schema["description"]
             and self._should_include_metadata("description")
         ):
-            comments.append(f"Description: {self.schema['description']}")
+            comments.append(f"Description: {schema['description']}")
 
         if comments:
             return f"{self.comment_prefix} {', '.join(comments)}"

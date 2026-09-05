@@ -422,13 +422,19 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         The second disjunct is required because the JSON-schema-dict path emits ``*``
         markers without ever emitting a legend line of its own. An empty marker means
         "no field is markable," so no legend can ever be needed.
+
+        The field-key pattern tolerates an optional leading YAML sequence dash
+        (``- name*: string``): this is not an adapter artifact being tolerated, it is
+        recognizing a shape the YAML formatter itself emits natively for every root
+        array of objects (and has always emitted for nested ones), so this closes a
+        pre-existing latent gap in the marker scan, not merely a root-shape one.
         """
         if not marker:
             return False
         lines = schema_text.splitlines()
         if any(line.strip() == legend_line for line in lines):
             return True
-        pattern = re.compile(r"^\s*[^\s:]+" + re.escape(marker) + r"\s*:")
+        pattern = re.compile(r"^\s*(?:-\s+)?[^\s:]+" + re.escape(marker) + r"\s*:")
         return any(pattern.match(line) for line in lines)
 
     @staticmethod
@@ -552,26 +558,10 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                 logger.debug(f"simplify_schema failed for {annotation}: {exc}")
 
             # Tier 2: simplify_schema also accepts a JSON-schema dict, which covers
-            # list[Model], Model | None, str | None and dict[str, Model]. The array
-            # unwrap duplicates a container token the jsonish/YAML formatters will own
-            # once the root-array rendering follow-up lands; delete it then.
+            # list[Model], Model | None, str | None and dict[str, Model].
             try:
                 schema = TypeAdapter(annotation).json_schema()
-                if schema.get("type") == "array" and "items" in schema:
-                    inner = dict(schema["items"])
-                    if "$defs" in schema:
-                        inner["$defs"] = schema["$defs"]
-                    body = simplify_schema(
-                        inner, config=config, format_type=format_type
-                    ).to_string()
-                    if format_type == "yaml":
-                        text = "- " + body.replace("\n", "\n  ")
-                    else:
-                        text = "[\n" + body + "\n]"
-                else:
-                    text = simplify_schema(
-                        schema, config=config, format_type=format_type
-                    ).to_string()
+                text = simplify_schema(schema, config=config, format_type=format_type).to_string()
                 return simplified_stem, text
             except Exception as exc:
                 logger.debug(f"json-schema-dict path failed for {annotation}: {exc}")

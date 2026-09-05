@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from llm_schema_lite import FormatterConfig
 from llm_schema_lite.formatters.typescript_formatter import TypeScriptFormatter
@@ -1558,12 +1558,8 @@ def test_typescript_recursive_list_golden_default_depth() -> None:
     result = TypeScriptFormatter(_list_node_schema()).transform_schema()
 
     assert result == (
-        "interface ListNode {\n"
-        "  label*: string;\n"
-        "  kids: Array<{ label*: string, "
-        "kids: Array<object /* recursive: ListNode */> }>;\n"
-        "}\n"
-        "\n"
+        "// Title: ListNode, Description: Self-referencing model used by the recursion"
+        " goldens below.\n"
         "// Fields marked with * are required\n"
         "interface Schema {\n"
         "  label*: string;\n"
@@ -1677,3 +1673,137 @@ def test_typescript_inline_comment_escapes_star_slash_after_folding() -> None:
 def test_typescript_inline_comment_passes_through_without_a_comment() -> None:
     """No ``  // `` separator means the value is returned unchanged."""
     assert TypeScriptFormatter._inline_comment("plain: string") == "plain: string"
+
+
+class Item(BaseModel):
+    name: str = Field(description="Item name")
+    qty: int = Field(default=1, description="Quantity")
+
+
+class Node(BaseModel):
+    """A tree node."""
+
+    value: str = Field(description="Node value")
+    children: list[Node] = Field(default_factory=list, description="Child nodes")
+
+
+Node.model_rebuild()
+
+
+@pytest.mark.parametrize(
+    ("annotation", "expected"),
+    [
+        (
+            list[Item],
+            "type Schema = Array<{ name*: string /* Item name */,"
+            " qty: number /* (defaults to 1), Quantity */ }>;",
+        ),
+        (
+            Item | None,
+            "type Schema = { name*: string /* Item name */,"
+            " qty: number /* (defaults to 1), Quantity */ } | null;",
+        ),
+        (
+            list[Item] | None,
+            "type Schema = Array<{ name*: string /* Item name */,"
+            " qty: number /* (defaults to 1), Quantity */ }> | null;",
+        ),
+        (
+            Node,
+            "// Title: Node, Description: A tree node.\n"
+            "// Fields marked with * are required\n"
+            "interface Schema {\n"
+            "  value*: string  // Node value;\n"
+            "  children: Array<{ value*: string /* Node value */,"
+            " children: Array<object /* recursive: Node */> /* Child nodes */ }>"
+            "  // Child nodes;\n"
+            "}",
+        ),
+        (list[list[int]], "type Schema = Array<Array<number>>;"),
+        (tuple[int, str], "type Schema = [number, string];"),
+        (
+            dict[str, Item],
+            "interface Schema {\n"
+            "  [key: string]: { name*: string /* Item name */,"
+            " qty: number /* (defaults to 1), Quantity */ };\n"
+            "}",
+        ),
+        (
+            Item | str | None,
+            "type Schema = { name*: string /* Item name */,"
+            " qty: number /* (defaults to 1), Quantity */ } | string | null;",
+        ),
+    ],
+)
+def test_root_shape_golden(annotation: Any, expected: str) -> None:
+    """Whole-string golden for a root-level shape, byte-for-byte against a measured run."""
+    from llm_schema_lite import simplify_schema
+
+    result = simplify_schema(
+        TypeAdapter(annotation).json_schema(), format_type="typescript"
+    ).to_string()
+
+    assert result == expected
+
+
+def test_list_of_optional_differs_from_optional_list() -> None:
+    """AC: ``list[Item | None]`` and ``list[Item] | None`` must not collapse to one rendering."""
+    from llm_schema_lite import simplify_schema
+
+    render_a = simplify_schema(
+        TypeAdapter(list[Item | None]).json_schema(), format_type="typescript"
+    ).to_string()
+    render_b = simplify_schema(
+        TypeAdapter(list[Item] | None).json_schema(), format_type="typescript"
+    ).to_string()
+
+    assert render_a != render_b
+
+
+def test_every_titled_root_is_decorated(
+    all_pydantic_models: list[tuple[str, type[BaseModel]]],
+) -> None:
+    """The invariant that makes root cause #4 unrepeatable -- every root return path
+    reaches ``root_decorations()``.
+    """
+    from llm_schema_lite import simplify_schema
+    from llm_schema_lite.schema_normalization import normalize_schema_titles
+
+    exercised = 0
+    for name, model in all_pydantic_models:
+        # Effective title, i.e. after the pre-existing auto-title-stripping normalization
+        # every formatter applies -- see `formatter_helpers.assert_schema_info_comment_presence`
+        # for the same computation. `model_json_schema()` always sets a raw root `title`
+        # (Pydantic defaults it to the class name), so a *raw* truthy-title filter would
+        # select every model in the corpus, including ones whose title is legitimately
+        # dropped before rendering by unrelated, already-landed behaviour.
+        schema = normalize_schema_titles(model.model_json_schema())
+        title = schema.get("title")
+        if not schema.get("properties") or not title:
+            continue
+        exercised += 1
+        result = simplify_schema(model, format_type="typescript").to_string()
+        assert result.startswith(
+            f"// Title: {title}"
+        ), f"{name}: expected render to start with '// Title: {title}', got {result[:80]!r}"
+
+    assert exercised > 0, "guard exercised zero models -- fixture or filter is broken"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="FU-3: TypeScript's non-object-root branch stays undecorated by design "
+    "(design v2 §6.8) -- Pydantic never emits title/required on a non-object root and "
+    "the DSPy adapter never selects TypeScript.",
+)
+def test_root_array_title_is_rendered() -> None:
+    from llm_schema_lite import simplify_schema
+
+    schema = {
+        "type": "array",
+        "title": "Bag",
+        "description": "A bag of items.",
+        "items": {"type": "string"},
+    }
+    result = simplify_schema(schema, format_type="typescript").to_string()
+    assert "// Title: Bag" in result

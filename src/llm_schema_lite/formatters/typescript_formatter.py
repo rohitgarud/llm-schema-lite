@@ -454,6 +454,8 @@ class TypeScriptFormatter(BaseFormatter):
 
             # Process nested definitions first (from $defs) - same as main flow
             for def_name, def_schema in self.defs.items():
+                if def_name == self._root_ref_key:
+                    continue  # already emitted as `interface Schema` by the adopted root
                 if "properties" in def_schema:
                     nested_output = StringIO()
                     nested_output.write(f"interface {def_name} {{\n")
@@ -630,6 +632,8 @@ class TypeScriptFormatter(BaseFormatter):
 
         # Process nested definitions first (from $defs)
         for def_name, def_schema in self.defs.items():
+            if def_name == self._root_ref_key:
+                continue  # already emitted as `interface Schema` by the adopted root
             if "properties" in def_schema:
                 nested_output = StringIO()
                 nested_output.write(f"interface {def_name} {{\n")

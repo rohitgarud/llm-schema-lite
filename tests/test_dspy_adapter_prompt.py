@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -11,9 +12,9 @@ pytest.importorskip("dspy", minversion="3.3.1")
 import dspy  # noqa: E402
 from dspy.adapters.json_adapter import JSONAdapter  # noqa: E402
 from dspy.adapters.utils import translate_field_type  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, Field, TypeAdapter  # noqa: E402
 
-from llm_schema_lite import FormatterConfig  # noqa: E402
+from llm_schema_lite import FormatterConfig, simplify_schema  # noqa: E402
 from llm_schema_lite.dspy_integration import (  # noqa: E402
     OutputMode,
     PromptLayout,
@@ -21,6 +22,7 @@ from llm_schema_lite.dspy_integration import (  # noqa: E402
 )
 from tests.dspy_helpers import (  # noqa: E402
     QA,
+    REQUIRED_LEGEND,
     Choices,
     Extract,
     HistoryIn,
@@ -54,6 +56,39 @@ NOTE_PARSEABLE = (
 )
 NOTE_FLOAT = "# note: the value you produce must be a single float value"
 NOTE_TOOLCALLS_HINT = '{"tool_calls": [{"name": "...", "args": {...}}]}'
+
+
+class Item(BaseModel):
+    """Root-shape probe model (plan §1). Its class name never appears in a golden."""
+
+    name: str = Field(description="Item name")
+    qty: int = Field(default=1, description="Quantity")
+
+
+class Node(BaseModel):
+    """A tree node."""
+
+    value: str = Field(description="Node value")
+    children: list[Node] = Field(default_factory=list, description="Child nodes")
+
+
+Node.model_rebuild()
+
+
+def _sig_for(annotation: Any) -> type[dspy.Signature]:
+    """A `question -> answer: <annotation>` signature for prompt probing.
+
+    Built with the `(type, FieldInfo)` dict form, not `OutputField(annotation=...)`:
+    plain pydantic.Field()/dspy.OutputField() silently drop an `annotation=` kwarg
+    (it is not a recognized Field parameter), so `make_signature` would fall back to
+    `str` for every field and this helper would stop varying by shape at all.
+    """
+    return dspy.Signature(
+        {
+            "question": (str, dspy.InputField()),
+            "answer": (annotation, dspy.OutputField()),
+        }
+    )
 
 
 class TestFieldStructure:
@@ -463,8 +498,8 @@ class TestPromptLayouts:
         """A list[Model] output renders as a bracketed simplified block, not raw $defs."""
         out = make_adapter(OutputMode.JSONISH, layout=layout).format_field_structure(ListOut)
         assert '"$defs"' not in out
-        assert "[\n{\n  name*: string // Full name," in out
-        assert "\n}\n]" in out
+        assert "[{\n  name*: string // Full name," in out
+        assert "\n}]" in out
         assert "\\n" not in out
         assert_note_clause(out, "items")
 
@@ -484,3 +519,129 @@ class TestPromptLayouts:
         out = make_adapter(OutputMode.JSONISH, layout=layout).format_field_structure(QAOptional)
         assert "string OR null" in out
         assert '"anyOf"' not in out
+
+
+# ---------------------------------------------------------------------------
+# Root-shape acceptance suite (lsl-2026-09-05-002, plan Phase 1, task 1.2).
+# ---------------------------------------------------------------------------
+
+# The 7 root shapes probed, in the plan's order. `Item`'s class name never appears
+# in a golden; `Node`'s does (its docstring/title feed the root header comment).
+_AC_SHAPES: list[tuple[str, Any]] = [
+    ("list[Item]", list[Item]),
+    ("Item | None", Item | None),
+    ("list[Item] | None", list[Item] | None),
+    ("Node", Node),
+    ("Item", Item),
+    ("list[str]", list[str]),
+    ("list[list[int]]", list[list[int]]),
+]
+
+# Shapes for which the required-marker legend line is expected exactly once; every
+# other shape in _AC_SHAPES carries no markable field, so it expects zero.
+_LEGEND_ONCE_SHAPES = frozenset({"list[Item]", "Item | None", "list[Item] | None", "Node", "Item"})
+
+# Shapes that must preserve an "OR null" suffix (the two-member `X | None` unions).
+_OR_NULL_SHAPES = frozenset({"Item | None", "list[Item] | None"})
+
+
+def _ac_params(xfail_cells: frozenset[tuple[OutputMode, str]]) -> list[Any]:
+    """Build (mode, shape_name, shape) params over the 7-shape x 2-mode AC grid.
+
+    Cells named in ``xfail_cells`` get ``pytest.mark.xfail(strict=True, ...)`` -- the
+    still-broken cells research §D6 measured (jsonish-only), fixed in Phase 2.
+    """
+    params = []
+    for mode in (OutputMode.JSONISH, OutputMode.YAML):
+        for shape_name, shape in _AC_SHAPES:
+            marks = (
+                pytest.mark.xfail(
+                    strict=True,
+                    reason=f"{mode.name} {shape_name} root rendering lands in Phase 2",
+                )
+                if (mode, shape_name) in xfail_cells
+                else ()
+            )
+            params.append(
+                pytest.param(mode, shape_name, shape, marks=marks, id=f"{mode.name}-{shape_name}")
+            )
+    return params
+
+
+class TestRootShapeAcceptance:
+    """Adapter AC suite: 7 root shapes x 2 modes, ticket ACs #1-#2 (plan task 1.2)."""
+
+    @pytest.mark.parametrize(
+        ("mode", "shape_name", "shape"),
+        _ac_params(frozenset()),
+    )
+    def test_no_dict_repr(self, mode, shape_name, shape):
+        """AC #1: no Python-dict repr (``{'``) ever leaks into the rendered block."""
+        out = make_adapter(mode).format_field_structure(_sig_for(shape))
+        assert "{'" not in out
+
+    @pytest.mark.parametrize(
+        ("mode", "shape_name", "shape"),
+        _ac_params(frozenset()),
+    )
+    def test_or_null_preserved(self, mode, shape_name, shape):
+        """``OR null`` survives iff the shape is one of the two ``X | None`` unions."""
+        out = make_adapter(mode).format_field_structure(_sig_for(shape))
+        assert ("OR null" in out) == (shape_name in _OR_NULL_SHAPES)
+
+    @pytest.mark.parametrize(
+        ("mode", "shape_name", "shape"),
+        _ac_params(frozenset()),
+    )
+    def test_legend_count(self, mode, shape_name, shape):
+        """Exactly one legend line for markable shapes, zero for un-markable ones."""
+        out = make_adapter(mode).format_field_structure(_sig_for(shape))
+        legend = REQUIRED_LEGEND["yaml" if mode is OutputMode.YAML else "jsonish"]
+        count = sum(1 for line in out.splitlines() if line.strip() == legend)
+        assert count == (1 if shape_name in _LEGEND_ONCE_SHAPES else 0)
+
+    def test_yaml_optional_field_metadata_stays_on_its_own_field(self):
+        """AC #2: YAML + ``Item | None`` keeps per-field metadata on its own field
+        line, not folded into a compact one-liner.
+
+        Deferred from Phase 1 (deviation D-2): false until the YAML root block form
+        landed in Phase 3. Restored here, un-xfailed, per plan task 4.4.
+        """
+        out = make_adapter(OutputMode.YAML).format_field_structure(_sig_for(Item | None))
+        assert "name*: string  # Item name" in out
+
+
+# ---------------------------------------------------------------------------
+# Unwrap-redundancy confinement guard (decision A-3, plan task 1.3).
+# ---------------------------------------------------------------------------
+
+_UNWRAP_PROBE_SHAPES: list[tuple[str, Any]] = [
+    ("list[Item]", list[Item]),
+    ("Item | None", Item | None),
+    ("list[Item] | None", list[Item] | None),
+    ("list[str]", list[str]),
+    ("list[list[int]]", list[list[int]]),
+    ("dict[str, Item]", dict[str, Item]),
+    ("str | None", str | None),
+    ("tuple[int, str]", tuple[int, str]),
+    ("Item", Item),
+    ("Node", Node),
+]
+
+
+def test_adapter_block_equals_formatter_render():
+    """After Phase 4 deletes the tier-2 array unwrap, the adapter's rendered block is
+    byte-identical to the bare formatter render for every one of the ten probed
+    shapes, across both jsonish and yaml modes -- the unwrap was fully redundant.
+
+    Replaces `test_unwrap_blast_radius_is_confined` (Phase 1).
+    """
+    for mode, fmt in ((OutputMode.JSONISH, "jsonish"), (OutputMode.YAML, "yaml")):
+        adapter = make_adapter(mode)
+        config = adapter._effective_formatter_config()
+        for shape_name, shape in _UNWRAP_PROBE_SHAPES:
+            adapter_block = adapter._resolve_schema_text(shape, "output", fmt)[1]
+            formatter_render = simplify_schema(
+                TypeAdapter(shape).json_schema(), config=config, format_type=fmt
+            ).to_string()
+            assert adapter_block == formatter_render, f"mode={mode}, shape={shape_name}"

@@ -47,6 +47,13 @@ class JSONishFormatter(BaseFormatter):
         self.pending_postfix: dict[str, str] = {}
         self.pending_recursion: dict[str, str] = {}
         self.pending_prefix: dict[str, str] = {}
+        self.pending_root_postfix: str = ""
+        """Postfix owed by the ROOT itself, which has no property key to ride on.
+
+        ``pending_postfix`` is a *keyed* side-channel resolved by ``_apply_pending_postfix``
+        against a ``key:`` line. A root has no key line, so its postfix needs its own slot,
+        appended directly to the serialized body in ``transform_schema``.
+        """
         self.simplified_schema: str | None = None
         # Occurrence-identity tokens: disambiguate same-named properties at different
         # depths so the three pending_* maps above are exact-match and per-occurrence.
@@ -260,6 +267,10 @@ class JSONishFormatter(BaseFormatter):
                 self.pending_postfix[key] = (
                     f"OR null {comment}{title}{description}{default_value}{example}"
                 )
+            elif self._is_root_schema(value):
+                self.pending_root_postfix = (
+                    f"OR null {comment}{title}{description}{default_value}{example}".rstrip()
+                )
             first_item = items[0]
             if isinstance(first_item, dict | list):
                 return first_item
@@ -320,6 +331,10 @@ class JSONishFormatter(BaseFormatter):
             if key is not None:
                 self.pending_postfix[key] = (
                     f"ONE OF: {comment}{title}{description}{default_value}{example}"
+                )
+            elif self._is_root_schema(value):
+                self.pending_root_postfix = (
+                    f"ONE OF: {comment}{title}{description}{default_value}{example}".rstrip()
                 )
             first_item = items[0]
             if isinstance(first_item, dict | list):
@@ -402,6 +417,10 @@ class JSONishFormatter(BaseFormatter):
             if key is not None:
                 self.pending_postfix[key] = (
                     f"AND null {comment}{title}{description}{default_value}{example}"
+                )
+            elif self._is_root_schema(value):
+                self.pending_root_postfix = (
+                    f"AND null {comment}{title}{description}{default_value}{example}".rstrip()
                 )
             first_item = items[0]
             if isinstance(first_item, dict | list):
@@ -828,7 +847,7 @@ class JSONishFormatter(BaseFormatter):
         """
         if not self.include_metadata:
             return ""
-        if not self.schema.get("required", None):
+        if not self.effective_root_schema().get("required", None):
             return ""
         marker = self.config.required_marker
         return f"{self.comment_prefix} Fields marked with {marker} are required\n"
@@ -840,7 +859,7 @@ class JSONishFormatter(BaseFormatter):
         Returns:
             Comment string with schema title and description, or empty string if neither present.
         """
-        return self.get_info_comment(self.schema)
+        return self.get_info_comment(self.effective_root_schema())
 
     def get_info_comment(self, schema: dict[str, Any]) -> str:
         """
@@ -1320,21 +1339,18 @@ class JSONishFormatter(BaseFormatter):
         self.pending_postfix.clear()
         self.pending_prefix.clear()
         self.pending_recursion.clear()
+        self.pending_root_postfix = ""
         output = self._process_schema_recursive(self.schema)
         output_string = ""
-        if output and isinstance(output, dict):
+        if output and isinstance(output, dict | list):
             output_string = self._jsonish_dump(output, indent=0, is_root=True)
             output_string = self._collapse_array_object_brackets(output_string)
         else:
             output_string = str(output)
-        if self.schema.get("type") == "array":
-            # Include items description in the array header if present (inline comment)
-            items_desc = ""
-            items_schema = self.schema.get("items")
-            if isinstance(items_schema, dict) and items_schema.get("description"):
-                items_desc = f" {self.comment_prefix} {items_schema['description']}"
-            output_string = f"// Array of (items):{items_desc}\n{output_string}"
-        output_string = f"{self.get_info_comment(self.schema)}{self.get_required_fields_comment()}{output_string}"  # noqa: E501
+        if self.pending_root_postfix:
+            output_string = f"{output_string} {self.pending_root_postfix}"
+        info, legend = self.root_decorations()
+        output_string = f"{info}{legend}{output_string}"
         notes = self.schema.get("notes")
         links = self.schema.get("links")
         if notes and self.include_metadata:

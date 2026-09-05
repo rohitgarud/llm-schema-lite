@@ -349,40 +349,47 @@ for _model in (Node, RootNode, A, B, Tree, ListNode, MapNode, LLNode, N):
     _model.model_rebuild()
 
 
-JSONISH_D1 = "{\n  label*: string,\n  kids: object [] // recursive: ListNode\n}"
-YAML_D1 = "label*: string\nkids: list[object]  # recursive: ListNode"
+JSONISH_D1 = (
+    "//Title: ListNode\n// Fields marked with * are required\n{\n  label*: string,\n"
+    "  kids: object [] // recursive: ListNode\n}"
+)
+YAML_D1 = (
+    "# Title: ListNode\n\n# Fields marked with * are required\n\nlabel*: string\n"
+    "kids: list[object]  # recursive: ListNode"
+)
 TS_D1 = (
-    "interface ListNode {\n  label*: string;\n  kids: Array<object /* recursive: ListNode"
-    " */>;\n}\n\n// Fields marked with * are required\ninterface Schema {\n  label*:"
-    " string;\n  kids: Array<object /* recursive: ListNode */>;\n}"
+    "// Title: ListNode\n// Fields marked with * are required\ninterface Schema {\n"
+    "  label*: string;\n  kids: Array<object /* recursive: ListNode */>;\n}"
 )
 
 JSONISH_D2 = (
-    "{\n  label*: string,\n  kids: [{\n    label*: string,\n    kids: object [] //"
-    " recursive: ListNode\n  }]\n}"
+    "//Title: ListNode\n// Fields marked with * are required\n{\n  label*: string,\n"
+    "  kids: [{\n    label*: string,\n    kids: object [] // recursive: ListNode\n  }]\n}"
 )
-YAML_D2 = "label*: string\nkids:\n- label*: string\n  kids: list[object]  # recursive: ListNode"
+YAML_D2 = (
+    "# Title: ListNode\n\n# Fields marked with * are required\n\nlabel*: string\n"
+    "kids:\n- label*: string\n  kids: list[object]  # recursive: ListNode"
+)
 TS_D2 = (
-    "interface ListNode {\n  label*: string;\n  kids: Array<{ label*: string, kids:"
-    " Array<object /* recursive: ListNode */> }>;\n}\n\n// Fields marked with * are"
-    " required\ninterface Schema {\n  label*: string;\n  kids: Array<{ label*: string,"
-    " kids: Array<object /* recursive: ListNode */> }>;\n}"
+    "// Title: ListNode\n// Fields marked with * are required\ninterface Schema {\n"
+    "  label*: string;\n  kids: Array<{ label*: string, kids: Array<object /*"
+    " recursive: ListNode */> }>;\n}"
 )
 
 JSONISH_D3 = (
-    "{\n  label*: string,\n  kids: [{\n    label*: string,\n    kids: [{\n      label*:"
-    " string,\n      kids: object [] // recursive: ListNode\n    }]\n  }]\n}"
+    "//Title: ListNode\n// Fields marked with * are required\n{\n  label*: string,\n"
+    "  kids: [{\n    label*: string,\n    kids: [{\n      label*: string,\n"
+    "      kids: object [] // recursive: ListNode\n    }]\n  }]\n}"
 )
 YAML_D3 = (
-    "label*: string\nkids:\n- label*: string\n  kids:\n  - label*: string\n"
+    "# Title: ListNode\n\n# Fields marked with * are required\n\nlabel*: string\n"
+    "kids:\n- label*: string\n  kids:\n  - label*: string\n"
     "    kids: list[object]  # recursive: ListNode"
 )
 TS_D3 = (
-    "interface ListNode {\n  label*: string;\n  kids: Array<{ label*: string, kids:"
-    " Array<{ label*: string, kids: Array<object /* recursive: ListNode */> }> }>;\n}\n\n"
-    "// Fields marked with * are required\ninterface Schema {\n  label*: string;\n  kids:"
-    " Array<{ label*: string, kids: Array<{ label*: string, kids: Array<object /*"
-    " recursive: ListNode */> }> }>;\n}"
+    "// Title: ListNode\n// Fields marked with * are required\ninterface Schema {\n"
+    "  label*: string;\n  kids: Array<{ label*: string, kids: Array<{ label*: string,"
+    " kids: Array<object /* recursive: ListNode */> }> }>;\n}"
 )
 
 LIST_NODE_GOLDENS: dict[int, dict[str, str]] = {
@@ -512,6 +519,19 @@ def test_depth_one_two_three(fmt: str, depth: int) -> None:
     assert _render(ListNode, fmt, depth) == LIST_NODE_GOLDENS[depth][fmt]
 
 
+def _schema_body(text: str, fmt: str) -> str:
+    """The ROOT's own rendering, with any hoisted ``$defs`` interfaces removed.
+
+    TypeScript is the only format that emits sibling ``interface`` blocks, so the
+    root-vs-wrapped comparison must be taken on ``interface Schema`` alone.
+    """
+    if fmt != "typescript":
+        return text
+    marker = "interface Schema {"
+    index = text.find(marker)
+    return text[index:] if index >= 0 else text
+
+
 @pytest.mark.parametrize("fmt", FORMATS)
 @pytest.mark.parametrize("depth", [1, 2, 3])
 def test_root_model_and_wrapped_model_agree(fmt: str, depth: int) -> None:
@@ -519,9 +539,16 @@ def test_root_model_and_wrapped_model_agree(fmt: str, depth: int) -> None:
     bare = _render(Node, fmt, depth)
     wrapped = _render(RootNode, fmt, depth)
 
-    assert bare.count("recursive:") == wrapped.count("recursive:")
-    assert bare.count("children") == wrapped.count("children")
-    assert bare.count("name") == wrapped.count("name")
+    # At HEAD this test passed only by accident of the duplicated-`interface` bug this
+    # ticket removes (design v2 §5.4); with `_schema_body` filtering out the hoisted
+    # `$defs` interfaces, the assertions hold exactly at depths 1/2/3 (`recursive:`
+    # 1==1/1==1/1==1, `children` 1==1/2==2/3==3, `name` 1==1/2==2/3==3).
+    bare_body = _schema_body(bare, fmt)
+    wrapped_body = _schema_body(wrapped, fmt)
+
+    assert bare_body.count("recursive:") == wrapped_body.count("recursive:")
+    assert bare_body.count("children") == wrapped_body.count("children")
+    assert bare_body.count("name") == wrapped_body.count("name")
 
 
 # ---------------------------------------------------------------------------
