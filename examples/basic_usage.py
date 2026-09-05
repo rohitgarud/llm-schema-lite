@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from llm_schema_lite import simplify_schema
+from llm_schema_lite import FormatterConfig, simplify_schema
 
 
 # Example 1: Simple model
@@ -68,25 +68,31 @@ def main():
     # Example 4: Schema with metadata (JSONish)
     print("\n4. Product Schema (JSONish with metadata):")
     print("-" * 80)
-    product_schema = simplify_schema(Product, include_metadata=True)
+    product_schema = simplify_schema(Product, config=FormatterConfig(include_metadata=True))
     print(product_schema.to_string())
 
     # Example 5: Schema with metadata (TypeScript)
     print("\n5. Product Schema (TypeScript with metadata):")
     print("-" * 80)
-    product_ts = simplify_schema(Product, include_metadata=True, format_type="typescript")
+    product_ts = simplify_schema(
+        Product, config=FormatterConfig(include_metadata=True), format_type="typescript"
+    )
     print(product_ts.to_string())
 
     # Example 6: Schema with metadata (YAML)
     print("\n6. Product Schema (YAML with metadata):")
     print("-" * 80)
-    product_yaml = simplify_schema(Product, include_metadata=True, format_type="yaml")
+    product_yaml = simplify_schema(
+        Product, config=FormatterConfig(include_metadata=True), format_type="yaml"
+    )
     print(product_yaml.to_string())
 
     # Example 7: Schema without metadata
     print("\n7. Product Schema (without metadata):")
     print("-" * 80)
-    product_schema_no_meta = simplify_schema(Product, include_metadata=False)
+    product_schema_no_meta = simplify_schema(
+        Product, config=FormatterConfig(include_metadata=False)
+    )
     print(product_schema_no_meta.to_string())
 
     # Example 8: Nested schema (all formats)
@@ -105,15 +111,14 @@ def main():
     customer_yaml = simplify_schema(Customer, format_type="yaml")
     print(customer_yaml.to_string())
 
-    # Example 11: JSON output
-    print("\n11. JSON Output:")
+    # Example 11: Token savings
+    print("\n11. Token Savings (JSONish vs. the raw JSON Schema):")
     print("-" * 80)
-    print(user_schema.to_json(indent=2))
-
-    # Example 12: Dictionary output
-    print("\n12. Dictionary Output:")
-    print("-" * 80)
-    print(user_schema.to_dict())
+    stats = user_schema.compare_tokens()
+    print(f"Original JSON Schema tokens: {stats['original_tokens']}")
+    print(f"Simplified schema tokens:    {stats['simplified_tokens']}")
+    print(f"Tokens saved:                {stats['tokens_saved']}")
+    print(f"Reduction:                   {stats['reduction_percent']}%")
 
     print("\n" + "=" * 80)
 

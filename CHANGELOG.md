@@ -7,9 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **DSPy prompts no longer embed the schema inside a JSON string.** The adapter renders
+  the field structure as plain text, and the layout is selectable through the new
+  `PromptLayout` enum. Any snapshot asserting on the previous prompt text will change.
+  (`c1fb265`)
+- **`StructuredOutputAdapter.__call__`/`acall` now dispatch past `JSONAdapter` to
+  `ChatAdapter`**, ending the MRO re-entry that overwrote `response_format` in every mode.
+  JSON mode now matches upstream DSPy 3.3.1 gate for gate and re-raises `LMError`.
+  (`447b7eb`)
+- **DSPy prompts now carry descriptions and constraints by default.** The adapter's
+  hardcoded `include_metadata=False` is gone; schema rendering is governed by
+  `FormatterConfig` like everything else. (`99b6aa7`)
+- **Enums and `Literal`s render as `string // one of: "a", "b"`** instead of
+  `OPTIONS: a| b`. (`a47ad7c`)
+- **`dict`, `tuple`, `set` and typeless fields render as real container shapes** —
+  `{<string>: int}`, `[int, string]`, `string [] (unique)`, `any` — instead of leaking
+  `string` or an `additional:` key. (`91daa6b`)
+- **The `dspy` extra and dependency-group floor rises from `>=3.0.3` to `>=3.3.1`.** The
+  integration adapter targets DSPy 3.3.1 APIs and no 3.0.x compatibility path is
+  maintained. (`f31ac3e`)
+
+### Added
+
+- `StructuredOutputAdapter(prompt_layout=...)` and the `PromptLayout` enum
+  (`PromptLayout.SECTIONS`, `PromptLayout.JSON_BLOCK`). (`c1fb265`)
+- `StructuredOutputAdapter(formatter_config=...)` — the single passthrough for schema
+  rendering options. When given it wins entirely and `max_recursion_depth` is ignored.
+  (`99b6aa7`)
+- `StructuredOutputAdapter(max_recursion_depth=...)`, default `2`. (`669e129`)
+- `StructuredOutputAdapter(use_json_object_response_format=...)`, default `True`, for
+  OpenAI-compatible servers that advertise `response_format` but reject the `json_object`
+  type; and `StructuredOutputAdapter(parallel_tool_calls=...)`, default `None`.
+  (`447b7eb`)
+- `StructuredOutputAdapter(parse_config=...)` and `ParseConfig.strip_required_marker`
+  (default `"*"`), the reply-side counterpart of `FormatterConfig.required_marker`.
+  (`7a29f2d`)
+- DSPy per-field streaming support for `StructuredOutputAdapter` in JSON and JSONish
+  modes: `register_streaming_support()` runs on `llm_schema_lite.dspy_integration` import,
+  and the new public `StreamingNotSupportedError` is raised — before any LM request — when
+  YAML mode is combined with stream listeners. (`c88a0ce`)
+- `StructuredOutputAdapter.format_finetune_data()` is implemented and returns an OpenAI
+  chat-format record instead of raising `NotImplementedError`. (`8bcf58b`)
+- `FormatterConfig.max_recursion_depth`, default `2`. (`2a68581`)
+- A DSPy-latest CI canary job. (`f31ac3e`)
+
 ### Changed
 
-- Raise the `dspy` extra and dependency-group floor from `>=3.0.3` to `>=3.3.1`; the DSPy integration adapter targets DSPy 3.3.1 APIs and no 3.0.x compatibility path is maintained.
+- Documentation: the top-level README gains Installation, Quick Start and DSPy Integration
+  sections; the DSPy integration README is corrected against the shipped adapter; and
+  every runnable code block in both, plus `examples/basic_usage.py`, is now executed by
+  `tests/test_docs_examples.py`.
+
+### Fixed
+
+- Stray trailing quote after schema comments in JSONish output. (`32145bb`)
+- Pydantic auto-generated titles no longer leak into comments: property titles are dropped
+  at every depth when the title merely restates the field name, and the root title is
+  dropped when it is identifier-shaped and the model has a docstring. User-set titles
+  survive. (`15b937e`)
+- Nested `$ref` models render as inline schema blocks instead of Python dict reprs,
+  including `Model | None`, `list[Model]` and a model referenced from two sibling fields.
+  (`0047c95`)
+- Self-referential models no longer recurse without bound: rendering stops at
+  `FormatterConfig.max_recursion_depth` and leaves a `recursive: <TypeName>` marker, in
+  all three formatters. (`d35090b`, `7430cb2`, `caa8122`, `3d6e8b2`, `4548d98`)
+- `include_metadata`, `include_descriptions` and `include_constraints` are now live rather
+  than dead: every keyword passes one category gate, and `FormatterConfig` is copied rather
+  than mutated in place. Structural output (required markers, container tokens) is
+  correctly classified as non-metadata and always emitted. (`99b6aa7`)
+- A DSPy reply that omits an optional output field now yields that field's default via
+  `apply_output_field_defaults`, instead of failing the completeness check with
+  `AdapterParseError`. The YAML→JSON rescue is narrowed to a `ConversionError` around
+  extraction only. (`7a29f2d`)
+- `make test-dspy` matched no files and exited 4; it now runs
+  `pytest tests -k dspy -v --no-cov`. (`e3f2274`)
 
 <!-- insertion marker -->
 ## [v0.6.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27

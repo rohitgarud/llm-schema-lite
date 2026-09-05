@@ -25,6 +25,7 @@ uv pip install llm-schema-lite[dspy]
 
 ### Basic Usage
 
+<!-- lsl-docs: skip: issues a live LM request -->
 ```python
 import dspy
 from pydantic import BaseModel
@@ -39,7 +40,7 @@ class Answer(BaseModel):
 adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
 
 # Configure DSPy
-lm = dspy.LM(model="openai/gpt-4")
+lm = dspy.LM(model="openai/gpt-4o-mini")
 dspy.configure(lm=lm, adapter=adapter)
 
 # Use with any DSPy module
@@ -51,17 +52,57 @@ predictor = dspy.Predict(QA)
 result = predictor(question="What is DSPy?")
 ```
 
-### Data Extraction Example
+### Inspecting the prompt without an LM
 
 ```python
+import dspy
+from pydantic import BaseModel
+
+from llm_schema_lite.dspy_integration import OutputMode, PromptLayout, StructuredOutputAdapter
+
+
+class Answer(BaseModel):
+    """A model's answer with a confidence score."""
+
+    answer: str
+    confidence: float
+
+
+class QA(dspy.Signature):
+    """Answer the question."""
+
+    question: str = dspy.InputField()
+    answer: Answer = dspy.OutputField()
+
+
+for layout in (PromptLayout.SECTIONS, PromptLayout.JSON_BLOCK):
+    adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH, prompt_layout=layout)
+    print(adapter.format_field_structure(QA))
+    print(adapter.parse(QA, '{"answer": {"answer": "42", "confidence": 0.9}}'))
+```
+
+Nothing here contacts an LM, so it is the fastest way to compare `output_mode` and
+`prompt_layout` settings, and to see exactly how many tokens each costs.
+
+### Data Extraction Example
+
+<!-- lsl-docs: skip: issues a live LM request -->
+```python
+import dspy
 from pydantic import BaseModel, Field
 from typing import Literal
+
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
+lm = dspy.LM(model="openai/gpt-4o-mini")
+
 
 class Person(BaseModel):
     name: str
     age: int
     email: str | None = None
     occupation: str | None = None
+
 
 class Company(BaseModel):
     name: str
@@ -71,6 +112,7 @@ class Company(BaseModel):
         default=None,
         description="e.g., '50-100', '1000+'"
     )
+
 
 class ExtractionResult(BaseModel):
     people: list[Person]
@@ -108,6 +150,8 @@ print(f"Found {len(result.result.people)} people and {len(result.result.companie
 Standard JSON with full `model_json_schema()` - verbose but compatible with OpenAI structured outputs.
 
 ```python
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
 adapter = StructuredOutputAdapter(output_mode=OutputMode.JSON)
 ```
 
@@ -121,6 +165,8 @@ adapter = StructuredOutputAdapter(output_mode=OutputMode.JSON)
 JSON output with simplified BAML-like schemas - 60-85% token reduction.
 
 ```python
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
 adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
 ```
 
@@ -145,8 +191,16 @@ JSON mode (verbose):
 
 JSONish mode (simplified):
 ```
-{ answer: string, confidence: float }
+//Title: Answer
+// Fields marked with * are required
+{
+  answer*: string,
+  confidence*: float
+}
 ```
+
+The `//Title:` line appears because this `Answer` has no docstring. Give the model a
+docstring and the title is replaced by the docstring text.
 
 ### YAML Mode
 
@@ -157,6 +211,8 @@ JSONish mode (simplified):
 YAML output with simplified schemas.
 
 ```python
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
 adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
 ```
 
@@ -168,15 +224,19 @@ adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
 ## Configuration Options
 
 ```python
+from llm_schema_lite.dspy_integration import OutputMode, PromptLayout, StructuredOutputAdapter
+
 adapter = StructuredOutputAdapter(
     output_mode=OutputMode.JSONISH,           # Output format mode
-    include_input_schemas=True,                # Simplify input field schemas
-    use_native_function_calling=True,          # Use native function calling
-    formatter_config=None,                     # FormatterConfig forwarded to simplify_schema
-    prompt_layout=PromptLayout.SECTIONS,       # Output block layout
-    use_json_object_response_format=True,      # Request {"type": "json_object"} in JSONish
-    parallel_tool_calls=None,                  # Forwarded to the DSPy adapter base
-    callbacks=None                             # Optional callbacks
+    include_input_schemas=True,               # Simplify input field schemas
+    use_native_function_calling=True,         # Use native function calling
+    max_recursion_depth=2,                    # Depth cap when formatter_config is None
+    formatter_config=None,                    # FormatterConfig forwarded to simplify_schema
+    prompt_layout=PromptLayout.SECTIONS,      # Output block layout
+    use_json_object_response_format=True,     # Request {"type": "json_object"} in JSONish
+    parallel_tool_calls=None,                 # Forwarded to the DSPy adapter base
+    parse_config=None,                        # ParseConfig for the parse-time rescue tier
+    callbacks=None,                            # Optional callbacks
 )
 ```
 
@@ -205,6 +265,21 @@ adapter = StructuredOutputAdapter(
     `max_recursion_depth` is ignored
   - This is *the* passthrough for schema-rendering options; the adapter deliberately
     exposes no per-option kwargs
+  - Default: `None`
+
+- **max_recursion_depth**: `int`
+  - Depth cap for self-referential models, forwarded into a default `FormatterConfig`
+  - **Ignored entirely when `formatter_config` is given** — the explicit config wins
+  - Default: `2`
+
+- **parse_config**: `ParseConfig | None`
+  - `None` reproduces upstream `JSONAdapter`: a field that fails `parse_value` leaks its
+    `ValidationError`
+  - When given, a rejected field is offered to the coercion rescue first; if
+    `parse_config.partial` is `True` the field is then dropped and refilled by
+    `apply_output_field_defaults`
+  - `ParseConfig.strip_required_marker` (default `"*"`) is the reply-side counterpart of
+    `FormatterConfig.required_marker`: it strips the trailing marker from reply keys
   - Default: `None`
 
 - **use_native_function_calling**: `bool`
@@ -239,14 +314,22 @@ adapter = StructuredOutputAdapter(
 
 ### With ChainOfThought
 
+<!-- lsl-docs: skip: issues a live LM request -->
 ```python
+import dspy
+
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
+lm = dspy.LM(model="openai/gpt-4o-mini")
 adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
 dspy.configure(lm=lm, adapter=adapter)
+
 
 class ReasoningQA(dspy.Signature):
     question: str = dspy.InputField()
     reasoning: str = dspy.OutputField(desc="Step by step reasoning")
     answer: str = dspy.OutputField(desc="Final answer")
+
 
 cot = dspy.ChainOfThought(ReasoningQA)
 result = cot(question="What is 2+2?")
@@ -256,9 +339,21 @@ print(result.answer)
 
 ### With Demonstrations
 
+<!-- lsl-docs: skip: issues a live LM request -->
 ```python
+import dspy
+
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
+lm = dspy.LM(model="openai/gpt-4o-mini")
 adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
 dspy.configure(lm=lm, adapter=adapter)
+
+
+class QA(dspy.Signature):
+    question: str = dspy.InputField()
+    answer: str = dspy.OutputField()
+
 
 predictor = dspy.Predict(QA)
 
@@ -274,28 +369,36 @@ result = predictor(question="What is AI?", demos=demos)
 
 The adapter includes robust error handling with automatic fallbacks powered by llm-schema-lite:
 
-```python
-# YAML mode automatically falls back to JSON parsing if YAML fails
-adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
+When YAML *extraction* fails with a `ConversionError`, the adapter retries the same text
+as JSON. This is a narrow rescue, not a blanket fallback: a `ConversionError` raised
+anywhere else, and the completeness check's own `AdapterParseError`, both propagate.
 
-# Malformed JSON/YAML is automatically repaired (repair=True by default)
-# Uses llm-schema-lite's loads() with json_repair integration
+```python
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
+# JSON mode reproduces upstream JSONAdapter's structured-outputs behaviour.
+adapter = StructuredOutputAdapter(output_mode=OutputMode.JSON)
+
+# JSONish mode: malformed JSON is automatically repaired (repair=True by default),
+# using llm-schema-lite's loads() with json_repair integration.
 adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
 
-# Parsing handles:
-# - Markdown code blocks extraction
-# - Embedded JSON/YAML in text
-# - Malformed JSON repair
-# - Automatic content type detection
+# YAML mode: only a YAML *extraction* failure is retried as JSON (a narrow rescue,
+# not a blanket fallback) - see the note above.
+adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
 ```
 
 **Parsing Pipeline:**
 
-1. Extract content from markdown blocks (if present)
-2. Repair malformed JSON/YAML (using `json_repair` library)
-3. Parse to dictionary with type validation
-4. Cast values to expected Pydantic types
-5. Validate all required fields are present
+1. Extract content from markdown code blocks, if present
+2. Repair malformed JSON/YAML (`json_repair`); in YAML mode a `ConversionError` here
+   retries the text as JSON
+3. Parse to a dictionary, stripping `ParseConfig.strip_required_marker` from reply keys
+4. Cast each value to its expected Pydantic type via `parse_value`
+5. *(only when `parse_config` is given)* a rejected field is offered to the coercion
+   rescue; with `parse_config.partial=True` a still-failing field is dropped
+6. `apply_output_field_defaults` fills any output field the reply omitted
+7. Check that every required output field is now present
 
 ## Streaming
 
@@ -304,6 +407,7 @@ Importing `llm_schema_lite.dspy_integration` registers `StructuredOutputAdapter`
 subclass of it) with DSPy's `StreamListener`, which otherwise only recognises DSPy's own
 three built-in adapters by class name.
 
+<!-- lsl-docs: skip: issues a live LM request -->
 ```python
 import dspy
 from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
@@ -357,84 +461,121 @@ The adapter uses llm-schema-lite's public API for schema simplification and robu
 - Returns `SchemaLite` objects with `.to_string()` for formatted output
 
 ```python
-# Example: How the adapter uses simplify_schema()
+from pydantic import BaseModel
+
 from llm_schema_lite import FormatterConfig, simplify_schema
+
+
+class Answer(BaseModel):
+    """A model's answer with a confidence score."""
+
+    answer: str
+    confidence: float
+
 
 # By default the adapter forwards no config, so simplify_schema's default
 # FormatterConfig is used and all metadata (titles, descriptions, defaults) is kept.
-simplified = simplify_schema(
-    field_type,
-    format_type="jsonish",  # or "typescript", "yaml"
-)
-schema_str = simplified.to_string()
+simplified = simplify_schema(Answer, format_type="jsonish")  # or "typescript", "yaml"
+print(simplified.to_string())
 
-# Pass formatter_config to StructuredOutputAdapter to override this behavior;
-# when given, it is forwarded to simplify_schema unchanged, e.g. for terser prompts:
-# StructuredOutputAdapter(formatter_config=FormatterConfig(include_descriptions=False))
+# Pass formatter_config to StructuredOutputAdapter to override this; it is forwarded to
+# simplify_schema unchanged, e.g. for terser prompts:
+terse = simplify_schema(Answer, config=FormatterConfig(include_descriptions=False))
+print(terse.to_string())
 ```
 
 **Robust Parsing** (via `loads()`):
 - Parses JSON/YAML with automatic repair (`repair=True`)
 - Handles markdown code blocks and embedded structures
-- Provides fallback mechanisms for malformed outputs
+- Returns a plain `dict` when no `schema=` is given, and a `(model instance, metadata)`
+  2-tuple when one is
+- When YAML *extraction* fails with a `ConversionError`, the adapter retries the same text
+  as JSON. This is a narrow rescue, not a blanket fallback: a `ConversionError` raised
+  anywhere else, and the completeness check's own `AdapterParseError`, both propagate.
 
 ```python
-# Example: How the adapter uses loads()
 from llm_schema_lite import loads
 
-# JSON parsing with repair
-data = loads(completion, mode="json", repair=True)
+# JSON parsing with repair - note the missing closing brace.
+completion = '{"answer": "42", "confidence": 0.9'
+print(loads(completion, mode="json", repair=True))
 
-# YAML parsing with repair (auto-fallback to JSON)
-data = loads(completion, mode="yaml", repair=True)
+# YAML parsing with repair.
+print(loads("answer: '42'\nconfidence: 0.9\n", mode="yaml", repair=True))
 ```
 
 ### Key Methods
 
-- `__call__()` / `acall()`: Main execution methods (sync/async)
-- `format_field_structure()`: Formats input/output structure for LLM
-- `parse()`: Parses LLM responses into structured data
-  - Uses `loads()` from llm-schema-lite for robust parsing
-- `_translate_field_type()`: Translates field types with mode-specific schemas
-- `_get_complex_type_description()`: Generates simplified schemas for complex types
-  - Uses `simplify_schema()` from llm-schema-lite for token-efficient representations
+- `__call__()` / `acall()`: sync and async execution. Both dispatch past `JSONAdapter`
+  straight to `ChatAdapter`, so `response_format` is decided once, by this adapter
+- `format_field_structure()`: builds the system-prompt field-structure block. Every field
+  is reduced to an internal block by `_describe()`, then rendered; `prompt_layout` governs
+  only the *output* renderer — input fields always use the sectioned form
+- `parse()`: reads an LLM reply back into the signature's output types, via `loads()`
+- Schema text for a complex annotation is resolved by a four-tier chain, each tier falling
+  through on any exception:
+  1. `simplify_schema(annotation, ...)`
+  2. `TypeAdapter(annotation).json_schema()` fed back into `simplify_schema`
+  3. the verbose `json.dumps` JSON Schema — the tier entered directly in `OutputMode.JSON`
+  4. the literal text `must be a valid <name>`
+- Scalar annotations never get a schema block, only a note (`bool` → "must be True or
+  False", `Enum` → "must be one of: a; b", and so on). `dspy.Type` subclasses (Image,
+  Audio, Tool, ToolCalls, Code) and `dspy.History` emit nothing, matching upstream
 
 ## Token Efficiency Comparison
 
-Based on benchmarks with complex Pydantic models:
+Token savings depend entirely on the schema. Measure yours rather than trusting a table:
 
-| Mode | Schema Tokens | Reduction |
-|------|--------------|-----------|
-| JSON | 815 tokens | 0% (baseline) |
-| JSONish | 145 tokens | 82% |
-| YAML | 178 tokens | 78% |
+```python
+from pydantic import BaseModel
+
+from llm_schema_lite import simplify_schema
+
+
+class Answer(BaseModel):
+    """A model's answer with a confidence score."""
+
+    answer: str
+    confidence: float
+
+
+stats = simplify_schema(Answer).compare_tokens()
+print(f"{stats['reduction_percent']}% smaller than the raw JSON Schema")
+```
+
+Cross-adapter benchmarks live under `benchmarking/dspy_adapters/` and run with
+`make bench-dspy`.
 
 ## Testing
 
-See `tests/test_dspy_README.md` for comprehensive testing documentation.
-
 ```bash
-# Install test dependencies
+# Install the DSPy extra
 pip install -e ".[dspy]"
 
-# Run tests
-pytest tests/test_dspy_*.py -v
+# Run the DSPy integration tests
+make test-dspy
 ```
+
+`make test-dspy` runs `pytest tests -k dspy -v --no-cov`. The `--no-cov` matters: the
+project's `addopts` force `--cov-report=xml`, and a second instrumented run clobbers
+`coverage.xml`.
+
+Every runnable code block on this page is executed by `tests/test_docs_examples.py`.
+Blocks that would issue a live LM request carry an
+`<!-- lsl-docs: skip: issues a live LM request -->` marker instead.
 
 ## Examples
 
-See `examples/` directory for complete examples:
-
-- `dspy_basic_usage.py` - Basic integration examples
-- `dspy_complex_models.py` - Complex Pydantic models with nested structures
-- `dspy_entity_extraction.py` - Real-world entity extraction from text
+`examples/basic_usage.py` is the runnable core-API tour (no DSPy, no LM, no API key). The
+DSPy examples live on this page — every block that does not need a live LM is executed by
+the test suite.
 
 ## Troubleshooting
 
 ### DSPy Not Found
 
 ```bash
-pip install "dspy>=3.0.3"
+pip install "dspy>=3.3.1"
 ```
 
 ### PyYAML Not Found (for YAML mode)
@@ -478,7 +619,7 @@ If you use this in your research, please cite:
 @software{llm_schema_lite_dspy,
   title = {DSPy Integration for llm-schema-lite},
   author = {Rohit Garud},
-  year = {2025},
+  year = {2026},
   url = {https://github.com/rohitgarud/llm-schema-lite}
 }
 ```
