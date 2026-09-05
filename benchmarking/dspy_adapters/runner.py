@@ -48,6 +48,7 @@ import dspy
 import tiktoken
 from dspy.adapters.base import Adapter
 from dspy.clients.base_lm import BaseLM
+from dspy.utils.callback import BaseCallback
 
 from .adapters import (
     ADAPTERS,
@@ -105,6 +106,63 @@ def normalize_response_format(value: Any) -> str:
     if isinstance(value, dict):
         return "json_object" if value.get("type") == "json_object" else "json_schema"
     return "json_schema"
+
+
+class ResponseFormatRecorder(BaseCallback):  # type: ignore[misc]
+    """Record the normalized `response_format` of every LM call *attempted* in one cell.
+
+    Answers a pre-call question with a pre-call fact. `BaseLM.__call__` is decorated
+    `@with_callbacks`, whose `sync_wrapper` runs the start handlers *before* `fn(...)`
+    (`dspy/utils/callback.py:381`, `:390`), so this fires even for a call that goes on to
+    raise -- which `lm.history` never records, because `BaseLM.update_history` appends only
+    after `forward()` returns. `inputs["kwargs"]` carries the per-call kwargs the adapter
+    passed, because `__call__`'s signature ends in `**kwargs` and
+    `inspect.getcallargs` bundles them there (`callback.py:314`).
+
+    One fresh instance per cell, created by the function that opens the cell's
+    `dspy.context`. Never a module-level singleton: an object whose lifetime is the `with`
+    block cannot leak, whereas a shared object with a reset can have its reset forgotten.
+    That is also the whole thread-safety story -- `dspy.context` overrides live in a
+    `contextvars.ContextVar` (`settings.py:47`, `:250-257`), so a future parallelised
+    `run_live_arm` keeps per-worker isolation for free. No lock is needed and none is added.
+
+    Stores only the normalized three-value string, never the raw kwargs: the recorder must
+    never become a second place a credential can be observed, and `on_lm_start` must stay a
+    single cheap append because `with_callbacks` swallows callback exceptions and only logs
+    a warning (`callback.py:322-323`).
+    """
+
+    def __init__(self) -> None:
+        """Start with an empty attempt list."""
+        self.formats: list[str] = []
+
+    def on_lm_start(self, call_id: str, instance: Any, inputs: dict[str, Any]) -> None:
+        """Append this attempt's normalized `response_format`. Never raises."""
+        kwargs = inputs.get("kwargs") or {}
+        self.formats.append(normalize_response_format(kwargs.get("response_format")))
+
+    def last(self) -> str:
+        """The last attempted call's response_format; "none" when no call was attempted.
+
+        Means exactly what `lm.history[-1]["kwargs"]` meant -- *the last thing actually
+        sent* -- so no table, CSV column or README description changes meaning. The
+        structured-output -> json_object downgrade issues two calls, which
+        `fallback_suspected = lm_calls >= 2` already flags with a dagger; the attempt count
+        is available here as a side effect and is deliberately not exposed.
+        """
+        return self.formats[-1] if self.formats else "none"
+
+
+def _callbacks_with(recorder: ResponseFormatRecorder) -> list[Any]:
+    """Compose `recorder` onto any settings-level callbacks rather than replacing them.
+
+    `dspy.context(callbacks=[...])` *replaces* the settings-level list -- `context` builds
+    `{**main_thread_config, **original_overrides, **kwargs}` (`settings.py:252`). This
+    harness sets no global callbacks today (`grep -rn "callbacks" benchmarking/` -> zero
+    hits), so composing is inert; it costs one list literal and stops the compose-don't-
+    replace rule drifting across the three call sites.
+    """
+    return [*dspy.settings.get("callbacks", []), recorder]
 
 
 def measure_prompt(adapter: Adapter, cell_id: str, sig_id: str) -> PromptRow:
@@ -217,14 +275,19 @@ def run_one_trial(
     global `dspy.settings.configure` (R9). `lm_calls` is the LM-history-length delta across
     the call; `lm_calls >= 2` sets `fallback_suspected=True` regardless of the classified
     outcome. The three token fields are `None` when `lm_calls == 0` or when every recorded
-    usage dict is empty (a cache hit).
+    usage dict is empty (a cache hit). `response_format_sent` is observed from the LM call
+    itself via a scoped `ResponseFormatRecorder`, so a request the endpoint rejected still
+    reports what was sent; `"none"` means no LM call was attempted.
     """
     sig_cell = SIGNATURES[sig_id]
+    recorder = ResponseFormatRecorder()
     n0 = len(lm.history)
     t0 = time.perf_counter()
     exc: BaseException | None = None
     try:
-        with dspy.context(lm=lm, adapter=adapter, track_usage=True):
+        with dspy.context(
+            lm=lm, adapter=adapter, track_usage=True, callbacks=_callbacks_with(recorder)
+        ):
             dspy.Predict(sig_cell.signature)(**sig_cell.inputs)
     except BaseException as caught:
         exc = caught
@@ -234,12 +297,7 @@ def run_one_trial(
     outcome, error_class = classify(exc, lm_calls)
     fallback_suspected = lm_calls >= 2
 
-    if lm_calls >= 1:
-        response_format_sent = normalize_response_format(
-            lm.history[-1]["kwargs"].get("response_format")
-        )
-    else:
-        response_format_sent = "none"
+    response_format_sent = recorder.last()
 
     if lm_calls == 0:
         total_tokens = prompt_tokens_reported = completion_tokens_reported = None
@@ -290,11 +348,12 @@ def run_repro_1871_offline() -> list[ReproRow]:
         cell = REPRO_1871_ADAPTERS[adapter_id]
         adapter = cell.factory()
         lm = JsonObjectOnlyLM([dict(_REPRO_1871_ANSWER)], adapter=adapter)
-        with dspy.context(lm=lm, adapter=adapter, track_usage=True):
+        recorder = ResponseFormatRecorder()
+        with dspy.context(
+            lm=lm, adapter=adapter, track_usage=True, callbacks=_callbacks_with(recorder)
+        ):
             dspy.Predict(flat.signature)(**flat.inputs)
-        response_format_sent = normalize_response_format(
-            lm.history[-1]["kwargs"].get("response_format")
-        )
+        response_format_sent = recorder.last()
         rows.append(
             ReproRow(
                 part="capability",
@@ -340,29 +399,33 @@ def probe_1871_live(lm: BaseLM) -> ReproRow:
     `not_reproducible: endpoint accepted both {"type":"json_object"} and
     {"type":"json_schema"}` and `outcome=Outcome.OK`. When one is rejected, `note` carries
     the `LMError`'s class and message and `outcome`/`error_class` come from `classify`.
+    `response_format_sent` is the format of the last call attempted, so a rejected second
+    call reports `json_schema`, not the first call's `json_object`.
     """
     adapter_config = "probe_1871_live"
+    recorder = ResponseFormatRecorder()
     lm_calls_start = len(lm.history)
 
     try:
-        lm(
-            messages=[{"role": "user", "content": "Reply with a JSON object."}],
-            response_format=JSON_OBJECT_RESPONSE_FORMAT,
-        )
-        lm(
-            messages=[{"role": "user", "content": "Reply with a JSON object."}],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "probe",
-                    "schema": {
-                        "type": "object",
-                        "properties": {"answer": {"type": "string"}},
-                        "required": ["answer"],
+        with dspy.context(callbacks=_callbacks_with(recorder)):
+            lm(
+                messages=[{"role": "user", "content": "Reply with a JSON object."}],
+                response_format=JSON_OBJECT_RESPONSE_FORMAT,
+            )
+            lm(
+                messages=[{"role": "user", "content": "Reply with a JSON object."}],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "probe",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                        },
                     },
                 },
-            },
-        )
+            )
     except BaseException as exc:
         lm_calls = len(lm.history) - lm_calls_start
         outcome, error_class = classify(exc, lm_calls)
@@ -371,7 +434,7 @@ def probe_1871_live(lm: BaseLM) -> ReproRow:
             part="live_probe",
             adapter="probe_1871_live",
             adapter_config=adapter_config,
-            response_format_sent="json_object",
+            response_format_sent=recorder.last(),
             outcome=outcome,
             error_class=error_class,
             lm_calls=lm_calls,
@@ -386,7 +449,7 @@ def probe_1871_live(lm: BaseLM) -> ReproRow:
         part="live_probe",
         adapter="probe_1871_live",
         adapter_config=adapter_config,
-        response_format_sent="json_schema",
+        response_format_sent=recorder.last(),
         outcome=Outcome.OK,
         error_class="",
         lm_calls=lm_calls,

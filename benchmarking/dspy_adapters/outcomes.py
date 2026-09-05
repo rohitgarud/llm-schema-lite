@@ -38,6 +38,23 @@ class Outcome(str, enum.Enum):
     OTHER_ERROR = "other_error"
 
 
+NOT_ATTEMPTED_OUTCOMES: frozenset[Outcome] = frozenset(
+    {Outcome.FORMAT_ERROR, Outcome.TRANSPORT_ERROR}
+)
+"""Outcomes whose cell never received a response, so no rate is defined over them.
+
+`FORMAT_ERROR` is reachable only via `classify` branches 4/5 with `lm_calls == 0` --
+`format()` raised before any LM call (`baml` x `recursive` is the real instance).
+`TRANSPORT_ERROR` is any `LMError`: the request was rejected or never answered, so there
+are no bytes to parse. Every other member had a reply to parse, including `OTHER_ERROR`
+(branch 5 with `lm_calls >= 1`).
+"""
+
+_PARSED_OUTCOMES: frozenset[Outcome] = frozenset({Outcome.OK, Outcome.VALIDATION_ERROR})
+"""Attempted outcomes whose reply actually parsed. `VALIDATION_ERROR` belongs here: the
+reply parsed, then failed field validation."""
+
+
 def classify(exc: BaseException | None, lm_calls: int) -> tuple[Outcome, str]:
     """Map an exception plus the LM-call delta onto an Outcome and its leaf class name.
 
@@ -109,20 +126,47 @@ class ReproRow:
     note: str  # "" for offline rows; the live probe's finding text
 
 
-def parse_success_rate(rows: list[TrialRow]) -> float:
-    """1 - (parse_error + empty_response) / total; 0.0 for an empty input list."""
-    if not rows:
-        return 0.0
-    bad = sum(1 for row in rows if row.outcome in (Outcome.PARSE_ERROR, Outcome.EMPTY_RESPONSE))
-    return 1 - (bad / len(rows))
+def attempted_rows(rows: list[TrialRow]) -> list[TrialRow]:
+    """Rows whose cell actually received a response to parse.
+
+    Excludes `NOT_ATTEMPTED_OUTCOMES`. Both rate functions share this denominator, so the
+    pair is internally comparable and neither can be read against the other's basis.
+    """
+    return [row for row in rows if row.outcome not in NOT_ATTEMPTED_OUTCOMES]
 
 
-def validation_success_rate(rows: list[TrialRow]) -> float:
-    """ok / total; 0.0 for an empty input list."""
-    if not rows:
-        return 0.0
-    ok = sum(1 for row in rows if row.outcome is Outcome.OK)
-    return ok / len(rows)
+def parse_success_rate(rows: list[TrialRow]) -> float | None:
+    """Share of attempted rows whose reply parsed (OK or VALIDATION_ERROR).
+
+    `None` -- not `0.0` -- when nothing was attempted; `report.py` renders that as the em
+    dash already used for every other undefined numeric. Returning `0.0` there would claim
+    a measured failure that never happened, and returning `1.0` (which the old
+    `1 - bad/total` form did for a `format_error`-only cell) would claim a perfect score
+    for a cell that never reached the LM.
+
+    The numerator is a **positive list**, not `1 - bad`: `OTHER_ERROR` must not score as a
+    parse success by omission, and an eighth `Outcome` member added later lands in the
+    denominator and not the numerator, i.e. it lowers the rate -- the safe direction.
+    """
+    attempted = attempted_rows(rows)
+    if not attempted:
+        return None
+    parsed = sum(1 for row in attempted if row.outcome in _PARSED_OUTCOMES)
+    return parsed / len(attempted)
+
+
+def validation_success_rate(rows: list[TrialRow]) -> float | None:
+    """Share of attempted rows that fully succeeded (OK).
+
+    `None` when nothing was attempted -- same denominator as `parse_success_rate`, so the
+    two columns are read on one basis. `is Outcome.OK` is already a positive test, so the
+    eighth-member argument in `parse_success_rate` holds here without a frozenset.
+    """
+    attempted = attempted_rows(rows)
+    if not attempted:
+        return None
+    ok = sum(1 for row in attempted if row.outcome is Outcome.OK)
+    return ok / len(attempted)
 
 
 class UnknownCellError(ValueError):

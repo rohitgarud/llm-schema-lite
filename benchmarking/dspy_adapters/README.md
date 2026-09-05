@@ -30,6 +30,10 @@ run against Ollama (`qwen3:8b`), see `results/live-openai-qwen3-8b-2026-09-05.md
 command, git head, and effective `lm_kwargs`. If no `results/live-*.md` file is present
 for the current date, the live pass was not run and no live numbers exist for that date
 — this file does not claim otherwise.
+The committed `results/live-openai-qwen3-8b-2026-09-05.md` predates the `parse rate` /
+`validation rate` aggregate columns and therefore does not carry them; its `command:`
+provenance line was corrected by hand to the documented invocation form, and its tables are
+otherwise exactly as generated.
 
 ## 2. Quick start
 
@@ -155,6 +159,9 @@ anything). Provenance for a CSV (generated timestamp, command line, git head, ds
 version, `llm_schema_lite` version, and — for the live CSV — the model, api base,
 effective `lm_kwargs`, and capability flags) lives entirely in the **same-named** `.md`
 sibling, at the top of that file, before any table.
+The live aggregate's `parse rate` and `validation rate` columns are markdown-only for the
+same reason in reverse: they are per-`(adapter, signature)` derived values, and the CSV is
+strictly per-trial, so `LIVE_CSV_HEADER` is unchanged.
 
 ## 9. The #1871 status
 

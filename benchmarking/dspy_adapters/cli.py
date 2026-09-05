@@ -44,6 +44,7 @@ from pathlib import Path
 
 from .adapters import ADAPTERS, LIVE_DEFAULT_ADAPTER_IDS, resolve_adapter_ids
 from .outcomes import ReproRow, UnknownCellError
+from .provenance import PROG, invocation_command
 from .signatures import SIGNATURES, resolve_signature_ids
 
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "results"
@@ -52,7 +53,7 @@ DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "results"
 def build_parser() -> argparse.ArgumentParser:
     """Build the eight-flag argparse surface for `python -m benchmarking.dspy_adapters`."""
     parser = argparse.ArgumentParser(
-        prog="python -m benchmarking.dspy_adapters",
+        prog=PROG,
         description=(
             "DSPy adapter benchmark: an offline prompt-cost arm, a live outcomes arm "
             "against a local Ollama endpoint, and a synthetic reproduction of DSPy "
@@ -211,7 +212,7 @@ def _run_offline(args: argparse.Namespace) -> int:
         )
     meta = dataclasses.replace(
         report_module.RunMeta.minimal("prompt-cost"),
-        command=" ".join(sys.argv),
+        command=invocation_command(),
         git_head=report_module.git_head(),
         encoding=ENCODING_NAME if available else f"{ENCODING_NAME} (unavailable)",
     )
@@ -255,7 +256,7 @@ def _run_live(args: argparse.Namespace) -> int:
 
     meta = dataclasses.replace(
         report_module.RunMeta.minimal("live"),
-        command=" ".join(sys.argv),
+        command=invocation_command(),
         git_head=report_module.git_head(),
         model=cfg.model,
         api_base=cfg.api_base,

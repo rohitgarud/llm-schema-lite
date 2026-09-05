@@ -1,7 +1,7 @@
 ```
 arm: live
 generated: 2026-09-05T06:59:20.788791+00:00
-command: /home/rohitgarud/llm-schema-lite/benchmarking/dspy_adapters/__main__.py --live
+command: python -m benchmarking.dspy_adapters --live
 git_head: 41810a5
 dspy_version: 3.3.1
 llm_schema_lite_version: 0.6.1

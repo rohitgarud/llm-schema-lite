@@ -61,11 +61,6 @@ class JsonObjectOnlyLM(DummyLM):  # type: ignore[misc]
     Imitates tests/dspy_helpers.py's JsonObjectOnlyDummyLM; not imported from it.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize like DummyLM, then seed `lm_kwargs_history`."""
-        self.lm_kwargs_history: list[dict[str, Any]] = []
-        super().__init__(*args, **kwargs)
-
     @property
     def supported_params(self) -> set[str]:
         """Return {"response_format"} instead of DummyLM's empty set."""
@@ -75,11 +70,6 @@ class JsonObjectOnlyLM(DummyLM):  # type: ignore[misc]
     def supports_response_schema(self) -> bool:
         """Return False — the capability gap that forces the json_object branch."""
         return False
-
-    def forward(self, prompt: Any = None, messages: Any = None, **kwargs: Any) -> Any:
-        """Record a copy of kwargs into lm_kwargs_history, then delegate to DummyLM."""
-        self.lm_kwargs_history.append(dict(kwargs))
-        return super().forward(prompt=prompt, messages=messages, **kwargs)
 
 
 class Issue1871LM(JsonObjectOnlyLM):
@@ -92,11 +82,10 @@ class Issue1871LM(JsonObjectOnlyLM):
     """
 
     def forward(self, prompt: Any = None, messages: Any = None, **kwargs: Any) -> Any:
-        """Record kwargs; raise LMInvalidRequestError iff response_format is json_object.
+        """Raise LMInvalidRequestError iff response_format is json_object.
 
-        Otherwise delegate to JsonObjectOnlyLM.forward.
+        Otherwise delegate to DummyLM.forward via the MRO.
         """
-        self.lm_kwargs_history.append(dict(kwargs))
         if kwargs.get("response_format") == JSON_OBJECT_RESPONSE_FORMAT:
             raise LMInvalidRequestError(
                 "'response_format.type' must be 'json_schema'",
@@ -104,4 +93,4 @@ class Issue1871LM(JsonObjectOnlyLM):
                 provider="lm_studio",
                 status=400,
             )
-        return DummyLM.forward(self, prompt=prompt, messages=messages, **kwargs)
+        return super().forward(prompt=prompt, messages=messages, **kwargs)

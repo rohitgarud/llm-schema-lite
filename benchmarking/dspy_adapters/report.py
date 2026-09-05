@@ -40,7 +40,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .outcomes import Outcome, PromptRow, TrialRow
+from .outcomes import Outcome, PromptRow, TrialRow, parse_success_rate, validation_success_rate
+from .provenance import redact_lm_kwargs, redact_url_userinfo
 
 
 @dataclass
@@ -56,10 +57,28 @@ class RunMeta:
     encoding: str | None = None  # "cl100k_base"; offline arm only
     model: str | None = None  # live only
     api_base: str | None = None  # live only
-    lm_kwargs: dict[str, Any] = field(default_factory=dict)  # live only, effective
+    lm_kwargs: dict[str, Any] = field(
+        default_factory=dict
+    )  # live only, effective; pre-redacted by __post_init__
     supports_response_schema: bool | None = None  # live only
     supports_function_calling: bool | None = None  # live only
     integrity_overridden: bool = False  # live only
+
+    def __post_init__(self) -> None:
+        """Redact credential-shaped values at construction, so RunMeta is safe by construction.
+
+        This -- not `cli.py` -- is the assembly boundary. `dataclasses.replace` re-invokes
+        the constructor, so `cli.py`'s two `replace(...)` sites are covered without either
+        of them knowing, and every present and future consumer of `lm_kwargs` inherits the
+        guarantee. Both redactors are idempotent, so double application is harmless.
+
+        Residual, stated not fixed: `RunMeta` is a mutable dataclass, so assigning
+        `meta.lm_kwargs = {...}` after construction bypasses this. No `__setattr__` guard is
+        added -- `__post_init__` covers every construction path in the package, and a
+        setter guard would be machinery out of proportion to the risk.
+        """
+        self.lm_kwargs = redact_lm_kwargs(self.lm_kwargs)
+        self.api_base = redact_url_userinfo(self.api_base)
 
     @classmethod
     def minimal(cls, arm: str) -> RunMeta:
@@ -137,6 +156,7 @@ OFFLINE_DETAIL_COLUMNS = (
 
 LIVE_AGGREGATE_COLUMNS = (
     "| adapter | signature | trials | ok | parse | validation | empty | transport | format "
+    "| parse rate | validation rate "
     "| median wall_s | stddev wall_s | median total_tokens | response_format |"
 )
 
@@ -191,6 +211,11 @@ NEVER_JOINED_NOTE = (
 _PIVOT_SIGNATURE_ORDER: tuple[str, ...] = tuple(
     part.strip() for part in OFFLINE_PIVOT_COLUMNS.strip("|").split("|")
 )[1:]
+
+# Derived from the header string itself so the two can never drift apart -- the same rule
+# `_PIVOT_SIGNATURE_ORDER` (above) already applies to the offline pivot. This ticket is the
+# drift event that guard was invented for.
+_LIVE_AGGREGATE_COLUMN_COUNT: int = len(LIVE_AGGREGATE_COLUMNS.strip("|").split("|"))
 
 
 def slugify_model(model: str) -> str:
@@ -309,7 +334,9 @@ def aggregate_live(rows: list[TrialRow]) -> list[dict[str, Any]]:
 
     Each record carries counts per `Outcome`, the median/stddev of `wall_s`, the median
     of `total_tokens` (over the trials that reported one), and the single
-    `response_format_sent` value observed for the cell (or "mixed" if it varied).
+    `response_format_sent` value observed for the cell (or "mixed" if it varied). Each
+    record also carries `parse_success_rate` / `validation_success_rate` over *attempted*
+    rows only, `None` when the cell attempted nothing.
     `statistics.stdev` needs >= 2 points, so a single-trial cell reports `0.0` rather
     than raising.
     """
@@ -344,6 +371,8 @@ def aggregate_live(rows: list[TrialRow]) -> list[dict[str, Any]]:
                 "transport": counts[Outcome.TRANSPORT_ERROR],
                 "format": counts[Outcome.FORMAT_ERROR],
                 "other": counts[Outcome.OTHER_ERROR],
+                "parse_success_rate": parse_success_rate(group_rows),  # float | None
+                "validation_success_rate": validation_success_rate(group_rows),  # float | None
                 "median_wall_s": statistics.median(wall_times) if wall_times else 0.0,
                 "stddev_wall_s": (statistics.stdev(wall_times) if len(wall_times) >= 2 else 0.0),
                 "median_total_tokens": (statistics.median(token_totals) if token_totals else None),
@@ -354,11 +383,15 @@ def aggregate_live(rows: list[TrialRow]) -> list[dict[str, Any]]:
 
 
 def _render_live_aggregate(rows: list[TrialRow]) -> list[str]:
-    sep = "|" + "|".join(["---"] * 13) + "|"
+    sep = "|" + "|".join(["---"] * _LIVE_AGGREGATE_COLUMN_COUNT) + "|"
     lines = [LIVE_AGGREGATE_COLUMNS, sep]
     for record in aggregate_live(rows):
         median_tokens = record["median_total_tokens"]
         median_tokens_cell = "—" if median_tokens is None else str(median_tokens)
+        parse_rate = record["parse_success_rate"]
+        parse_rate_cell = "—" if parse_rate is None else f"{parse_rate:.2f}"
+        validation_rate = record["validation_success_rate"]
+        validation_rate_cell = "—" if validation_rate is None else f"{validation_rate:.2f}"
         cells = [
             record["adapter"],
             record["signature"],
@@ -369,6 +402,8 @@ def _render_live_aggregate(rows: list[TrialRow]) -> list[str]:
             str(record["empty"]),
             str(record["transport"]),
             str(record["format"]),
+            parse_rate_cell,
+            validation_rate_cell,
             f"{record['median_wall_s']:.3f}",
             f"{record['stddev_wall_s']:.3f}",
             median_tokens_cell,
