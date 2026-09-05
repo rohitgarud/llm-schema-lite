@@ -985,8 +985,30 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         inputs: dict[str, Any],
         outputs: dict[str, Any],
     ) -> dict[str, list[Any]]:
-        """Format data for fine-tuning (not yet implemented)."""
-        raise NotImplementedError("Fine-tuning data formatting not yet implemented")
+        """Format one example as an OpenAI chat-format fine-tuning record.
+
+        Returns ``{"messages": [...]}`` whose final message is the assistant turn for
+        the active output_mode, produced by ``format_assistant_message_content``.
+
+        Composed locally rather than delegated to ``ChatAdapter.format_finetune_data``
+        (reachable via ``super(JSONAdapter, self)``, as ``__call__``/``acall`` already
+        do): that method's body belongs to ``ChatAdapter`` and describes *its* wire
+        format, so delegation would keep matching us only incidentally and could
+        silently start emitting wrong training data if upstream ever hardens it around
+        ChatAdapter's own field-marker contract. Local composition mirrors upstream's
+        shape today without borrowing its body.
+
+        Known, deliberate properties, not defects: a multimodal user turn (e.g.
+        dspy.Image) keeps its list-of-content-blocks ``content`` unchanged; the
+        assistant turn carries no ``[[ ## completed ## ]]`` marker, so it is
+        byte-identical to the corresponding demo assistant turn.
+        """
+        messages = self.format(signature=signature, demos=demos, inputs=inputs)
+        assistant = {
+            "role": "assistant",
+            "content": self.format_assistant_message_content(signature=signature, outputs=outputs),
+        }
+        return {"messages": messages + [assistant]}
 
 
 # ==================== Helper Functions ====================

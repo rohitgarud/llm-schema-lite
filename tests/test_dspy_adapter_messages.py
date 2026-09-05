@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("dspy", minversion="3.3.1")
 
 import dspy  # noqa: E402
-from dspy.adapters.chat_adapter import FieldInfoWithName  # noqa: E402
+from dspy.adapters.chat_adapter import ChatAdapter, FieldInfoWithName  # noqa: E402
 from dspy.adapters.json_adapter import JSONAdapter  # noqa: E402
 
 from llm_schema_lite.dspy_integration import OutputMode  # noqa: E402
@@ -21,7 +21,9 @@ from tests.dspy_helpers import (  # noqa: E402
     HistoryIn,
     ImageIn,
     Person,
+    Typed,
     Unordered,
+    assert_message_roles,
     make_adapter,
 )
 
@@ -171,9 +173,9 @@ class TestFieldWithValue:
 
 
 class TestFinetuneData:
-    """format_finetune_data is unimplemented today (D11)."""
+    """format_finetune_data composes format() + format_assistant_message_content()
+    into an OpenAI chat-format {"messages": [...]} record, per mode."""
 
-    @pytest.mark.xfail(reason="lsl-2026-09-04-010: format_finetune_data raises NotImplementedError")
     def test_format_finetune_data_returns_messages(self):
         """format_finetune_data should return a {'messages': [...]} payload."""
         result = make_adapter(OutputMode.JSONISH).format_finetune_data(
@@ -181,3 +183,118 @@ class TestFinetuneData:
         )
         assert "messages" in result
         assert {m["role"] for m in result["messages"]} <= {"system", "user", "assistant"}
+
+    def test_json_mode_record_structure(self):
+        """JSON mode returns a well-formed chat record whose tail is the assistant turn."""
+        adapter = make_adapter(OutputMode.JSON)
+        demos = [dict(INPUTS, **OUTPUTS)]
+        record = adapter.format_finetune_data(Extract, demos, INPUTS, OUTPUTS)
+        assert set(record) == {"messages"}
+        assert record["messages"][-1]["role"] == "assistant"
+        assert isinstance(record["messages"][-1]["content"], str)
+        assert record["messages"][:-1] == adapter.format(Extract, demos, INPUTS)
+        assert_message_roles(
+            record["messages"], ["system", "user", "assistant", "user", "assistant"]
+        )
+        assert record["messages"][-1]["content"] == adapter.format_assistant_message_content(
+            Extract, OUTPUTS
+        )
+
+    def test_jsonish_mode_record_structure(self):
+        """JSONish mode returns a well-formed chat record whose tail is the assistant turn."""
+        adapter = make_adapter(OutputMode.JSONISH)
+        demos = [dict(INPUTS, **OUTPUTS)]
+        record = adapter.format_finetune_data(Extract, demos, INPUTS, OUTPUTS)
+        assert set(record) == {"messages"}
+        assert record["messages"][-1]["role"] == "assistant"
+        assert isinstance(record["messages"][-1]["content"], str)
+        assert record["messages"][:-1] == adapter.format(Extract, demos, INPUTS)
+        assert_message_roles(
+            record["messages"], ["system", "user", "assistant", "user", "assistant"]
+        )
+        assert record["messages"][-1]["content"] == adapter.format_assistant_message_content(
+            Extract, OUTPUTS
+        )
+
+    def test_yaml_mode_record_structure(self):
+        """YAML mode returns a well-formed chat record whose tail is the assistant turn."""
+        adapter = make_adapter(OutputMode.YAML)
+        demos = [dict(INPUTS, **OUTPUTS)]
+        record = adapter.format_finetune_data(Extract, demos, INPUTS, OUTPUTS)
+        assert set(record) == {"messages"}
+        assert record["messages"][-1]["role"] == "assistant"
+        assert isinstance(record["messages"][-1]["content"], str)
+        assert record["messages"][:-1] == adapter.format(Extract, demos, INPUTS)
+        assert_message_roles(
+            record["messages"], ["system", "user", "assistant", "user", "assistant"]
+        )
+        assert record["messages"][-1]["content"] == adapter.format_assistant_message_content(
+            Extract, OUTPUTS
+        )
+
+    def test_json_mode_round_trips_through_parse(self):
+        """Extract's outputs are both required and non-nullable, so
+        apply_output_field_defaults cannot invent one and this equality is not vacuous."""
+        adapter = make_adapter(OutputMode.JSON)
+        record = adapter.format_finetune_data(Extract, [], INPUTS, OUTPUTS)
+        assert adapter.parse(Extract, record["messages"][-1]["content"]) == OUTPUTS
+
+    def test_jsonish_mode_round_trips_through_parse(self):
+        """Same non-vacuous round-trip in JSONish mode; see the JSON-mode test for why
+        Extract rather than QA or QAOptional is used."""
+        adapter = make_adapter(OutputMode.JSONISH)
+        record = adapter.format_finetune_data(Extract, [], INPUTS, OUTPUTS)
+        assert adapter.parse(Extract, record["messages"][-1]["content"]) == OUTPUTS
+
+    def test_yaml_mode_round_trips_through_parse(self):
+        """Same non-vacuous round-trip in YAML mode; see the JSON-mode test for why
+        Extract rather than QA or QAOptional is used."""
+        adapter = make_adapter(OutputMode.YAML)
+        record = adapter.format_finetune_data(Extract, [], INPUTS, OUTPUTS)
+        assert adapter.parse(Extract, record["messages"][-1]["content"]) == OUTPUTS
+
+    def test_jsonish_mode_round_trips_with_non_default_typed_values(self):
+        """Typed's declared defaults (count=0, tier='a') are deliberately avoided so this
+        equality still discriminates on a signature that does have fillable fields."""
+        adapter = make_adapter(OutputMode.JSONISH)
+        outputs = {"answer": "x", "count": 7, "tier": "b"}
+        record = adapter.format_finetune_data(Typed, [], {"question": "3+3?"}, outputs)
+        assert adapter.parse(Typed, record["messages"][-1]["content"]) == outputs
+
+    def test_history_input_produces_full_role_sequence(self):
+        """A History input with two prior turns yields alternating user/assistant turns."""
+        adapter = make_adapter(OutputMode.JSONISH)
+        inputs = {
+            "history": dspy.History(
+                messages=[
+                    {"question": "2+2?", "answer": "4"},
+                    {"question": "1+1?", "answer": "2"},
+                ]
+            ),
+            "question": "3+3?",
+        }
+        record = adapter.format_finetune_data(HistoryIn, [], inputs, {"answer": "6"})
+        assert_message_roles(
+            record["messages"],
+            ["system", "user", "assistant", "user", "assistant", "user", "assistant"],
+        )
+        assert all(isinstance(m["content"], str) for m in record["messages"])
+
+    def test_image_input_preserves_multimodal_content_blocks(self):
+        """A dspy.Image user turn keeps its list-valued content; the record is not normalised."""
+        adapter = make_adapter(OutputMode.JSONISH)
+        img = dspy.Image(url="data:image/png;base64,iVBORw0KGgo=")
+        record = adapter.format_finetune_data(ImageIn, [], {"img": img}, {"caption": "a cat"})
+        assert_message_roles(record["messages"], ["system", "user", "assistant"])
+        assert isinstance(record["messages"][1]["content"], list)
+        assert isinstance(record["messages"][-1]["content"], str)
+
+    def test_matches_upstream_chat_adapter_envelope(self):
+        """Canary: our record equals ChatAdapter's for the same inputs. If dspy-latest
+        reddens on this test alone, demote or delete THIS TEST ONLY, never the
+        implementation."""
+        adapter = make_adapter(OutputMode.JSONISH)
+        inputs, outputs = {"question": "3+3?"}, {"answer": "6"}
+        assert ChatAdapter.format_finetune_data(
+            adapter, QA, [], inputs, outputs
+        ) == adapter.format_finetune_data(QA, [], inputs, outputs)
