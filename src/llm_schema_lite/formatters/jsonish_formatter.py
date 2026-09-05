@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from .base import BaseFormatter, classify_container
-from .config import FormatterConfig
+from .config import FormatterConfig, with_format_default_separator
 
 
 class JSONishFormatter(BaseFormatter):
@@ -36,12 +36,7 @@ class JSONishFormatter(BaseFormatter):
             config: FormatterConfig for customizing formatter behavior.
             include_metadata: Deprecated. Use config.include_metadata instead.
         """
-        # Set default union_separator for JSONish format if not explicitly provided
-        if config is None:
-            config = FormatterConfig(union_separator=" OR ")
-        elif config.union_separator == FormatterConfig().union_separator:
-            # User didn't override union_separator, use JSONish default
-            config.union_separator = " OR "
+        config = with_format_default_separator(config, " OR ")
 
         super().__init__(schema, config, include_metadata)
         # Trial-specific state

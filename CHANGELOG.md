@@ -83,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extraction only. (`7a29f2d`)
 - `make test-dspy` matched no files and exited 4; it now runs
   `pytest tests -k dspy -v --no-cov`. (`e3f2274`)
+- `JSONishFormatter` no longer rewrites `union_separator` on the caller's
+  `FormatterConfig`. Both JSONish and YAML now apply their `" OR "` default through
+  one helper in `formatters/config.py` that copies rather than writes through, so a
+  single config can be reused across formatters -- and by `StructuredOutputAdapter` --
+  without a later TypeScript render emitting `number OR string`. (`<short-sha>`)
 
 <!-- insertion marker -->
 ## [v0.6.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27

@@ -4,7 +4,12 @@ import pytest
 from pydantic import BaseModel, Field
 
 from llm_schema_lite import FormatterConfig, simplify_schema
-from llm_schema_lite.formatters.config import DEFAULT_METADATA_INCLUSION, DESCRIPTION_KEYWORDS
+from llm_schema_lite.formatters.config import (
+    DEFAULT_METADATA_INCLUSION,
+    DEFAULT_UNION_SEPARATOR,
+    DESCRIPTION_KEYWORDS,
+    with_format_default_separator,
+)
 from tests.formatter_helpers import render_all_formatters
 
 
@@ -314,3 +319,39 @@ class TestFormatterConfigIncludes:
         assert DESCRIPTION_KEYWORDS == frozenset(
             {"title", "description", "id", "$comment", "x-enum-descriptions"}
         )
+
+
+class TestWithFormatDefaultSeparator:
+    """Unit tests for `with_format_default_separator` (design v2 behaviour table)."""
+
+    def test_none_config_returns_fresh_config_with_separator(self):
+        """`None` in yields a fresh `FormatterConfig` carrying the given separator."""
+        result = with_format_default_separator(None, " OR ")
+
+        assert isinstance(result, FormatterConfig)
+        assert result.union_separator == " OR "
+
+    def test_default_separator_is_replaced_without_mutating_input(self):
+        """A config still at the package default yields a *different* object with the new
+        separator; the input object's own `union_separator` is unchanged."""
+        original = FormatterConfig()
+        assert original.union_separator == DEFAULT_UNION_SEPARATOR
+
+        result = with_format_default_separator(original, " OR ")
+
+        assert result.union_separator == " OR "
+        assert original.union_separator == DEFAULT_UNION_SEPARATOR
+        # Row 2 of the behaviour table is the copy branch, so `is not` is CORRECT here.
+        assert result is not original
+
+    def test_explicit_separator_is_returned_unchanged_by_identity(self):
+        """A config with a non-default separator is returned as the same object,
+        untouched, so an explicit choice always wins."""
+        original = FormatterConfig(union_separator=" or ")
+
+        result = with_format_default_separator(original, " OR ")
+
+        # Row 3 of the behaviour table is the passthrough branch: the helper returns the
+        # caller's own object. `is` is CORRECT here; `is not` would be a bug in the test.
+        assert result is original
+        assert result.union_separator == " or "

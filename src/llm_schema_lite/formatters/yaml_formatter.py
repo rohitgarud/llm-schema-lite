@@ -6,13 +6,12 @@ Feature parity with JSONish formatter for metadata, enums, unions, types,
 dependencies, and $ref default.
 """
 
-import dataclasses
 from typing import Any
 
 import yaml
 
 from .base import BaseFormatter, ContainerShape, classify_container
-from .config import FormatterConfig
+from .config import FormatterConfig, with_format_default_separator
 
 
 def _is_null_schema(member: Any) -> bool:
@@ -53,14 +52,7 @@ class YAMLFormatter(BaseFormatter):
             config: FormatterConfig for customizing formatter behavior.
             include_metadata: Deprecated. Use config.include_metadata instead.
         """
-        # Set default union_separator for YAML format if not explicitly provided
-        if config is None:
-            config = FormatterConfig(union_separator=" OR ")
-        elif config.union_separator == FormatterConfig().union_separator:
-            # User didn't override union_separator, use YAML default (D6: never mutate the
-            # caller's object — hand a fresh copy to super().__init__ instead. Mutating it
-            # poisoned any sibling formatter later handed the same config.)
-            config = dataclasses.replace(config, union_separator=" OR ")
+        config = with_format_default_separator(config, " OR ")
 
         super().__init__(schema, config, include_metadata)
 

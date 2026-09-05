@@ -28,6 +28,7 @@ from tests.conftest import (
     RequiredOptionalModel,
     Root,
     SimpleFormatterModel,
+    UnionTypes,
     WithFieldDescriptions,
     WithTitleDescription,
 )
@@ -2178,3 +2179,41 @@ def test_jsonish_recursive_optional_postfix_merge() -> None:
     assert right_line == f"right: {expected}"
     assert left_line.count("//") == 1, f"duplicated comment marker: {left_line!r}"
     assert left_line.count("OR null") == 1, f"duplicated union tail: {left_line!r}"
+
+
+def test_jsonish_formatter_does_not_mutate_caller_config() -> None:
+    """JSONishFormatter must not poison a `FormatterConfig` a sibling format reuses.
+
+    Mirrors `test_yaml_formatter.py::test_yaml_formatter_does_not_mutate_caller_config`.
+    HEAD wrote `config.union_separator` in place inside the constructor's `elif` branch,
+    so a `TypeScriptFormatter` handed the same object afterwards emitted
+    `number OR string` instead of `number | string`.
+    """
+    from llm_schema_lite.formatters.typescript_formatter import TypeScriptFormatter
+
+    # AC 1: the caller's config survives a JSONish render structurally unchanged.
+    config = FormatterConfig()
+    assert config.union_separator == " | "
+
+    JSONishFormatter(UnionTypes.model_json_schema(), config=config).transform_schema()
+
+    assert config == FormatterConfig(), "JSONishFormatter mutated the caller's config"
+
+    # AC 2: the same object still renders TypeScript with the package default separator.
+    ts_result = TypeScriptFormatter(
+        UnionTypes.model_json_schema(), config=config
+    ).transform_schema()
+
+    assert "number | string" in ts_result
+    assert "number OR string" not in ts_result
+
+    # Ticket risk: an explicitly chosen separator is honoured and reads back unchanged.
+    # Assert BY VALUE ONLY. `with_format_default_separator` returns this very object in
+    # the passthrough branch (behaviour table row 3), so `is not` would be wrong here.
+    custom_config = FormatterConfig(union_separator=" or ")
+    jsonish_result = JSONishFormatter(
+        UnionTypes.model_json_schema(), config=custom_config
+    ).transform_schema()
+
+    assert "id*: int or string" in jsonish_result
+    assert custom_config.union_separator == " or "

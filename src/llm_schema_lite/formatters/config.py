@@ -1,11 +1,15 @@
 """Configuration dataclass for formatters."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 DESCRIPTION_KEYWORDS: frozenset[str] = frozenset(
     {"title", "description", "id", "$comment", "x-enum-descriptions"}
 )
+
+# Package-wide default union separator; formatters compare against this value (not a
+# sentinel) to decide whether the caller already chose their own separator.
+DEFAULT_UNION_SEPARATOR: str = " | "
 
 # Default metadata inclusion configuration
 # Includes all constraint metadata by default, excludes examples for token savings
@@ -82,7 +86,7 @@ class FormatterConfig:
     prefix: str | None = None
     hoist_enums: bool | Literal["auto"] = "auto"
     hoist_classes: bool | Literal["auto"] | list[str] = "auto"
-    union_separator: str = " | "
+    union_separator: str = DEFAULT_UNION_SEPARATOR
     indent: int = 2
     optional_marker: str = ""
     required_marker: str = "*"
@@ -115,3 +119,34 @@ class FormatterConfig:
             merged = DEFAULT_METADATA_INCLUSION.copy()
             merged.update(self.metadata_inclusion)
             self.metadata_inclusion = merged
+
+
+def with_format_default_separator(
+    config: FormatterConfig | None, separator: str
+) -> FormatterConfig:
+    """Return a config that renders unions with ``separator`` unless the caller chose one.
+
+    A formatter calls this in ``__init__`` to apply its own default union separator
+    without ever writing through the object it was handed: the caller's
+    ``FormatterConfig`` must survive the call unchanged so it can be reused across
+    formatters (and by the DSPy adapter).
+
+    ``None`` yields a fresh config carrying ``separator``. A config still holding the
+    package default (``DEFAULT_UNION_SEPARATOR``) yields a ``dataclasses.replace`` copy
+    carrying ``separator`` -- ``config`` itself is left untouched. Any other config
+    (the caller set their own separator) is returned unchanged, by identity, so an
+    explicit ``union_separator`` always wins and no copy is made in that case.
+
+    Args:
+        config: The caller-supplied config, or ``None``.
+        separator: This format's default union separator (e.g. ``" OR "``).
+
+    Returns:
+        A ``FormatterConfig`` carrying `separator` when the input was ``None`` or still
+        at the package default; otherwise the same object that was passed in.
+    """
+    if config is None:
+        return FormatterConfig(union_separator=separator)
+    if config.union_separator == DEFAULT_UNION_SEPARATOR:
+        return replace(config, union_separator=separator)
+    return config

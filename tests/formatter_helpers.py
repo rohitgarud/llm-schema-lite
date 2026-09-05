@@ -226,11 +226,14 @@ def render_all_formatters(
     """Render `model` through JSONish, YAML, and TypeScript with the same config.
 
     A fresh `dataclasses.replace(config)` copy is forwarded to each of the three
-    `simplify_schema` calls (when `config` is given) rather than the same instance,
-    because `YAMLFormatter.__init__` mutates an unset `union_separator` on whatever
-    config object it is handed. Reusing one instance across formatters would leak that
-    mutation into the JSONish/TypeScript renders depending on call order; using a copy
-    per call keeps every render independent and leaves the caller's `config` untouched.
+    `simplify_schema` calls (when `config` is given) rather than the same instance.
+    This is render isolation, not a workaround: no formatter constructor mutates its
+    caller's `FormatterConfig` (JSONish and YAML both apply their default union
+    separator through `with_format_default_separator`, which copies rather than
+    writes through). The per-call copy exists so the three renders stay independent
+    of each other regardless of what a future formatter does, and so a caller can
+    inspect its own `config` unchanged after calling this helper -- not because any
+    current formatter would otherwise corrupt it.
 
     Args:
         model: Pydantic model (or anything else `simplify_schema` accepts) to render.
