@@ -38,6 +38,7 @@ from llm_schema_lite import (
     loads,
     simplify_schema,
 )
+from llm_schema_lite.parsers import normalize_marker_keys
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,11 @@ _JSON_PARSE_ERROR_MESSAGE = "LM response cannot be serialized to a JSON object."
 # Names both formats actually attempted in YAML mode by the time this is raised
 # (see _extract_yaml).
 _YAML_PARSE_ERROR_MESSAGE = "LM response cannot be parsed as YAML or JSON."
+
+# Bound on _unwrap_array_reply's recursion into nested lists. Deliberately separate from
+# FormatterConfig.max_recursion_depth (a render-side cap) and from MARKER_WALK_MAX_DEPTH
+# (parsers/schema_parser.py) -- each bounds a different walk.
+_ARRAY_UNWRAP_MAX_DEPTH = 8
 
 # Names the offending mode and both escape hatches; asserted on by
 # tests/test_dspy_adapter_streaming.py (must contain "YAML" and "streaming").
@@ -174,6 +180,10 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             fails and parse_config.partial is True, the field is dropped and refilled
             by apply_output_field_defaults. Coercion/drop events are logged at DEBUG
             only; the Prediction shape is unchanged.
+            parse_config no longer gates whether marker stripping happens -- that is
+            unconditional and sourced from _effective_formatter_config().required_marker.
+            An explicit parse_config.strip_required_marker adds a second marker
+            candidate, and "" disables stripping entirely.
     """
 
     def __init__(
@@ -840,6 +850,59 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             logger.debug("YAML extraction failed; JSON rescue succeeded for completion")
             return result
 
+    def _marker_candidates(self) -> list[str]:
+        """Ordered, de-duplicated markers this adapter will try to strip from reply keys.
+
+        Base candidate is self._effective_formatter_config().required_marker -- the
+        marker this adapter's own prompt renders. Falsy means nothing is marked in the
+        prompt, so nothing is added. If self.parse_config is not None, its
+        strip_required_marker either disables stripping entirely (an explicit "" returns
+        [] regardless of the base candidate) or appends a second candidate,
+        de-duplicated against the base.
+
+        Returns:
+            The ordered marker candidates to try, base marker first. [] means marker
+            stripping is fully disabled for this call.
+        """
+        candidates: list[str] = []
+        base = self._effective_formatter_config().required_marker
+        if base:
+            candidates.append(base)
+        if self.parse_config is not None:
+            override = self.parse_config.strip_required_marker
+            if override == "":
+                return []
+            if override and override not in candidates:
+                candidates.append(override)
+        return candidates
+
+    def _normalize_reply_keys(
+        self, signature: type[Signature], raw: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Apply each marker candidate to the reply's top-level keys.
+
+        Sequential passes over self._marker_candidates(), each via
+        normalize_marker_keys(raw, signature.output_fields.keys(), marker). Sequential
+        passes are strictly more conservative than a merged multi-marker pass, because
+        each pass re-evaluates the "stripped name not already in data" guard against the
+        PREVIOUS pass's output, which can only contain more known keys. A no-op when
+        _marker_candidates() is empty.
+
+        Args:
+            signature: The DSPy signature being parsed against -- supplies the known key
+                universe (signature.output_fields.keys()), which is the same set the
+                output-field filter downstream tests, so stripping and filtering can
+                never disagree about what a known key is.
+            raw: The dict produced after the dict guard, before the output-field filter.
+
+        Returns:
+            A new dict with the same values, with markers from every candidate stripped
+            in order. Never mutates `raw`.
+        """
+        for marker in self._marker_candidates():
+            raw = normalize_marker_keys(raw, signature.output_fields.keys(), marker)
+        return raw
+
     def _build_output_fields(
         self, signature: type[Signature], completion: str, raw: Any
     ) -> dict[str, Any]:
@@ -857,6 +920,9 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             Python values and are never fed back through parse_value.
           - Return type is dict[str, Any] keyed by output-field name; CoercionMetadata
             goes only to the logger, never into the returned dict or the Prediction.
+          - Both _unwrap_array_reply and self._normalize_reply_keys sit strictly ABOVE the
+            parse_value loop and change only WHICH keys/shape enter it, never how a value
+            is parsed, rescued, or raised.
 
         Args:
             signature: The DSPy signature being parsed against.
@@ -873,6 +939,8 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                 through from parse_value when self.parse_config is None and no rescue is
                 attempted, matching upstream.
         """
+        raw = _unwrap_array_reply(raw)
+
         if not isinstance(raw, dict):
             raise AdapterParseError(
                 adapter_name="StructuredOutputAdapter",
@@ -880,6 +948,8 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                 lm_response=completion,
                 message=_JSON_PARSE_ERROR_MESSAGE,
             )
+
+        raw = self._normalize_reply_keys(signature, raw)
 
         fields = {k: v for k, v in raw.items() if k in signature.output_fields}
 
@@ -1012,6 +1082,43 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
 
 
 # ==================== Helper Functions ====================
+
+
+def _unwrap_array_reply(raw: Any, _depth: int = 0) -> Any:
+    """Return the first dict reachable through a top-level list, else `raw` unchanged.
+
+    Pure, module-level, no `self`. Mirrors the OUTCOME of upstream JSONAdapter's
+    balanced-brace regex rescue for the array shapes both packages agree on: the first
+    dict found by scanning a list left-to-right, recursing into nested lists up to
+    _ARRAY_UNWRAP_MAX_DEPTH, is returned. Non-dict, non-list elements are skipped, not
+    rejected. A list containing no dict anywhere (`[]`, `[1,2,3]`) falls through
+    unchanged so it reaches the existing dict guard in _build_output_fields with the
+    verbatim _JSON_PARSE_ERROR_MESSAGE.
+
+    Not dispatched on non-list input: `raw` is returned unchanged for a dict, a scalar,
+    or any other shape, so the caller's own dict guard remains the single place that
+    decides pass/fail.
+
+    Args:
+        raw: Whatever the mode-specific extraction (_extract_json / _extract_yaml)
+            produced.
+        _depth: Recursion counter for nested lists. Callers never pass this.
+
+    Returns:
+        The first dict reachable per the rule above, or `raw` unchanged.
+    """
+    if not isinstance(raw, list) or _depth > _ARRAY_UNWRAP_MAX_DEPTH:
+        return raw
+    for element in raw:
+        if isinstance(element, dict):
+            if len(raw) > 1:
+                logger.debug(f"Unwrapping first dict from a {len(raw)}-element array reply")
+            return element
+        if isinstance(element, list):
+            inner = _unwrap_array_reply(element, _depth + 1)
+            if isinstance(inner, dict):
+                return inner
+    return raw
 
 
 def _has_open_ended_mapping(signature: SignatureMeta) -> bool:

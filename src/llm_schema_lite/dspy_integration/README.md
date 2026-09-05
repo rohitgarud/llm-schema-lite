@@ -278,8 +278,12 @@ adapter = StructuredOutputAdapter(
   - When given, a rejected field is offered to the coercion rescue first; if
     `parse_config.partial` is `True` the field is then dropped and refilled by
     `apply_output_field_defaults`
-  - `ParseConfig.strip_required_marker` (default `"*"`) is the reply-side counterpart of
-    `FormatterConfig.required_marker`: it strips the trailing marker from reply keys
+  - Marker stripping does **not** depend on this config. The adapter always strips the
+    marker its own formatter renders (`FormatterConfig.required_marker`, default `"*"`).
+    Supplying `ParseConfig.strip_required_marker` adds a second marker that is also
+    accepted; setting it to `""` turns stripping off entirely. For the standalone
+    `loads(text, schema=...)` API there is no formatter, so
+    `ParseConfig.strip_required_marker` is the only marker consulted there
   - Default: `None`
 
 - **use_native_function_calling**: `bool`
@@ -393,12 +397,17 @@ adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
 1. Extract content from markdown code blocks, if present
 2. Repair malformed JSON/YAML (`json_repair`); in YAML mode a `ConversionError` here
    retries the text as JSON
-3. Parse to a dictionary, stripping `ParseConfig.strip_required_marker` from reply keys
-4. Cast each value to its expected Pydantic type via `parse_value`
-5. *(only when `parse_config` is given)* a rejected field is offered to the coercion
+3. If the reply is a JSON array, unwrap the first object it contains — upstream
+   `JSONAdapter` accepts this shape and so does this adapter
+4. Map reply keys carrying the required marker onto their output-field names. The
+   marker is `FormatterConfig.required_marker` — the same marker the prompt renders —
+   so a model that echoes the `*` it was shown is understood. A key that matches an
+   output field verbatim always wins over a marked one
+5. Cast each value to its expected Pydantic type via `parse_value`
+6. *(only when `parse_config` is given)* a rejected field is offered to the coercion
    rescue; with `parse_config.partial=True` a still-failing field is dropped
-6. `apply_output_field_defaults` fills any output field the reply omitted
-7. Check that every required output field is now present
+7. `apply_output_field_defaults` fills any output field the reply omitted
+8. Check that every required output field is now present
 
 ## Streaming
 

@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Iterable
 from typing import Any, cast
 
 from ..coercion import ParseConfig, coerce_to_schema
@@ -59,12 +60,270 @@ def _validate_field(value: Any, field_schema: dict[str, Any]) -> tuple[bool, lis
         return True, []
 
 
+MARKER_WALK_MAX_DEPTH = 8
+
+
+def _marker_object_nodes(
+    node: Any, defs: dict[str, Any], _seen: frozenset[str] = frozenset()
+) -> list[dict[str, Any]]:
+    """Expand a schema node to the concrete object nodes it can denote.
+
+    Resolves $ref (cycle-guarded by _seen) and flattens anyOf / oneOf / allOf into the
+    list of non-`null` branches, the node itself first. Returns [] when nothing concrete
+    is reachable (a non-dict node, an unresolvable $ref, a $ref already on this path).
+
+    Uses a FUNCTION-LOCAL import of _resolve_ref: a module-level
+    `from ..validators.enum_aliases import _resolve_ref` is a measured circular import
+    (parsers/__init__ -> schema_parser -> validators/__init__ -> yaml_validators ->
+    parsers). This mirrors the file's own convention -- `from ..validators import
+    JSONValidator` is already function-local in parse_with_schema and SchemaParser.parse,
+    with the same "Local import to avoid circular import" reason.
+
+    Args:
+        node: A JSON-schema node -- typically a `properties` value, an `items` value, or
+            a `$defs` entry. May be a $ref, a plain object node, or a union construct.
+        defs: The root schema's $defs (or definitions) dict, for $ref resolution.
+        _seen: $ref strings already resolved on this path (cycle guard). Callers never
+            pass this; it is threaded internally across recursive calls.
+
+    Returns:
+        A list of schema nodes that `node` can concretely denote, most specific first.
+    """
+    # Local import to avoid circular import
+    from ..validators.enum_aliases import _resolve_ref
+
+    if not isinstance(node, dict):
+        return []
+
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        if ref in _seen:
+            return []
+        resolved = _resolve_ref(node, ref, defs)
+        if resolved is None:
+            return []
+        return _marker_object_nodes(resolved, defs, _seen | {ref})
+
+    nodes: list[dict[str, Any]] = [node]
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        branches = node.get(keyword)
+        if not isinstance(branches, list):
+            continue
+        for branch in branches:
+            if isinstance(branch, dict) and branch.get("type") == "null":
+                continue
+            nodes.extend(_marker_object_nodes(branch, defs, _seen))
+    return nodes
+
+
+def normalize_marker_keys_recursive(
+    data: Any,
+    schema: dict[str, Any],
+    marker: str,
+    defs: dict[str, Any] | None = None,
+    _depth: int = 0,
+) -> Any:
+    """Walk data and schema in parallel, remapping marked keys at every object level.
+
+    Container contract:
+      - properties (nested BaseModel): remap keys at this level via normalize_marker_keys
+        using the MERGED properties of _marker_object_nodes(schema) as known_keys, then
+        descend each value with its property subschema.
+      - $ref: resolved via _marker_object_nodes before any remap or descent.
+      - items (list[Model], list[list[Model]]): descend every element with the same
+        subschema.
+      - prefixItems (tuple[Model, int]): descend positionally; elements past the tuple
+        length are left alone.
+      - additionalProperties (dict[str, Model]): descend VALUES ONLY -- never remap the
+        outer mapping's own keys as if they were declared properties.
+      - anyOf / oneOf / allOf: merge the properties of all non-null branches for the key
+        remap; descend a value with the FIRST branch that declares that key.
+
+    Never touches the keys of an open-ended mapping: a dict[str, X] node has no
+    `properties`, so the remap step never runs there and only values are descended. A
+    field genuinely named e.g. "name*" is protected by normalize_marker_keys' rule 1.
+
+    Depth guard: MARKER_WALK_MAX_DEPTH (8), counted in DATA depth, not schema depth.
+    Beyond the cap, remapping stops and data is returned as-is for that subtree -- a
+    still-marked key then fails jsonschema/model_validate loudly (ConversionError), never
+    silently. This constant is deliberately NOT linked to
+    FormatterConfig.max_recursion_depth, which is a render-side cap on a different walk.
+
+    Args:
+        data: The parsed reply data at this level (dict, list, or scalar).
+        schema: The JSON-schema node describing `data` at this level (the root schema on
+            the initial call).
+        marker: The trailing marker to strip; falsy is a global no-op.
+        defs: The root schema's $defs/definitions. Resolved from `schema` on the initial
+            call (_depth == 0) when not supplied; threaded unchanged on recursive calls.
+        _depth: Data-depth counter. Callers never pass this.
+
+    Returns:
+        A new structure with the same shape as `data`, with marker keys remapped at every
+        reachable object level; `data` unchanged past MARKER_WALK_MAX_DEPTH or where the
+        schema resolves to nothing concrete.
+    """
+    if not marker or _depth > MARKER_WALK_MAX_DEPTH:
+        return data
+
+    if defs is None:
+        raw_defs = schema.get("$defs") or schema.get("definitions") or {}
+        defs = raw_defs if isinstance(raw_defs, dict) else {}
+
+    nodes = _marker_object_nodes(schema, defs)
+    if not nodes:
+        return data
+
+    if isinstance(data, dict):
+        merged: dict[str, Any] = {}
+        additional: Any = None
+        for node in nodes:
+            props = node.get("properties")
+            if isinstance(props, dict):
+                for name, subschema in props.items():
+                    merged.setdefault(name, subschema)
+            extra = node.get("additionalProperties")
+            if additional is None and isinstance(extra, dict):
+                additional = extra
+
+        if merged:
+            data = normalize_marker_keys(data, merged.keys(), marker)
+
+        result: dict[str, Any] = {}
+        for key, value in data.items():
+            child_schema = merged.get(key, additional)
+            if isinstance(child_schema, dict):
+                result[key] = normalize_marker_keys_recursive(
+                    value, child_schema, marker, defs, _depth + 1
+                )
+            else:
+                result[key] = value
+        return result
+
+    if isinstance(data, list):
+        prefix_items: list[Any] = []
+        items_schema: Any = None
+        for node in nodes:
+            candidate_prefix = node.get("prefixItems")
+            if not prefix_items and isinstance(candidate_prefix, list):
+                prefix_items = candidate_prefix
+            candidate_items = node.get("items")
+            if items_schema is None and isinstance(candidate_items, dict):
+                items_schema = candidate_items
+
+        walked: list[Any] = []
+        for index, element in enumerate(data):
+            element_schema: Any = None
+            if index < len(prefix_items):
+                element_schema = prefix_items[index]
+            elif items_schema is not None:
+                element_schema = items_schema
+            if isinstance(element_schema, dict):
+                walked.append(
+                    normalize_marker_keys_recursive(
+                        element, element_schema, marker, defs, _depth + 1
+                    )
+                )
+            else:
+                walked.append(element)
+        return walked
+
+    return data
+
+
+def normalize_marker_keys(
+    data: dict[str, Any], known_keys: Iterable[str], marker: str
+) -> dict[str, Any]:
+    """Map trailing-marker keys in ONE dict onto the known names they denote.
+
+    Pure, single-marker, single-object-level. This is the extraction of the three-rule
+    algorithm that used to live only inside SchemaParser._normalize_marker_keys, with
+    `properties` generalised to `known_keys` so both SchemaParser and
+    StructuredOutputAdapter can call it with their own key universe (JSON-schema
+    properties vs. signature.output_fields).
+
+    Rule order -- verbatim always wins:
+      1. key in known_keys -> kept as-is (checked FIRST), so a schema that legitimately
+         declares a property literally named "name*" is never disturbed.
+      2. key.endswith(marker) and the stripped name is non-empty, IS in known_keys, and
+         is NOT already a key in `data` -> remapped to the stripped name.
+      3. otherwise -> kept unchanged, left for downstream to drop as the unknown key it
+         is. Stripping must never invent a name that was not already known.
+
+    Degenerate inputs (`marker` falsy, `data` empty, `known_keys` empty) are a no-op:
+    the identity of `data` is returned unchanged, never a copy.
+
+    Args:
+        data: The dict to normalize keys of. Never mutated.
+        known_keys: The declared/accepted key universe for this call (schema
+            properties, or signature.output_fields.keys()).
+        marker: The trailing marker to strip, e.g. "*". Falsy disables stripping.
+
+    Returns:
+        A new dict (or `data` itself, unchanged, for the no-op cases) with the same
+        values and remapped keys.
+    """
+    if not marker or not data:
+        return data
+    known = set(known_keys)
+    if not known:
+        return data
+
+    result: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in known:
+            result[key] = value
+            continue
+        if key.endswith(marker):
+            stripped = key[: -len(marker)]
+            if stripped and stripped in known and stripped not in data:
+                result[stripped] = value
+                continue
+        result[key] = value
+    return result
+
+
 def _build_result(
     data: dict[str, Any],
     schema: "type[BaseModel] | dict[str, Any] | str",
+    *,
+    validate: bool = False,
 ) -> "BaseModel | dict[str, Any]":
-    """Build result as Pydantic model if schema is a BaseModel, otherwise return dict."""
+    """Build result as Pydantic model if schema is a BaseModel, otherwise return dict.
+
+    When `schema` is a BaseModel subclass:
+      - `validate=False` (default, unchanged): `schema.model_construct(**data)` --
+        bypasses validation, tolerates partial/None fields. This is what every existing
+        caller gets, including the direct-call tests in tests/test_partial_extraction.py.
+      - `validate=True`: `schema.model_validate(data)`, with `pydantic.ValidationError`
+        caught and re-raised as `ConversionError(f"Validation failed: {exc}") from exc` --
+        the same "Validation failed: ..." prefix the non-partial route already produces,
+        so the public error contract is unchanged in shape. This is what builds real
+        nested model instances rather than leaving nested data as raw dicts.
+    When `schema` is not a BaseModel (dict or str), `validate` has no effect; `data` is
+    returned unchanged, as today.
+
+    Args:
+        data: The parsed data dictionary.
+        schema: Pydantic BaseModel subclass, JSON-schema dict, or JSON-schema string.
+        validate: Keyword-only. See the contract above. Default False keeps every
+            pre-existing caller behaviorally identical.
+
+    Returns:
+        Pydantic model instance or dict.
+
+    Raises:
+        ConversionError: only when `validate` is True and `schema.model_validate` raises
+            pydantic.ValidationError.
+    """
     if BaseModel is not None and isinstance(schema, type) and issubclass(schema, BaseModel):
+        if validate:
+            from pydantic import ValidationError
+
+            try:
+                return schema.model_validate(data)
+            except ValidationError as exc:
+                raise ConversionError(f"Validation failed: {exc}") from exc
         # Use model_construct to bypass validation - allows partial fields with None
         return schema.model_construct(**data)
     return data
@@ -120,7 +379,7 @@ def parse_with_schema(
             error_list = errors if errors else []
             raise ConversionError(f"Validation failed: {'; '.join(error_list)}")
 
-        final_result = schema_parser.build_result(result_dict)
+        final_result = schema_parser.build_result(result_dict, validate=True)
         return final_result, {}
 
 
@@ -155,7 +414,9 @@ class SchemaParser(BaseParser):
         """Sole text->dict entry point for both SchemaParser routes.
 
         Parses via self._json_parser, optionally rescues embedded JSON on failure, then
-        normalizes required-marker keys via _normalize_marker_keys exactly once.
+        normalizes required-marker keys via _normalize_marker_keys exactly once. That
+        single call is now a RECURSIVE walk of data and schema in parallel, not a flat
+        top-level remap: it strips markers at every reachable nested object level.
 
         `rescue_embedded` PRESERVES an existing asymmetry between SchemaParser.parse's
         non-partial branch and _parse_partial rather than introducing a new one: the
@@ -197,53 +458,30 @@ class SchemaParser(BaseParser):
         return parsed
 
     def _normalize_marker_keys(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Map trailing-marker reply keys onto their schema property names (top level).
+        """Map trailing-marker reply keys onto their schema property names, recursively.
 
-        Scope: self._json_schema["properties"] at the TOP LEVEL only. Nested marked
-        keys (e.g. {"person": {"name*": "x"}}) are deliberately not walked -- reaching
-        them would need $ref/anyOf/items traversal, which is a recorded follow-up and
-        not part of lsl-2026-09-04-008.
+        Delegates to the module-level normalize_marker_keys_recursive, walking
+        self._json_schema in parallel with `data`. Descends properties, $ref, items,
+        prefixItems, additionalProperties values, and merged anyOf/oneOf/allOf branches;
+        depth-capped at MARKER_WALK_MAX_DEPTH (8, counted in data depth). Never rewrites
+        the keys of an open-ended mapping (dict[str, X] fields) -- only their values are
+        walked -- and never disturbs a property genuinely named "name*", which the
+        verbatim-first rule protects.
 
-        Uses self._parse_config.strip_required_marker as the marker. An empty marker,
-        or an empty properties dict, is a no-op escape hatch.
-
-        Rule order -- verbatim match wins FIRST, so a schema that legitimately declares
-        a property literally named "name*" is never disturbed, and a collision between
-        a verbatim key and its own marked form always keeps the verbatim key's value
-        (last-writer-wins would depend on dict iteration order and is rejected):
-
-          1. key already in properties -> keep as-is (checked FIRST).
-          2. key ends with marker AND stripping it yields a non-empty name that IS a
-             schema property AND that stripped name is NOT already a key in `data` ->
-             remap to the stripped name.
-          3. otherwise -> keep the key unchanged; it is left for downstream to drop as
-             the unknown key it is. Stripping must never invent a schema key that was
-             not already a property.
+        Uses self._parse_config.strip_required_marker as the marker; an empty marker is a
+        no-op, matching the pre-existing escape hatch.
 
         Args:
-            data: The parsed (dict) reply, pre-filtering, in whatever key order the LM
-                or self._json_parser produced.
+            data: The parsed (dict) reply, pre-filtering, in whatever key order the LM or
+                self._json_parser produced.
 
         Returns:
-            A new dict with the same values and remapped keys. Never mutates `data`.
+            A new dict (or nested structure) with remapped keys at every reachable object
+            level. Never mutates `data`.
         """
         marker = self._parse_config.strip_required_marker
-        properties = self._json_schema.get("properties", {})
-        if not marker or not properties:
-            return data
-
-        result: dict[str, Any] = {}
-        for key, value in data.items():
-            if key in properties:
-                result[key] = value
-                continue
-            if key.endswith(marker):
-                stripped = key[: -len(marker)]
-                if stripped and stripped in properties and stripped not in data:
-                    result[stripped] = value
-                    continue
-            result[key] = value
-        return result
+        result = normalize_marker_keys_recursive(data, self._json_schema, marker)
+        return cast(dict[str, Any], result)
 
     def parse(self, text: str, repair: bool = True) -> dict[str, Any]:
         """
@@ -386,15 +624,21 @@ class SchemaParser(BaseParser):
         # If no JSON found, return empty dict
         return {}
 
-    def build_result(self, data: dict[str, Any]) -> "BaseModel | dict[str, Any]":
+    def build_result(
+        self, data: dict[str, Any], *, validate: bool = False
+    ) -> "BaseModel | dict[str, Any]":
         """
         Build result as Pydantic model if schema is a BaseModel, otherwise return dict.
 
         Args:
             data: The parsed data dictionary
+            validate: Forwarded to the module-level _build_result. False (default)
+                keeps model_construct; True switches to model_validate with
+                ValidationError translated to ConversionError. See _build_result's
+                docstring for the full contract.
 
         Returns:
             Pydantic model instance or dict
         """
         # Delegate to module-level function
-        return _build_result(data, self._schema)
+        return _build_result(data, self._schema, validate=validate)

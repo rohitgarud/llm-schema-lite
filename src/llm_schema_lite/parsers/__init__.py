@@ -7,6 +7,7 @@ from .schema_parser import (
     _build_result,
     _get_json_schema,
     _validate_field,
+    normalize_marker_keys,
 )
 from .yaml_parser import YAMLParser
 
@@ -19,4 +20,5 @@ __all__ = [
     "_get_json_schema",
     "_validate_field",
     "_build_result",
+    "normalize_marker_keys",
 ]

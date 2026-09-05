@@ -490,3 +490,267 @@ class TestRequiredMarkerKeys:
                 schema=M,
                 parse_config=ParseConfig(strip_required_marker="", partial=True),
             )
+
+    def test_non_partial_route_returns_real_nested_instances(self):
+        """The non-partial loads route builds nested model instances, not raw dicts.
+
+        Pins design v2 section 6.2's headline behaviour change: model_validate, not
+        model_construct. No marker is involved -- this is about validation, not stripping.
+        """
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            name: str
+
+        class Outer(BaseModel):
+            person: Inner
+
+        result, _ = loads('{"person": {"name": "A"}}', schema=Outer)
+        assert isinstance(result.person, Inner)
+        assert result.person.name == "A"
+
+    def test_partial_route_still_uses_model_construct(self):
+        """The partial route keeps model_construct: missing fields tolerated, inner stays a dict.
+
+        Pins the deliberate asymmetry between the two routes.
+        """
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            name: str
+
+        class Outer(BaseModel):
+            person: Inner
+            note: str | None = None
+
+        result, _ = loads(
+            '{"person": {"name": "A"}}', schema=Outer, parse_config=ParseConfig(partial=True)
+        )
+        assert not isinstance(result.person, Inner)
+        assert result.person == {"name": "A"}
+
+    def test_pydantic_only_validation_failure_raises_conversion_error(self):
+        """A Pydantic-only constraint raises ConversionError, not ValidationError.
+
+        The constraint is one jsonschema cannot see.
+        Pins the section 6.2 error contract: loads never leaks pydantic.ValidationError.
+        """
+        import pydantic
+        from pydantic import BaseModel, field_validator
+
+        class OnlyEven(BaseModel):
+            n: int
+
+            @field_validator("n")
+            @classmethod
+            def _must_be_even(cls, v: int) -> int:
+                if v % 2:
+                    raise ValueError("n must be even")
+                return v
+
+        with pytest.raises(ConversionError, match="Validation failed"):
+            loads('{"n": 3}', schema=OnlyEven)
+
+        try:
+            loads('{"n": 3}', schema=OnlyEven)
+        except ConversionError as exc:
+            assert not isinstance(exc, pydantic.ValidationError)
+
+    def test_nested_marked_key_yields_validated_model(self):
+        """AC 3: nested marked keys are stripped and the result is a validated nested model."""
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            name: str
+
+        class Outer(BaseModel):
+            person: Inner
+
+        result, _ = loads('{"person*": {"name*": "A"}}', schema=Outer)
+        assert isinstance(result.person, Inner)
+        assert result.person.name == "A"
+
+    def test_nested_list_of_models(self):
+        """items: every element of a list[Model] is walked and validated."""
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            name: str
+
+        class Many(BaseModel):
+            people: list[Inner]
+
+        result, _ = loads('{"people*": [{"name*": "A"}, {"name": "B"}]}', schema=Many)
+        assert [p.name for p in result.people] == ["A", "B"]
+        assert all(isinstance(p, Inner) for p in result.people)
+
+    def test_optional_nested_model(self):
+        """anyOf with a null branch: the non-null branch supplies the known keys."""
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            name: str
+
+        class Opt(BaseModel):
+            person: Inner | None = None
+
+        result, _ = loads('{"person*": {"name*": "A"}}', schema=Opt)
+        assert isinstance(result.person, Inner)
+        assert result.person.name == "A"
+
+    def test_dict_str_str_keys_are_never_rewritten(self):
+        """C16 safety property: an open-ended mapping's own keys are user data, never remapped."""
+        from pydantic import BaseModel
+
+        class MapStr(BaseModel):
+            tags: dict[str, str]
+
+        result, _ = loads('{"tags*": {"x*": "y"}}', schema=MapStr)
+        assert result.tags == {"x*": "y"}
+
+    def test_dict_str_model_keys_preserved_values_walked(self):
+        """dict[str, Model]: the mapping's keys survive verbatim; the model's own keys strip."""
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            name: str
+
+        class MapModel(BaseModel):
+            m: dict[str, Inner]
+
+        result, _ = loads('{"m*": {"k*": {"name*": "A"}}}', schema=MapModel)
+        assert list(result.m) == ["k*"]
+        assert isinstance(result.m["k*"], Inner)
+        assert result.m["k*"].name == "A"
+
+    def test_discriminated_union_branch(self):
+        """Merging all non-null branches makes BOTH arms of a discriminated union work."""
+        from typing import Literal
+
+        from pydantic import BaseModel, Field
+
+        class Cat(BaseModel):
+            kind: Literal["cat"]
+            whiskers: int
+
+        class Dog(BaseModel):
+            kind: Literal["dog"]
+            tail: int
+
+        class Disc(BaseModel):
+            pet: Cat | Dog = Field(discriminator="kind")
+
+        dog, _ = loads('{"pet*": {"kind": "dog", "tail*": 2}}', schema=Disc)
+        assert isinstance(dog.pet, Dog)
+        assert dog.pet.tail == 2
+
+        cat, _ = loads('{"pet": {"kind": "cat", "whiskers*": 9}}', schema=Disc)
+        assert isinstance(cat.pet, Cat)
+        assert cat.pet.whiskers == 9
+
+    def test_tuple_prefix_items(self):
+        """prefixItems: tuple elements are descended positionally."""
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            name: str
+
+        class Tup(BaseModel):
+            t: tuple[Inner, int]
+
+        result, _ = loads('{"t*": [{"name*": "A"}, 3]}', schema=Tup)
+        assert isinstance(result.t[0], Inner)
+        assert result.t[0].name == "A"
+        assert result.t[1] == 3
+
+    def test_recursive_model_terminates_and_deep_chain_fails_loudly(self):
+        """A self-referential model terminates; past MARKER_WALK_MAX_DEPTH it fails loudly.
+
+        extra="forbid" is load-bearing: it is what makes a leftover marked key past the
+        depth cap a validation ERROR rather than a silently ignored extra key. See the
+        plan's Phase 6 discovery note.
+        """
+        from pydantic import BaseModel
+
+        class Node(BaseModel):
+            model_config = {"extra": "forbid"}
+
+            v: str
+            child: "Node | None" = None
+
+        def chain(n: int) -> str:
+            root: dict = {"v": "0"}
+            cur = root
+            for i in range(1, n):
+                cur["child*"] = {"v": str(i)}
+                cur = cur["child*"]
+            return json.dumps(root)
+
+        shallow, _ = loads(chain(4), schema=Node)
+        depth = 0
+        node = shallow
+        while node.child is not None:
+            depth += 1
+            node = node.child
+        assert depth == 3
+
+        with pytest.raises(ConversionError, match="Validation failed"):
+            loads(chain(14), schema=Node)
+
+    def test_nested_collision_prefers_verbatim_per_level(self):
+        """The "stripped not already present" guard is evaluated per object level."""
+        from pydantic import BaseModel
+
+        class Inner(BaseModel):
+            name: str
+
+        class Outer(BaseModel):
+            person: Inner
+
+        result, _ = loads('{"person": {"name": "V", "name*": "M"}}', schema=Outer)
+        assert isinstance(result.person, Inner)
+        assert result.person.name == "V"
+
+
+class TestNormalizeMarkerKeysUnit:
+    """Unit tests for the extracted pure rule (lsl-2026-09-05-003, item 31)."""
+
+    def test_normalize_marker_keys_is_pure(self):
+        """The three rules hold in isolation and the input dict is never mutated."""
+        from llm_schema_lite.parsers import normalize_marker_keys
+
+        known = {"name", "age"}
+
+        # Rule 1: a verbatim known key is kept as-is.
+        assert normalize_marker_keys({"name": "x"}, known, "*") == {"name": "x"}
+
+        # Rule 2: a marked key whose stripped name is known and absent is remapped.
+        assert normalize_marker_keys({"name*": "x"}, known, "*") == {"name": "x"}
+
+        # Rule 1 beats rule 2: verbatim wins on a collision. The marked key is not
+        # remapped (that would clobber the verbatim value) and not dropped either --
+        # rule 3 keeps it verbatim for the caller's own filter to discard, which is
+        # what the adapter's output-field filter and schema validation both do.
+        assert normalize_marker_keys({"name": "V", "name*": "M"}, known, "*") == {
+            "name": "V",
+            "name*": "M",
+        }
+
+        # Rule 3: an unknown marked key is left untouched, never invented.
+        assert normalize_marker_keys({"bogus*": 1}, known, "*") == {"bogus*": 1}
+
+        # A key equal to the marker strips to "", which is falsy: not remapped.
+        assert normalize_marker_keys({"*": "x"}, known, "*") == {"*": "x"}
+
+        # Degenerate inputs are identity no-ops, not copies.
+        data = {"name*": "x"}
+        assert normalize_marker_keys(data, known, "") is data
+        assert normalize_marker_keys(data, set(), "*") is data
+        empty: dict[str, object] = {}
+        assert normalize_marker_keys(empty, known, "*") is empty
+
+        # Purity: the caller's dict is never mutated.
+        original = {"name*": "x", "bogus*": 1}
+        snapshot = dict(original)
+        normalize_marker_keys(original, known, "*")
+        assert original == snapshot
