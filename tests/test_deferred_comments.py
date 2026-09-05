@@ -93,6 +93,19 @@ def test_defer_comment_token_shape() -> None:
     assert TOKEN_RE.match(token)
 
 
+def test_identity_and_deferred_tags_are_disjoint() -> None:
+    """An identity token and a defer_comment token can never cross-match.
+
+    Pins the disjointness invariant recorded next to ``IDENTITY_TAG`` in
+    ``formatters/base.py``: a defer_comment token's character after ``lsl`` is a hex
+    digit, never ``i``, so ``lslid`` can never prefix one — by character class, not luck.
+    """
+    formatter = _formatter()
+    minted = formatter._mint_identity("k")
+    assert formatter._deferred_pattern.search(minted) is None
+    assert formatter._identity_pattern.search(formatter.defer_comment('one of: "a"')) is None
+
+
 def test_nonce_differs_per_instance() -> None:
     """Two formatters over the same schema mint different nonces."""
     schema: dict[str, Any] = {"type": "object", "properties": {}}

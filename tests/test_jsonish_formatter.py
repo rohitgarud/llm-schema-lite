@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from llm_schema_lite import FormatterConfig, simplify_schema
+from llm_schema_lite.formatters.base import DEFERRED_CLOSE, DEFERRED_OPEN
 from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
 from llm_schema_lite.schema_normalization import auto_title_for_key
 from tests.conftest import (
@@ -2129,7 +2130,7 @@ def test_jsonish_recursive_list_golden_default_depth() -> None:
         "  kids: [{\n"
         "    label*: string,\n"
         "    kids: object [] // recursive: ListNode\n"
-        "  }] // recursive: ListNode\n"
+        "  }]\n"
         "}"
     )
 
@@ -2217,3 +2218,265 @@ def test_jsonish_formatter_does_not_mutate_caller_config() -> None:
 
     assert "id*: int or string" in jsonish_result
     assert custom_config.union_separator == " or "
+
+
+# ============================================================================
+# lsl-2026-09-05-001 — per-occurrence identity for pending comments
+# All fixture models below are LOCAL to this module by design (design v2 AS6).
+# tests/conftest.py is deliberately NOT edited.
+# ============================================================================
+
+
+class _CollisionLeaf(BaseModel):
+    x: int
+
+
+class _CollisionInner(BaseModel):
+    kids: list[_CollisionLeaf] = Field(..., description="Inner kids", max_length=3)
+
+
+class _CollisionOuter(BaseModel):
+    inner: _CollisionInner
+    kids: list[_CollisionLeaf] = Field(..., description="Outer kids", max_length=9)
+
+
+def test_jsonish_sibling_field_collision_keeps_own_metadata() -> None:
+    """AC1: a nested field keeps its own description/constraint, not the outer field's."""
+    result = simplify_schema(_CollisionOuter, format_type="jsonish").to_string()
+
+    assert result.count("Inner kids (<= 3 items)") == 1
+    assert result.count("Outer kids (<= 9 items)") == 1
+
+    lines = result.split("\n")
+    inner_line = next(line for line in lines if "Inner kids" in line)
+    outer_line = next(line for line in lines if "Outer kids" in line)
+    # The nested closer is indented one level deeper than the root closer.
+    assert inner_line == "    }]  // Inner kids (<= 3 items)"
+    assert outer_line == "  }]  // Outer kids (<= 9 items)"
+
+
+class _RecNode(BaseModel):
+    name: str
+    children: list[_RecNode] = []
+
+
+_RecNode.model_rebuild()
+
+
+def test_jsonish_recursive_marker_on_truncated_level_only() -> None:
+    """AC2: ``recursive: T`` marks only the truncated level, matching YAML/TypeScript."""
+    result = simplify_schema(_RecNode, format_type="jsonish").to_string()
+
+    assert result.count("recursive: _RecNode") == 1
+    assert _line_with(result, "recursive: _RecNode") == (
+        "children: object [] // (default=[]), recursive: _RecNode"
+    )
+
+    closers = [line for line in result.split("\n") if line.strip().startswith("}]")]
+    assert len(closers) == 1
+    assert closers[0].strip() == "}]  // (default=[])"
+
+
+class _G1(BaseModel):
+    kids: list[_CollisionLeaf] = Field(..., description="G1 kids", max_length=3)
+
+
+class _G2(BaseModel):
+    kids: list[_CollisionLeaf] = Field(..., description="G2 kids", max_length=5)
+
+
+class _SiblingCollision(BaseModel):
+    a: _G1
+    b: _G2
+
+
+def test_jsonish_same_depth_siblings_do_not_collide() -> None:
+    """Two same-depth blocks each declaring ``kids`` keep their own metadata."""
+    result = simplify_schema(_SiblingCollision, format_type="jsonish").to_string()
+
+    assert result.count("G1 kids (<= 3 items)") == 1
+    assert result.count("G2 kids (<= 5 items)") == 1
+    assert _line_with(result, "G1 kids") == "}]  // G1 kids (<= 3 items)"
+    assert _line_with(result, "G2 kids") == "}]  // G2 kids (<= 5 items)"
+
+
+class _H1(BaseModel):
+    kids: list[_CollisionLeaf] | None = Field(default=None, description="H1 kids optional")
+
+
+class _HOuter(BaseModel):
+    inner: _H1
+    kids: list[_CollisionLeaf] = Field(..., description="HOuter kids required", max_length=9)
+
+
+def test_jsonish_required_optional_shadowing_fixed() -> None:
+    """An optional nested ``kids`` no longer shadows the required root ``kids*``."""
+    result = simplify_schema(_HOuter, format_type="jsonish").to_string()
+
+    assert result.count("H1 kids optional") == 1
+    assert result.count("HOuter kids required (<= 9 items)") == 1
+    assert _line_with(result, "H1 kids optional") == (
+        "}] OR null  // H1 kids optional (default=null)"
+    )
+    assert _line_with(result, "HOuter kids required") == (
+        "}]  // HOuter kids required (<= 9 items)"
+    )
+
+
+class _AddrA(BaseModel):
+    """Address flavour A."""
+
+    line1: str
+
+
+class _AddrB(BaseModel):
+    """Address flavour B."""
+
+    line1: str
+
+
+class _InnerP(BaseModel):
+    addr: _AddrA | None = None
+
+
+class _OuterP(BaseModel):
+    inner: _InnerP
+    addr: _AddrB | None = None
+
+
+def test_jsonish_pending_prefix_collision_fixed() -> None:
+    """A nested block opener keeps its own ``$defs`` docstring, not the root's."""
+    result = simplify_schema(_OuterP, format_type="jsonish").to_string()
+
+    assert result.count("// Address flavour A.") == 1
+    assert result.count("// Address flavour B.") == 1
+    assert _line_with(result, "Address flavour A.") == "addr: { // Address flavour A."
+    assert _line_with(result, "Address flavour B.") == "addr: { // Address flavour B."
+
+
+class _IdInner(BaseModel):
+    """Id inner doc."""
+
+    v: str
+
+
+class _IdOuter(BaseModel):
+    id: _IdInner
+    identifier: str = Field(..., description="the identifier")
+
+
+def test_jsonish_prefix_key_no_false_positive_on_substring_name() -> None:
+    """Deleting the ``*:`` alternative must not loosen the ``:`` requirement."""
+    result = simplify_schema(_IdOuter, format_type="jsonish").to_string()
+
+    assert _line_with(result, "Id inner doc.") == "id*: { // Id inner doc."
+    assert _line_with(result, "the identifier") == "identifier*: string // the identifier"
+
+
+class _Same(BaseModel):
+    """Shared def docstring."""
+
+    kids: list[int] = Field(..., description="Same kids", max_length=3)
+
+
+class _TwoOcc(BaseModel):
+    p: _Same
+    q: _Same
+
+
+def test_jsonish_shared_ref_cache_both_occurrences_correct() -> None:
+    """One def reached twice: BOTH occurrences keep the comment (not a residual collision)."""
+    result = simplify_schema(_TwoOcc, format_type="jsonish").to_string()
+
+    assert result.count("// Shared def docstring.") == 2
+    assert result.count("// Same kids") == 2
+    assert result.count("int [] (<= 3 items)") == 2
+
+
+class _J1(BaseModel):
+    kids: list[_CollisionLeaf] = Field(..., description="J1 kids", max_length=3)
+
+
+class _JOuter(BaseModel):
+    m: dict[str, _J1]
+    kids: list[_CollisionLeaf] = Field(..., description="JOuter kids", max_length=7)
+
+
+def test_jsonish_mapping_value_collision_fixed() -> None:
+    """A ``dict[str, Model]`` value block keeps its own field metadata."""
+    result = simplify_schema(_JOuter, format_type="jsonish").to_string()
+
+    assert result.count("J1 kids (<= 3 items)") == 1
+    assert result.count("JOuter kids (<= 7 items)") == 1
+    assert _line_with(result, "J1 kids") == "}]  // J1 kids (<= 3 items)"
+    assert _line_with(result, "JOuter kids") == "}]  // JOuter kids (<= 7 items)"
+
+
+class _TreeFixture(BaseModel):
+    value: int
+    left: _TreeFixture | None = None
+    right: _TreeFixture | None = None
+
+
+_TreeFixture.model_rebuild()
+
+
+def test_jsonish_multipath_recursion_marks_only_truncated_levels() -> None:
+    """A type reached by two paths marks only its four truncated level-1 lines."""
+    result = simplify_schema(_TreeFixture, format_type="jsonish").to_string()
+
+    assert result.count("recursive: _TreeFixture") == 4
+
+    level0_closers = [line for line in result.split("\n") if line.strip().startswith("} OR null")]
+    assert len(level0_closers) == 2
+    for closer in level0_closers:
+        assert "recursive:" not in closer
+        assert "(default=null)" in closer
+
+
+def test_jsonish_additional_properties_sentinel_name_renders_correctly() -> None:
+    """R6: a real property named like the sentinel is no longer swallowed by it."""
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "__additional_properties__": {"type": "string"},
+            "ok": {"type": "string"},
+        },
+        "required": ["ok"],
+    }
+    result = JSONishFormatter(schema).transform_schema()
+
+    assert "__additional_properties__: string" in result
+    assert result.count("string") == 2
+
+
+def test_jsonish_pending_maps_fully_applied_and_no_token_leak_corpus(
+    all_pydantic_models: list[tuple[str, type[BaseModel]]],
+) -> None:
+    """Corpus invariant: no identity token escapes, and no pending comment is orphaned.
+
+    This is the standing replacement for a runtime warning. It is what would have caught
+    the pending-map defects this change fixes.
+    """
+    leaks: list[str] = []
+    orphans: list[str] = []
+
+    for name, model in all_pydantic_models:
+        for depth in (1, 2, 3):
+            formatter = JSONishFormatter(
+                model.model_json_schema(),
+                config=FormatterConfig(max_recursion_depth=depth),
+            )
+            rendered = formatter.transform_schema()
+
+            if DEFERRED_OPEN in rendered or DEFERRED_CLOSE in rendered:
+                leaks.append(f"{name}@depth{depth}")
+
+            for map_name in ("pending_postfix", "pending_prefix"):
+                for key, value in getattr(formatter, map_name).items():
+                    body = value.removeprefix("//").strip()
+                    if body and body not in rendered:
+                        orphans.append(f"{name}@depth{depth} {map_name}[{key!r}] -> {body!r}")
+
+    assert leaks == [], f"identity/deferred tokens leaked into output: {leaks}"
+    assert orphans == [], f"pending entries never applied to any line: {orphans}"

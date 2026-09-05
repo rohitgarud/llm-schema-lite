@@ -2,9 +2,10 @@
 
 import copy
 import json
+import re
 from typing import Any
 
-from .base import BaseFormatter, classify_container
+from .base import DEFERRED_CLOSE, DEFERRED_OPEN, IDENTITY_TAG, BaseFormatter, classify_container
 from .config import FormatterConfig, with_format_default_separator
 
 
@@ -39,12 +40,20 @@ class JSONishFormatter(BaseFormatter):
         config = with_format_default_separator(config, " OR ")
 
         super().__init__(schema, config, include_metadata)
-        # Trial-specific state
+        # Trial-specific state. NOTE: the keys of pending_postfix / pending_recursion /
+        # pending_prefix are "<marked property name><identity token>", NOT a bare property
+        # name — do not match against these keys without the token (see _mint_identity).
         self.processed_ref_cache: dict[str, dict[str, Any] | str | list[Any]] = {}
         self.pending_postfix: dict[str, str] = {}
         self.pending_recursion: dict[str, str] = {}
         self.pending_prefix: dict[str, str] = {}
         self.simplified_schema: str | None = None
+        # Occurrence-identity tokens: disambiguate same-named properties at different
+        # depths so the three pending_* maps above are exact-match and per-occurrence.
+        self._identity_counter: int = 0  # monotonic per instance; deliberately never reset
+        self._identity_pattern: re.Pattern[str] = re.compile(
+            f"{DEFERRED_OPEN}{IDENTITY_TAG}{self._deferred_nonce}\\.\\d+{DEFERRED_CLOSE}"
+        )
 
     @property
     def TYPE_MAP(self) -> dict[str, str]:
@@ -637,6 +646,41 @@ class JSONishFormatter(BaseFormatter):
             return self.process_types(value_schema)
         return "any"
 
+    def _mint_identity(self, processed_prop_name: str) -> str:
+        """Append a fresh per-occurrence identity token to a marked property name.
+
+        Called exactly once per property occurrence, at the single mint site in the
+        property loop. The returned string becomes both the ``output`` dict key and the
+        ``key`` argument handed to every ``process_*`` writer for this occurrence, which
+        is what makes ``_apply_pending_prefix``/``_apply_pending_postfix`` exact matches
+        instead of name-substring matches.
+
+        Contract on ``key``: it is only ever used as a pending-map key or passed through
+        to a nested ``process_ref``. It is NEVER embedded in returned output text and
+        NEVER compared against anything. Any new ``process_*`` writer must preserve this,
+        or the token will leak past ``_strip_identity_tokens``.
+
+        Args:
+            processed_prop_name: The property name with its required/optional marker
+                already appended (e.g. ``"kids*"`` or ``"kids"``).
+
+        Returns:
+            ``processed_prop_name`` with ``⟪lslid<nonce>.<n>⟫`` appended, where ``<n>`` is
+            this instance's next monotonic counter value.
+        """
+        token = "".join(
+            (
+                DEFERRED_OPEN,
+                IDENTITY_TAG,
+                self._deferred_nonce,
+                ".",
+                str(self._identity_counter),
+                DEFERRED_CLOSE,
+            )
+        )
+        self._identity_counter += 1
+        return f"{processed_prop_name}{token}"
+
     def _process_schema_recursive(self, schema: dict[str, Any]) -> dict[str, Any] | str | list[Any]:
         """
         Recursively process schema structure (trial's implementation).
@@ -695,6 +739,7 @@ class JSONishFormatter(BaseFormatter):
                     processed_prop_name = f"{prop_name}{self.config.required_marker}"
                 else:
                     processed_prop_name = f"{prop_name}{self.config.optional_marker}"
+                processed_prop_name = self._mint_identity(processed_prop_name)
                 if "$ref" in value and value["$ref"]:
                     output[processed_prop_name] = self.process_ref(value, processed_prop_name)
                 elif "anyOf" in value and value["anyOf"]:
@@ -1102,6 +1147,24 @@ class JSONishFormatter(BaseFormatter):
             return None
         return None
 
+    def _strip_identity_tokens(self, text: str) -> str:
+        """Remove every identity token minted by this instance from finished text.
+
+        Idempotent and safe on text with no tokens. Must run AFTER both
+        ``_apply_pending_postfix`` and ``_apply_pending_prefix`` have consumed the tokens
+        for matching, and BEFORE ``hoist_deferred_comments`` and before
+        ``self.simplified_schema`` is assigned.
+
+        Args:
+            text: Rendered JSONish text that may still contain identity tokens.
+
+        Returns:
+            ``text`` with all ``⟪lslid<this instance's nonce>.<n>⟫`` substrings removed.
+        """
+        if DEFERRED_OPEN not in text:  # fast path, mirrors hoist_deferred_comments
+            return text
+        return self._identity_pattern.sub("", text)
+
     def _apply_pending_prefix(self, output_string: str) -> str:
         """Append opening-line comments (e.g. a ``$defs`` docstring) to block openers."""
         if not self.pending_prefix:
@@ -1110,7 +1173,8 @@ class JSONishFormatter(BaseFormatter):
         for idx, line in enumerate(lines):
             stripped = line.lstrip()
             for key, prefix in self.pending_prefix.items():
-                if stripped.startswith(f"{key}:") or stripped.startswith(f"{key}*:"):
+                # Exact match: `key` carries a per-occurrence identity token.
+                if stripped.startswith(f"{key}:"):
                     if line.rstrip().endswith("{"):
                         lines[idx] = f"{line.rstrip()} {prefix}"
                     break
@@ -1170,12 +1234,10 @@ class JSONishFormatter(BaseFormatter):
             # Check if this line contains a property that has a pending postfix
             property_found = False
             for key, postfix in self.pending_postfix.items():
-                # Check both with and without asterisk
-                key_with_asterisk = f"{key}*"
-
-                # Check if this line starts with the key (with or without asterisk)
+                # Exact match: `key` carries a per-occurrence identity token, so no
+                # separate "with/without asterisk" branch is needed or correct.
                 stripped = line.lstrip()
-                if stripped.startswith(f"{key}:") or stripped.startswith(f"{key_with_asterisk}:"):
+                if stripped.startswith(f"{key}:"):
                     # Count braces/brackets to find the matching closing one. A line whose
                     # delimiters are already balanced (e.g. ``k: {},``) is a single-line
                     # value and must take the else-branch below.
@@ -1255,6 +1317,9 @@ class JSONishFormatter(BaseFormatter):
             return self._add_prefix(self.simplified_schema)
         self._reset_ref_state()
         self.processed_ref_cache.clear()
+        self.pending_postfix.clear()
+        self.pending_prefix.clear()
+        self.pending_recursion.clear()
         output = self._process_schema_recursive(self.schema)
         output_string = ""
         if output and isinstance(output, dict):
@@ -1297,6 +1362,9 @@ class JSONishFormatter(BaseFormatter):
         self._merge_pending_recursion()
         output_string = self._apply_pending_postfix(output_string)
         output_string = self._apply_pending_prefix(output_string)
+        output_string = self._strip_identity_tokens(output_string)
+        # ORDERING INVARIANT: any future pass that matches on property names goes ABOVE
+        # this line; any pass producing final user-facing text goes BELOW it.
         output_string = self.hoist_deferred_comments(output_string)
         self.simplified_schema = output_string.replace("  ", " ")
         return self._add_prefix(output_string)

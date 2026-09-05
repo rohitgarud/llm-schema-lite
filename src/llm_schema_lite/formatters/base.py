@@ -20,6 +20,13 @@ _COMPOSITION_KEYS = ("$ref", "enum", "const", "anyOf", "oneOf", "allOf", "not")
 DEFERRED_OPEN: Final[str] = "⟪"  # U+27EA MATHEMATICAL LEFT DOUBLE ANGLE BRACKET
 DEFERRED_CLOSE: Final[str] = "⟫"  # U+27EB MATHEMATICAL RIGHT DOUBLE ANGLE BRACKET
 DEFERRED_TAG: Final[str] = "lsl"  # literal infix, before the per-instance nonce
+# JSONish-only per-occurrence identity tag. Disjoint from DEFERRED_TAG by construction:
+# a defer_comment token's character immediately after "lsl" is a hex digit
+# (secrets.token_hex), never "i", so "lslid..." can never be parsed as a defer_comment
+# token and a defer_comment token can never be parsed as an identity token. If you change
+# either literal, re-verify that disjointness — see
+# tests/test_deferred_comments.py::test_identity_and_deferred_tags_are_disjoint.
+IDENTITY_TAG: Final[str] = "lslid"
 
 
 @dataclass(frozen=True)

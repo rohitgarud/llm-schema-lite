@@ -359,7 +359,7 @@ TS_D1 = (
 
 JSONISH_D2 = (
     "{\n  label*: string,\n  kids: [{\n    label*: string,\n    kids: object [] //"
-    " recursive: ListNode\n  }] // recursive: ListNode\n}"
+    " recursive: ListNode\n  }]\n}"
 )
 YAML_D2 = "label*: string\nkids:\n- label*: string\n  kids: list[object]  # recursive: ListNode"
 TS_D2 = (
@@ -371,8 +371,7 @@ TS_D2 = (
 
 JSONISH_D3 = (
     "{\n  label*: string,\n  kids: [{\n    label*: string,\n    kids: [{\n      label*:"
-    " string,\n      kids: object [] // recursive: ListNode\n    }] // recursive:"
-    " ListNode\n  }] // recursive: ListNode\n}"
+    " string,\n      kids: object [] // recursive: ListNode\n    }]\n  }]\n}"
 )
 YAML_D3 = (
     "label*: string\nkids:\n- label*: string\n  kids:\n  - label*: string\n"
