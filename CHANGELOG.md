@@ -62,6 +62,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JSONish comment text now reproduces the authored description verbatim.** Quotes,
+  backslashes and `//` in a `description` no longer leak `\"` or `\\` into the rendered
+  comment, and a description containing a real newline collapses to a single `//` line
+  instead of escaping to a literal `\n` or breaking out of the comment as a bare
+  document line. Nothing is decoded: an authored two-character `\n` still renders as two
+  characters. YAML and TypeScript output is unchanged. (`lsl-2026-09-05-005`)
+- **A property-level `description` on a `$ref` field is no longer dropped in JSONish.**
+  An enum `$ref` renders `one of: "US", "CA"; Country code`; an object `$ref` renders the
+  property's description as the block's trailing comment while the referenced
+  definition's docstring keeps the opening line. The two are de-duplicated when their
+  text is equal, and both honour `include_metadata` / `include_descriptions`.
+  (`lsl-2026-09-05-005`)
+- **No JSONish line ends in whitespace**, across every model and every
+  `include_metadata` / `include_descriptions` / `include_constraints` combination, and
+  `transform_schema()` now returns the identical string on repeat calls instead of
+  serving a whitespace-collapsed copy from its cache. (`lsl-2026-09-05-005`)
 - **Root-level `list[Model]`, `Model | None` and `list[Model] | None` schemas now render
   with the same block conventions as nested ones.** JSONish no longer leaks a Python dict
   repr at the root, no longer drops `OR null` for a root `anyOf`, and no longer prints a

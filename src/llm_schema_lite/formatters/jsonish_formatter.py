@@ -81,6 +81,32 @@ class JSONishFormatter(BaseFormatter):
         """
         return " "
 
+    def sanitize_comment_text(self, text: str) -> str:
+        """Collapse ``text`` to a single line for JSONish's end-of-line ``//`` comments.
+
+        Every run of real whitespace -- spaces, tabs, ``\\n``, ``\\r`` -- becomes one space,
+        and the ends are stripped. Without this, a real newline in a description either
+        escapes into a literal two-character ``\\n`` (the dict-value path, pre-``json.dumps``)
+        or breaks out of the comment as a bare, uncommented document line (the
+        ``pending_postfix`` path, post-``json.dumps``). Per the ticket's 2026-09-05 decision
+        a multi-line description collapses to ONE line joined by single spaces; this
+        deliberately diverges from YAML/TypeScript (which split into one comment line per
+        physical line) and matches TypeScript's inline-object-literal behaviour.
+
+        Nothing is decoded: an authored two-character backslash-n stays two characters, an
+        authored ``"`` stays one character, an authored ``//`` stays verbatim. Only real
+        whitespace runs are touched.
+
+        Args:
+            text: Raw value read from the schema, before any comment prefix or
+                concatenation.
+
+        Returns:
+            ``text`` with internal whitespace runs collapsed to one space and the ends
+            stripped.
+        """
+        return " ".join(str(text).split())
+
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
         Add metadata comments to a field representation.
@@ -108,8 +134,50 @@ class JSONishFormatter(BaseFormatter):
             Formatted description string with // comment prefix or empty string.
         """
         if "description" in schema and schema["description"] is not None:
-            return f" {self.comment_prefix} {schema['description']}"
+            return f" {self.comment_prefix} {self.sanitize_comment_text(schema['description'])}"
         return ""
+
+    def _defer_comment_body(self, representation: str, has_description: bool) -> str:
+        """Route the trailing comment body of a scalar representation into the deferred slot.
+
+        Called only on the string-returning branches of ``process_types`` /
+        ``process_ref`` / ``process_anyof`` / ``process_oneof`` / ``process_allof`` whose
+        result becomes a **dict value** -- and is therefore about to meet ``json.dumps``,
+        the single place JSONish introduces escape sequences. A deferred marker contains
+        no ``"`` and no ``\\``, so ``json.dumps`` has nothing to escape,
+        ``_scan_remove_string_delimiters`` copies it through untouched, and
+        ``hoist_deferred_comments`` re-emits the body verbatim as a trailing comment
+        before any trailing comma.
+
+        The WHOLE body from the comment marker onward is deferred (title + description +
+        default + example), not just the description fragment: the hoist appends its
+        comment at end of line, so deferring only the description would strand
+        ``(default=...)`` in a first, separate ``//`` run and produce two comment runs on
+        one line. ``pattern``/``format``/``length_range``/``items_range`` are interpolated
+        BEFORE the comment marker in every f-string, so they are excluded by construction
+        and keep their current escaped spelling.
+
+        Args:
+            representation: A fully-built field representation string, e.g.
+                ``'string // say "hi" now'``, about to be stored as a dict value.
+            has_description: Whether a non-empty description fragment was actually
+                produced for this node. Only then is anything routed, so every
+                description-free field stays on the literal path with its golden intact.
+
+        Returns:
+            ``representation`` unchanged when ``has_description`` is false, when it
+            carries no ``f" {self.comment_prefix} "`` occurrence, or when it already
+            carries a deferred marker. Otherwise ``representation`` split at its FIRST
+            ``f" {self.comment_prefix} "`` occurrence into ``head`` and ``body``,
+            returned as ``head + self.defer_comment(body)``.
+        """
+        if not has_description or self.carries_deferred_comment(representation):
+            return representation
+        marker = f" {self.comment_prefix} "
+        head, sep, body = representation.partition(marker)
+        if not sep:
+            return representation
+        return head + self.defer_comment(body)
 
     def _get_options_format_pattern(self, value: dict[str, Any]) -> tuple[str, str]:
         """Extract format and pattern from schema value.
@@ -150,6 +218,16 @@ class JSONishFormatter(BaseFormatter):
     ) -> str | dict[str, Any] | list[Any]:
         """
         Process a $ref reference using trial's logic.
+
+        Reads both the property node's own ``description`` (``value``) and the resolved
+        definition's ``description`` (``_def``). BOTH are emitted when present, and
+        de-duplicated when their sanitized texts are equal. YAML and TypeScript carry no
+        "the property wins" precedent -- their ``$ref`` renderers never read the
+        definition's description at all -- so this is additive, not a reconciliation of an
+        existing precedence. The definition's description keeps its ``pending_prefix``
+        slot on a block's opening line; the property's own description becomes the field's
+        trailing comment via ``pending_postfix`` (which renders on the block's CLOSING
+        line).
 
         Args:
             value: Dictionary containing the $ref key.
@@ -200,7 +278,9 @@ class JSONishFormatter(BaseFormatter):
             and _def["description"]
             and self._should_include_metadata("description")
         ):
-            def_description = f" {self.comment_prefix} {_def['description']}"
+            def_description = (
+                f" {self.comment_prefix} {self.sanitize_comment_text(_def['description'])}"  # noqa: E501
+            )
             if self.carries_deferred_comment(output):
                 # Plain-scalar invariant: never append a bare `//` comment to a
                 # marker-bearing representation. Suffixes appended later (` []` from a
@@ -209,12 +289,48 @@ class JSONishFormatter(BaseFormatter):
                 # marker's slot instead -- and only when `process_enum` has not already
                 # folded this same `$defs` description in.
                 resolved = self.resolved_deferred_text(output)
-                if str(_def["description"]) not in resolved:
-                    output = self.append_deferred_comment(str(output), str(_def["description"]))
+                sanitized_def = self.sanitize_comment_text(_def["description"])
+                if sanitized_def not in resolved:
+                    output = self.append_deferred_comment(str(output), sanitized_def)
             elif isinstance(output, str) and def_description not in output:
-                output = str(output) + def_description
+                # The result of this arm becomes a dict value and therefore meets
+                # `json.dumps`; route the comment body through the deferred channel so a
+                # quoted or multi-line definition description is not re-escaped.
+                output = self._defer_comment_body(str(output) + def_description, True)
             elif isinstance(output, dict | list) and key is not None:
                 self.pending_prefix[key] = def_description.strip()
+
+        # The property node's own description (defect 2, lsl-2026-09-05-005). Read
+        # INDEPENDENTLY of the definition's -- both are emitted when present -- gated by
+        # the same metadata gate and de-duplicated against whatever text the node already
+        # carries. Without the gate, the `include_metadata=False` and
+        # `include_descriptions=False` arms of the metadata matrix would start leaking
+        # description text through the `$ref` path.
+        if (
+            "description" in value
+            and value["description"]
+            and self._should_include_metadata("description")
+        ):
+            prop_description = self.sanitize_comment_text(value["description"])
+            if self.carries_deferred_comment(output):
+                # Plain-scalar invariant, as above: fold into the marker's slot rather
+                # than appending a second literal `//` run.
+                if prop_description not in self.resolved_deferred_text(output):
+                    output = self.append_deferred_comment(str(output), prop_description)
+            elif isinstance(output, str):
+                fragment = f" {self.comment_prefix} {prop_description}"
+                if fragment not in output:
+                    output = self._defer_comment_body(str(output) + fragment, True)
+            elif isinstance(output, dict | list) and key is not None:
+                # MERGE, never overwrite: `pending_postfix[key]` may already hold an
+                # `OR null ...` fragment from `process_anyof` or a `default` fragment, and
+                # clobbering it would silently delete that information.
+                fragment = f"{self.comment_prefix} {prop_description}"
+                existing = self.pending_postfix.get(key, "")
+                if prop_description not in existing:
+                    self.pending_postfix[key] = (
+                        f"{existing.rstrip()} {fragment}" if existing else fragment
+                    )
 
         if isinstance(output, dict | list):
             return copy.deepcopy(output)
@@ -265,7 +381,7 @@ class JSONishFormatter(BaseFormatter):
         if len(items) == 2 and isinstance(items[0], dict | list) and items[1] == "null":
             if key is not None:
                 self.pending_postfix[key] = (
-                    f"OR null {comment}{title}{description}{default_value}{example}"
+                    f"OR null {comment}{title}{description}{default_value}{example}".rstrip()
                 )
             elif self._is_root_schema(value):
                 self.pending_root_postfix = (
@@ -283,7 +399,10 @@ class JSONishFormatter(BaseFormatter):
             sep = self.config.union_separator
             output = sep.join(str_items) if len(str_items) > 1 else str_items[0]
 
-        return f"{output}{comment}{title}{description}{default_value}{example}"
+        return self._defer_comment_body(
+            f"{output}{comment}{title}{description}{default_value}{example}",
+            bool(description),
+        )
 
     def process_oneof(  # type: ignore[override]
         self, value: dict[str, Any], key: str | None = None
@@ -330,7 +449,7 @@ class JSONishFormatter(BaseFormatter):
         if len(items) == 2 and isinstance(items[0], dict | list) and items[1] == "null":
             if key is not None:
                 self.pending_postfix[key] = (
-                    f"ONE OF: {comment}{title}{description}{default_value}{example}"
+                    f"ONE OF: {comment}{title}{description}{default_value}{example}".rstrip()
                 )
             elif self._is_root_schema(value):
                 self.pending_root_postfix = (
@@ -348,7 +467,10 @@ class JSONishFormatter(BaseFormatter):
             sep = self.config.union_separator
             one_of_output = "ONE OF: " + sep.join(str_items) if len(str_items) > 1 else str_items[0]
 
-        return f"{one_of_output}{comment}{title}{description}{default_value}{example}"
+        return self._defer_comment_body(
+            f"{one_of_output}{comment}{title}{description}{default_value}{example}",
+            bool(description),
+        )
 
     def _merge_allof_objects(
         self, items: list[dict[str, Any] | str | list[Any]]
@@ -416,7 +538,7 @@ class JSONishFormatter(BaseFormatter):
         if len(items) == 2 and isinstance(items[0], dict | list) and items[1] == "null":
             if key is not None:
                 self.pending_postfix[key] = (
-                    f"AND null {comment}{title}{description}{default_value}{example}"
+                    f"AND null {comment}{title}{description}{default_value}{example}".rstrip()
                 )
             elif self._is_root_schema(value):
                 self.pending_root_postfix = (
@@ -436,7 +558,10 @@ class JSONishFormatter(BaseFormatter):
             ]
             output = " AND ".join(str_items) if len(str_items) > 1 else str_items[0]
 
-        return f"{output}{comment}{title}{description}{default_value}{example}"
+        return self._defer_comment_body(
+            f"{output}{comment}{title}{description}{default_value}{example}",
+            bool(description),
+        )
 
     def process_enum(self, enum_value: dict[str, Any], key: str | None = None) -> str:
         """Thin shim: delegate to the shared ``BaseFormatter.process_enum``.
@@ -515,7 +640,10 @@ class JSONishFormatter(BaseFormatter):
                         length_range += f" (<= {value['maxLength']} chars)"
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
-                return f"{type_name}{pattern}{format_}{length_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+                return self._defer_comment_body(
+                    f"{type_name}{pattern}{format_}{length_range}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                    bool(description),
+                )
             elif value["type"] in ["number", "integer"]:
                 type_name = "float" if value["type"] == "number" else "int"
                 value_range = ""
@@ -533,12 +661,18 @@ class JSONishFormatter(BaseFormatter):
                         value_range += f" (<= {value['maximum']})"
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
-                return f"{type_name}{format_}{pattern}{value_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+                return self._defer_comment_body(
+                    f"{type_name}{format_}{pattern}{value_range}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                    bool(description),
+                )
             elif value["type"] == "boolean":
                 type_name = "bool"
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
-                return f"{type_name}{comment}{title}{description}{default_value}{example}"
+                return self._defer_comment_body(
+                    f"{type_name}{comment}{title}{description}{default_value}{example}",
+                    bool(description),
+                )
             elif value["type"] == "array":
                 shape = classify_container(value)
                 if shape.kind == "tuple":
@@ -590,14 +724,20 @@ class JSONishFormatter(BaseFormatter):
                         if (title or description or default_value or example)
                         else ""
                     )
-                    return f"{items} []{items_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+                    return self._defer_comment_body(
+                        f"{items} []{items_range}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                        bool(description),
+                    )
                 else:
                     comment = (
                         f" {self.comment_prefix}"
                         if (title or description or default_value or example)
                         else ""
                     )
-                    return f"[]{items_range}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+                    return self._defer_comment_body(
+                        f"[]{items_range}{comment}{title}{description}{default_value}{example}",
+                        bool(description),
+                    )
             elif value["type"] == "object":
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
@@ -614,16 +754,21 @@ class JSONishFormatter(BaseFormatter):
                     comment = f" {self.comment_prefix}"
 
                 if len(value["type"]) == 1:
-                    return f"{value['type'][0]} {format_}{pattern}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+                    return self._defer_comment_body(
+                        f"{value['type'][0]} {format_}{pattern}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                        bool(description),
+                    )
                 elif len(value["type"]) == 2 and "null" in value["type"]:
                     if "array" in value["type"]:
                         array_items: dict[str, Any] | str | list[Any] = {}
                         if title or description or default_value or example:
                             comment = f" {self.comment_prefix}"
                             if key is not None:
-                                self.pending_postfix[key] = (
-                                    f"or null {comment}{title}{description}{default_value}{example}"
+                                fragment = (
+                                    f"or null {comment}{title}"
+                                    f"{description}{default_value}{example}"
                                 )
+                                self.pending_postfix[key] = fragment.rstrip()
                         if "items" in value and value["items"]:
                             array_items = self._process_schema_recursive(value["items"])
                         if isinstance(array_items, dict | list):
@@ -632,9 +777,15 @@ class JSONishFormatter(BaseFormatter):
                             return array_items
                         elif isinstance(array_items, str | int | float | bool):
                             return f"{array_items} []"
-                    return f"{value['type'][0]} {format_}{pattern} or null {comment}{title}{description}{default_value}{example}"  # noqa: E501
+                    return self._defer_comment_body(
+                        f"{value['type'][0]} {format_}{pattern} or null {comment}{title}{description}{default_value}{example}",  # noqa: E501
+                        bool(description),
+                    )
                 else:
-                    return f"{', '.join(value['type'])} {format_}{pattern}{comment}{title}{description}{default_value}{example}"  # noqa: E501
+                    return self._defer_comment_body(
+                        f"{', '.join(value['type'])} {format_}{pattern}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                        bool(description),
+                    )
 
         return ""
 
@@ -884,7 +1035,9 @@ class JSONishFormatter(BaseFormatter):
             and schema["description"]
             and self._should_include_metadata("description")
         ):
-            comments.append(f"{self.comment_prefix} {schema['description']}")
+            comments.append(
+                f"{self.comment_prefix} {self.sanitize_comment_text(schema['description'])}"
+            )
 
         if comments:
             return "\n".join(comments) + "\n"
@@ -1205,8 +1358,20 @@ class JSONishFormatter(BaseFormatter):
         When both the line and the postfix already carry ``comment_prefix``, the postfix's
         comment body is folded into the line's existing comment as a comma-separated
         continuation, and any segment already present on the line is dropped.
+
+        Since a described comment body is routed through the deferred channel, ``line``
+        may itself carry a deferred marker (not yet a literal ``//``) at the moment this
+        runs. When ``line`` carries a deferred marker AND ``postfix`` contains
+        ``comment_prefix``, ``postfix``'s comment body is folded into the marker's slot
+        via ``append_deferred_comment`` rather than appended as a second literal ``//``
+        run -- otherwise the two comments render in the wrong order with two markers on
+        one line. ``append_deferred_comment`` joins with ``"; "``, not this method's
+        ``", "``.
         """
         marker = self.comment_prefix
+        if self.carries_deferred_comment(line) and marker in postfix:
+            _, _, body = postfix.partition(marker)
+            return self.append_deferred_comment(line, body.strip())
         if marker not in postfix or marker not in line:
             return f"{line} {postfix}"
         head, _, body = postfix.partition(marker)
@@ -1382,8 +1547,33 @@ class JSONishFormatter(BaseFormatter):
         # ORDERING INVARIANT: any future pass that matches on property names goes ABOVE
         # this line; any pass producing final user-facing text goes BELOW it.
         output_string = self.hoist_deferred_comments(output_string)
-        self.simplified_schema = output_string.replace("  ", " ")
+        output_string = self._rstrip_lines(output_string)
+        self.simplified_schema = output_string
         return self._add_prefix(output_string)
+
+    def _rstrip_lines(self, text: str) -> str:
+        """Guarantee that no emitted line ends in whitespace (ticket AC-3).
+
+        Runs as the LAST transformation in ``transform_schema``, below the ordering
+        invariant comment -- this pass produces final user-facing text and must never run
+        before a pass that matches on property names (``_apply_pending_postfix`` /
+        ``_apply_pending_prefix``, which both already run above it).
+
+        This is a GLOBAL, structural backstop, not a substitute for the local
+        ``.rstrip()`` fixes on the keyed ``pending_postfix`` f-strings: those keep the
+        stored postfix values clean for ``_join_postfix``'s and
+        ``_merge_pending_recursion``'s own ``.rstrip()``/``in``-tests, while this pass is
+        what makes AC-3 true structurally, including for any site future routing
+        introduces.
+
+        Args:
+            text: Fully assembled JSONish output, immediately before ``_add_prefix``.
+
+        Returns:
+            ``text`` with every physical line right-stripped. A blank line rstrips to
+            ``""`` and stays blank; leading indentation is untouched.
+        """
+        return "\n".join(line.rstrip() for line in text.split("\n"))
 
     def _add_prefix(self, output_string: str) -> str:
         """Add prefix to output if configured."""

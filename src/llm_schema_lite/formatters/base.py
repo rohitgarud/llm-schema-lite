@@ -942,6 +942,26 @@ class BaseFormatter(ABC):
             and self._deferred_pattern.search(representation) is not None
         )
 
+    def sanitize_comment_text(self, text: str) -> str:
+        """Normalize a raw schema string before it becomes comment text.
+
+        The base implementation returns ``text`` unchanged, so YAML and TypeScript output
+        is byte-identical before and after this seam exists. A formatter whose comment
+        syntax cannot carry a line break (JSONish's ``//`` runs to end of line) overrides
+        this to collapse multi-line text.
+
+        Args:
+            text: The raw value read from the schema (a ``title``, ``description``,
+                ``$comment``, or similar fragment source). Callers pass this BEFORE any
+                comment prefix, punctuation, or surrounding fragment text is attached --
+                never a fragment that already carries ``comment_prefix`` or a wrapping
+                parenthesis/marker.
+
+        Returns:
+            ``text`` unchanged (base implementation).
+        """
+        return text
+
     def comment_lines(self, body: str, indent: str = "") -> list[str]:
         """Render ``body`` as one comment line per physical line, at ``indent``.
 
@@ -1220,7 +1240,7 @@ class BaseFormatter(ABC):
             title = f" {value['title']}:"
         if self._should_include_metadata("description"):
             if "description" in value and value["description"] is not None:
-                description = f" {value['description']}"
+                description = f" {self.sanitize_comment_text(value['description'])}"
             if "id" in value and value["id"] is not None and value["id"] != "":
                 id_ = value["id"]
                 if isinstance(id_, str):

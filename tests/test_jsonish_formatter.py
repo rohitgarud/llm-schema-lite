@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 from enum import Enum
 from typing import Any
@@ -604,7 +605,7 @@ def test_jsonish_nested_optional_ref_renders_as_block() -> None:
             "  address: {",
             "    street*: string // Street,",
             "    city*: string // City,",
-            '    country*: string // one of: "US", "CA"',
+            '    country*: string // one of: "US", "CA"; Country code',
             "  } OR null  // Home address (default=null)",
             "}",
         ]
@@ -662,7 +663,7 @@ def test_jsonish_nested_list_ref_renders_as_compact_brackets() -> None:
             "  addresses*: [{",
             "    street*: string // Street,",
             "    city*: string // City,",
-            '    country*: string // one of: "US", "CA"',
+            '    country*: string // one of: "US", "CA"; Country code',
             "  }]  // Addresses",
             "}",
         ]
@@ -719,7 +720,7 @@ def test_jsonish_nested_optional_list_ref_renders_as_compact_brackets() -> None:
             "  addresses: [{",
             "    street*: string // Street,",
             "    city*: string // City,",
-            '    country*: string // one of: "US", "CA"',
+            '    country*: string // one of: "US", "CA"; Country code',
             "  }] OR null  // Addresses (default=null)",
             "}",
         ]
@@ -776,8 +777,8 @@ def test_jsonish_nested_required_ref_renders_as_block() -> None:
             "  address*: {",
             "    street*: string // Street,",
             "    city*: string // City,",
-            '    country*: string // one of: "US", "CA"',
-            "  }",
+            '    country*: string // one of: "US", "CA"; Country code',
+            "  } // Home address",
             "}",
         ]
     )
@@ -792,7 +793,7 @@ def test_jsonish_nested_required_ref_renders_as_block() -> None:
             "  address*: {",
             "    street*: string // Street,",
             "    city*: string // City",
-            "  }",
+            "  } // Home address",
             "}",
         ]
     )
@@ -824,16 +825,104 @@ def test_jsonish_nested_ref_two_sibling_fields_both_inline() -> None:
             "  home*: {",
             "    street*: string // Street,",
             "    city*: string // City,",
-            '    country*: string // one of: "US", "CA"',
-            "  },",
+            '    country*: string // one of: "US", "CA"; Country code',
+            "  } // Home,",
             "  work*: {",
             "    street*: string // Street,",
             "    city*: string // City,",
-            '    country*: string // one of: "US", "CA"',
-            "  }",
+            '    country*: string // one of: "US", "CA"; Country code',
+            "  } // Work",
             "}",
         ]
     )
+
+
+def test_jsonish_ref_enum_property_description_emitted_once() -> None:
+    """AC-2: a property description on a $ref-to-enum field is emitted exactly once."""
+    from llm_schema_lite import simplify_schema
+
+    class Country(str, Enum):
+        US = "US"
+        CA = "CA"
+
+    class Addr(BaseModel):
+        country: Country = Field(..., description="Country code")
+
+    result = simplify_schema(Addr, format_type="jsonish").to_string()
+
+    assert result.count("Country code") == 1
+    assert '  country*: string // one of: "US", "CA"; Country code' in result
+
+
+def test_jsonish_ref_object_property_description_emitted_once() -> None:
+    """AC-2: a property description on a $ref-to-object field is emitted exactly once."""
+    from llm_schema_lite import simplify_schema
+
+    class Addr(BaseModel):
+        street: str = Field(..., description="Street")
+
+    class Patient(BaseModel):
+        address: Addr = Field(..., description="Home address")
+
+    result = simplify_schema(Patient, format_type="jsonish").to_string()
+
+    assert result.count("Home address") == 1
+    assert "  } // Home address" in result
+
+
+def test_jsonish_ref_property_and_def_description_deduplicated() -> None:
+    """AC-2: identical property and definition descriptions are emitted once."""
+    from llm_schema_lite import simplify_schema
+
+    class Same(BaseModel):
+        """Same text."""
+
+        x: str
+
+    class Holder(BaseModel):
+        a: Same = Field(..., description="Same text.")
+
+    result = simplify_schema(Holder, format_type="jsonish").to_string()
+
+    assert result.count("Same text.") == 1
+
+
+def test_jsonish_ref_property_description_gated_by_include_metadata() -> None:
+    """AC-2: the new read honours the description metadata gate (matrix biconditional)."""
+    from llm_schema_lite import FormatterConfig, simplify_schema
+
+    class Country(str, Enum):
+        US = "US"
+        CA = "CA"
+
+    class Addr(BaseModel):
+        country: Country = Field(..., description="Country code")
+
+    for cfg in (
+        FormatterConfig(include_metadata=False),
+        FormatterConfig(include_metadata=True, include_descriptions=False),
+    ):
+        result = simplify_schema(Addr, config=cfg, format_type="jsonish").to_string()
+        assert "Country code" not in result, result
+
+
+def test_jsonish_ref_enum_enrichment_and_property_description_join_order() -> None:
+    """AC-2: per-value enum text comes first; the property description joins last."""
+    schema = {
+        "type": "object",
+        "properties": {"country": {"$ref": "#/$defs/Country", "description": "Country code"}},
+        "required": ["country"],
+        "$defs": {
+            "Country": {
+                "enum": ["US", "CA"],
+                "x-enum-descriptions": {"US": "United States", "CA": "Canada"},
+            }
+        },
+    }
+    result = JSONishFormatter(schema, include_metadata=True).transform_schema()
+    line = _line_with(result, "country*:")
+
+    assert line == ('country*: string // one of: "US" (United States), "CA" (Canada); Country code')
 
 
 def test_jsonish_nested_ref_defs_docstring_becomes_opening_line_comment() -> None:
@@ -1447,6 +1536,23 @@ def test_jsonish_formatter_with_dependencies():
     assert "DEPENDS" in result or result  # At minimum should not crash
 
 
+def test_jsonish_dependency_postfix_folds_into_deferred_description() -> None:
+    """A field with BOTH a description and a `dependencies` postfix keeps one `//` run."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "a": {"type": "string", "description": 'has "q" here'},
+            "b": {"type": "string"},
+        },
+        "dependencies": {"a": ["b"]},
+    }
+    result = JSONishFormatter(schema, include_metadata=True).transform_schema()
+    line = _line_with(result, "a:")
+
+    assert line == 'a: string // has "q" here; (DEPENDS ON: b),'
+    assert line.count("//") == 1
+
+
 # ============================================================================
 # Edge Cases and Error Handling
 # ============================================================================
@@ -1695,23 +1801,30 @@ def test_jsonish_nested_object_lines_have_no_stray_delimiter() -> None:
 
 
 def test_jsonish_description_with_quote_preserved_once() -> None:
-    """AC-2: a description containing a literal quote is preserved exactly once."""
+    """AC-1: a description containing a literal quote is preserved exactly once, unescaped."""
     result = JSONishFormatter(_QuoteDescriptions.model_json_schema()).transform_schema()
     line = _line_with(result, "q*:")
 
-    assert line.count('"') == 2, f"Expected exactly 2 quote characters in {line!r}"
-    assert "hi" in line
-    assert STRAY_DELIMITER.search(line) is None
+    assert line == 'q*: string // say "hi" now,'
+    assert "\\" not in line
 
 
 def test_jsonish_description_ending_in_quote_not_truncated() -> None:
-    """AC-2: an escaped trailing content quote is not mistaken for a stray delimiter."""
+    """AC-1: a content quote at the end of a description survives, unescaped.
+
+    The STRAY_DELIMITER guard is deliberately NOT applied here. Post-fix the line
+    legitimately ends in `"` + `,` because the comment body is hoisted after
+    `_scan_remove_string_delimiters` has run; the guard's precondition ("this line is
+    `json.dumps` output whose delimiters were stripped") no longer holds for the hoisted
+    comment segment. The guard still covers the dump-path segment via
+    `test_jsonish_no_line_ends_with_stray_delimiter` and
+    `test_remove_quotes_does_not_unescape`.
+    """
     result = JSONishFormatter(_QuoteDescriptions.model_json_schema()).transform_schema()
     line = _line_with(result, "e*:")
 
-    assert "ends with quote" in line
-    assert line.count('"') == 1, f"Expected exactly 1 quote character in {line!r}"
-    assert STRAY_DELIMITER.search(line) is None
+    assert line == 'e*: string // ends with quote",'
+    assert "\\" not in line
 
 
 def test_jsonish_description_with_double_slash_preserved() -> None:
@@ -1722,6 +1835,48 @@ def test_jsonish_description_with_double_slash_preserved() -> None:
     assert "see http://x // note" in line
 
 
+def test_jsonish_description_with_backslash_preserved_once() -> None:
+    """AC-1: an authored backslash is authored text, emitted exactly once."""
+
+    class _Backslash(BaseModel):
+        b: str = Field(..., description=r"back\slash here")
+
+    result = JSONishFormatter(_Backslash.model_json_schema()).transform_schema()
+    line = _line_with(result, "b*:")
+
+    assert line == "b*: string // back\\slash here"
+    assert line.count("\\") == 1
+
+
+def test_jsonish_description_with_escaped_n_not_decoded() -> None:
+    """AC-1: a two-character backslash-n stays two characters and is not collapsed."""
+
+    class _EscapedN(BaseModel):
+        esc: str = Field(..., description=r"regex \n means newline")
+
+    result = JSONishFormatter(_EscapedN.model_json_schema()).transform_schema()
+    line = _line_with(result, "esc*:")
+
+    assert line == "esc*: string // regex \\n means newline"
+    assert "\n" not in line
+
+
+def test_jsonish_double_escape_anyof_object_quote_preserved_once() -> None:
+    """AC-1: the multi-member anyOf path re-dumps its item; a marker survives n dumps."""
+
+    class _Inner(BaseModel):
+        a: str = Field(..., description='has "q" here')
+
+    class _Outer(BaseModel):
+        u: _Inner | int | None = Field(None, description="a union field")
+
+    result = JSONishFormatter(_Outer.model_json_schema()).transform_schema()
+
+    assert 'has "q" here' in result
+    assert '\\"' not in result
+    assert result.count('"') == 2
+
+
 def test_jsonish_property_without_comment_is_unchanged() -> None:
     """Pin the already-working clean path (a field with no description)."""
     result = JSONishFormatter(_QuoteDescriptions.model_json_schema()).transform_schema()
@@ -1729,6 +1884,32 @@ def test_jsonish_property_without_comment_is_unchanged() -> None:
 
     assert line.split("//")[0].strip() == "plain*: string"
     assert '"' not in line
+
+
+def test_jsonish_description_with_real_newline_collapses_to_one_line() -> None:
+    """AC-1: a description containing a real newline renders as one `//` line."""
+    from tests.conftest import MultiLineDescriptionModel
+
+    result = JSONishFormatter(MultiLineDescriptionModel.model_json_schema()).transform_schema()
+    line = _line_with(result, "summary*:")
+
+    assert line == "summary*: string // line one line two,"
+    assert "\\n" not in line
+
+
+def test_jsonish_description_whitespace_runs_collapse_and_ends_strip() -> None:
+    """AC-1/AC-3: tabs, double spaces and a trailing space normalise at the read seam."""
+
+    class _Whitespacey(BaseModel):
+        t: str = Field(..., description="a\t\tb")
+        d: str = Field(..., description="a  b")
+        s: str = Field(..., description="trailing space ")
+
+    result = JSONishFormatter(_Whitespacey.model_json_schema()).transform_schema()
+
+    assert _line_with(result, "t*:") == "t*: string // a b,"
+    assert _line_with(result, "d*:") == "d*: string // a b,"
+    assert _line_with(result, "s*:") == "s*: string // trailing space"
 
 
 @pytest.mark.parametrize(
@@ -1917,6 +2098,52 @@ def test_no_dict_repr_across_all_models_jsonish(all_pydantic_models) -> None:
         assert "{'" not in result, f"{name}: python dict repr in JSONish output"
 
 
+@pytest.mark.parametrize("im,desc,cons", list(itertools.product((True, False), repeat=3)))
+def test_jsonish_no_line_ends_with_trailing_whitespace(
+    im: bool, desc: bool, cons: bool, all_pydantic_models: list[tuple[str, type[BaseModel]]]
+) -> None:
+    """AC-3: no JSONish line ends with whitespace, for any model or flag combination.
+
+    Prior to the ``_rstrip_lines`` backstop, the keyed ``pending_postfix`` f-strings for
+    ``OR null``/``ONE OF:``/``AND null``/``or null`` (``process_anyof``, ``process_oneof``,
+    ``process_allof``, and the ``type: [array, null]`` arm of ``process_types``) were
+    interpolated without a trailing ``.rstrip()`` when their description/title/default/
+    example fragments were all empty, leaving a bare trailing space on the field's
+    closing line (e.g. ``'  } OR null '``). Sweeps every registered model across all 8
+    ``include_metadata`` / ``include_descriptions`` / ``include_constraints`` combinations.
+    """
+    config = FormatterConfig(
+        include_metadata=im, include_descriptions=desc, include_constraints=cons
+    )
+    for name, model in all_pydantic_models:
+        rendered = simplify_schema(model, config=config, format_type="jsonish").to_string()
+        for line in rendered.split("\n"):
+            if not line.strip():
+                continue
+            assert (
+                line == line.rstrip()
+            ), f"trailing whitespace in {name} (im={im} desc={desc} cons={cons}): {line!r}"
+
+
+def test_jsonish_transform_schema_idempotent() -> None:
+    """AC-3: the cached second call returns the identical string, and still satisfies AC-3.
+
+    ``transform_schema``'s early-return cache used to store a space-collapsed copy of
+    the output (``output_string.replace("  ", " ")``) while returning the un-collapsed
+    string on the first call -- so a second call served a different (and 2-space-indent
+    -squashed) string from the same formatter instance. Dropping the stray ``.replace``
+    makes the cached value and the returned value the same string on every call.
+    """
+    formatter = JSONishFormatter(_QuoteDescriptions.model_json_schema())
+    first = formatter.transform_schema()
+    second = formatter.transform_schema()
+
+    assert first == second
+    for line in second.split("\n"):
+        if line.strip():
+            assert line == line.rstrip()
+
+
 def test_order_jsonish_token_count_decreases() -> None:
     """Dropping auto-generated titles shrinks the JSONish token count for ``Order``.
 
@@ -1941,13 +2168,24 @@ def test_order_jsonish_token_count_decreases() -> None:
 # docstrings; pydantic turns each into ``description``, which makes ``normalize_schema_titles``
 # drop the now-redundant root ``title`` and adds an inline ``//`` comment to the two nested
 # models. Those three header/comment lines below therefore differ from the design block. They are
-# a fixture artefact, not a container-rendering change: they render identically before and after
-# this ticket. Every container token in this block is the design's verbatim.
+# a fixture artefact, not a container-rendering change. Every container token in this block is
+# the design's verbatim.
+#
+# lsl-2026-09-05-005 deviation (Phase 2): ``Root``'s docstring is itself multi-line (a blank
+# line separates its two sentences), so it is exactly the AC-1 defect this ticket's
+# ``sanitize_comment_text`` fixes. BEFORE this ticket the root header rendered as a `//`-prefixed
+# first physical line followed by TWO bare, uncommented document lines (the blank line and
+# "Fields verbatim from..."), because ``get_info_comment`` embedded the raw multi-line
+# description directly into a single ``comments.append(...)`` call. Phase 2's route S5
+# (jsonish_formatter.py's ``get_info_comment``) now sanitizes that description before it is
+# joined, collapsing it -- with the first line -- into one single-space-joined ``//`` line.
+# The plan's own Phase 2 step 2.13 predicted "no existing test uses a multi-line ... description"
+# for this phase; that prediction was wrong for this fixture. This is an "update the golden"
+# case, not a regression: it is precisely the defect the ticket sets out to fix.
 ROOT_JSONISH_DEFAULT = "\n".join(
     [
         "// Kitchen-sink fixture for lsl-2026-09-04-015 "
-        "(dict/tuple/set/Any container rendering).",
-        "",
+        "(dict/tuple/set/Any container rendering). "
         "Fields verbatim from the approved design (2026-09-04-design-discussion-v2.md 5.1).",
         "// Fields marked with * are required",
         "{",
@@ -2523,7 +2761,7 @@ Node.model_rebuild()
             "  value*: string // Node value,\n"
             "  children: [{ // A tree node.\n"
             "    value*: string // Node value,\n"
-            "    children: object [] // Child nodes, recursive: Node\n"
+            "    children: object [] // Child nodes; recursive: Node\n"
             "  }]  // Child nodes\n"
             "}",
         ),

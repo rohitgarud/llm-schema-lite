@@ -15,14 +15,18 @@ from pydantic import BaseModel
 from llm_schema_lite import FormatterConfig, simplify_schema
 from tests.formatter_helpers import extract_comment_slots, render_all_formatters
 
-# Per-formatter description markers. Spellings differ per formatter; JSONish
-# deliberately omits "Role of the user" and "Home address", and YAML/TypeScript
-# deliberately omit "A postal address." -- pre-existing rendering artefacts, not bugs.
+# Per-formatter description markers. Spellings differ per formatter; YAML and TypeScript
+# deliberately omit "A postal address." because their $ref renderers never read the
+# referenced definition's own description (design non-goal, not a bug). JSONish's former
+# omission of "Role of the user" and "Home address" WAS a bug and is fixed by
+# lsl-2026-09-05-005.
 DESCRIPTION_MARKERS = {
     "jsonish": [
         "Full name",
         "Age in years",
+        "Role of the user",
         "Tags",
+        "Home address",
         "Optional nickname",
         "Street line",
         "ZIP",
