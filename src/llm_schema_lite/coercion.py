@@ -35,6 +35,7 @@ class ParseConfig:
     coerce_list_single_item: bool = False  # Wrap single item in list
     log_coercions: bool = True  # Log coercion events for debugging
     partial: bool = False  # Enable partial extraction (extract valid fields even if some fail)
+    strip_required_marker: str = "*"  # Trailing marker stripped from reply keys
 
 
 def _is_correct_type(value: Any, target_type: str, enum_values: list[Any] | None = None) -> bool:

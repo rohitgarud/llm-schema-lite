@@ -398,3 +398,95 @@ class TestEdgeCases:
                 schema=Person,
                 parse_config=ParseConfig(partial=True),
             )
+
+
+class TestRequiredMarkerKeys:
+    """SchemaParser normalizes trailing required-marker reply keys (lsl-2026-09-04-008)."""
+
+    def test_trailing_marker_key_maps_to_schema_field(self):
+        """A reply key with the trailing marker maps onto the matching schema field."""
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            name: str
+            age: int | None = None
+
+        result, _ = loads('{"name*": "x"}', schema=M)
+        assert result.name == "x"
+
+    def test_verbatim_schema_key_never_altered(self):
+        """A reply key that already matches the schema verbatim is never altered."""
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            name: str
+            age: int | None = None
+
+        result, _ = loads('{"name": "x"}', schema=M)
+        assert result.name == "x"
+
+    def test_marker_collision_prefers_verbatim_key(self):
+        """When both the verbatim and the marked key are present, verbatim wins."""
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            name: str
+            age: int | None = None
+
+        result, _ = loads('{"name": "a", "name*": "b"}', schema=M)
+        assert result.name == "a"
+
+    def test_marker_stripped_in_both_partial_and_full_modes(self):
+        """Marker stripping applies exactly once, on both the partial and full routes."""
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            name: str
+            age: int | None = None
+
+        result_full, _ = loads('{"name*": "x"}', schema=M, parse_config=ParseConfig(partial=False))
+        result_partial, _ = loads(
+            '{"name*": "x"}', schema=M, parse_config=ParseConfig(partial=True)
+        )
+        assert result_full.name == "x"
+        assert result_partial.name == "x"
+
+    def test_unknown_marked_key_is_not_invented(self):
+        """A marked key with no matching schema property is left for downstream to drop."""
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            name: str
+            age: int | None = None
+
+        result, _ = loads('{"name": "x", "bogus*": 1}', schema=M)
+        assert result.name == "x"
+        assert not hasattr(result, "bogus")
+
+    def test_custom_marker_via_parse_config(self):
+        """strip_required_marker overrides the default "*" marker."""
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            name: str
+            age: int | None = None
+
+        result, _ = loads(
+            '{"name!": "x"}', schema=M, parse_config=ParseConfig(strip_required_marker="!")
+        )
+        assert result.name == "x"
+
+    def test_empty_marker_disables_stripping(self):
+        """strip_required_marker="" is the escape hatch: "name*" stays an unknown key."""
+        from pydantic import BaseModel
+
+        class M(BaseModel):
+            name: str
+            age: int | None = None
+
+        with pytest.raises(ConversionError, match="Required field 'name' is missing"):
+            loads(
+                '{"name*": "x"}',
+                schema=M,
+                parse_config=ParseConfig(strip_required_marker="", partial=True),
+            )

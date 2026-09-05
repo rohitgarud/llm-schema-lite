@@ -13,6 +13,7 @@ from dspy.adapters.types import Type as DSPyType
 from dspy.adapters.types.history import History as DSPyHistory
 from dspy.adapters.types.tool import Tool, ToolCalls
 from dspy.adapters.utils import (
+    apply_output_field_defaults,
     format_field_value,
     get_annotation_name,
     parse_value,
@@ -26,9 +27,26 @@ from pydantic import TypeAdapter
 from pydantic.fields import FieldInfo
 
 # Use llm_schema_lite for schema simplification and robust parsing
-from llm_schema_lite import FormatterConfig, loads, simplify_schema
+from llm_schema_lite import (
+    CoercionMetadata,
+    ConversionError,
+    FormatterConfig,
+    ParseConfig,
+    coerce_to_schema,
+    loads,
+    simplify_schema,
+)
 
 logger = logging.getLogger(__name__)
+
+# Exact literal from upstream JSONAdapter's non-dict-response message; used at two call
+# sites (the _extract_json ConversionError wrap and the shared dict guard) so that
+# test_non_dict_response_raises keeps matching verbatim.
+_JSON_PARSE_ERROR_MESSAGE = "LM response cannot be serialized to a JSON object."
+
+# Names both formats actually attempted in YAML mode by the time this is raised
+# (see _extract_yaml).
+_YAML_PARSE_ERROR_MESSAGE = "LM response cannot be parsed as YAML or JSON."
 
 
 class OutputMode(enum.Enum):
@@ -138,6 +156,13 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         parallel_tool_calls: Forwarded unchanged to the DSPy adapter base. When not None and
             native function calling is active on an LM that supports it, DSPy sets
             lm_kwargs["parallel_tool_calls"]. None (default) leaves the provider option unset.
+        parse_config: Optional ParseConfig. When None (default), parsing is
+            upstream-JSONAdapter-equivalent: a field that fails parse_value leaks its
+            ValidationError. When supplied, a field that parse_value rejects is first
+            offered to the coercion rescue (see _coerce_field_value); if that also
+            fails and parse_config.partial is True, the field is dropped and refilled
+            by apply_output_field_defaults. Coercion/drop events are logged at DEBUG
+            only; the Prediction shape is unchanged.
     """
 
     def __init__(
@@ -151,6 +176,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         prompt_layout: PromptLayout = PromptLayout.SECTIONS,
         use_json_object_response_format: bool = True,
         parallel_tool_calls: bool | None = None,
+        parse_config: ParseConfig | None = None,
     ):
         super().__init__(
             callbacks=callbacks,
@@ -163,6 +189,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         self.formatter_config = formatter_config
         self.prompt_layout = prompt_layout
         self.use_json_object_response_format = use_json_object_response_format
+        self.parse_config = parse_config
         # parallel_tool_calls is stored by Adapter.__init__ (dspy/adapters/base.py:73);
         # do not re-assign it here.
 
@@ -682,6 +709,10 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         - JSON mode: Parse JSON
         - JSONish mode: Parse JSON (same as JSON, just different schema in prompt)
         - YAML mode: Parse YAML, fallback to JSON
+
+        Delegates extraction to _extract_json / _extract_yaml and field-building to the
+        shared _build_output_fields pipeline; parse/_parse_json/_parse_yaml keep their
+        existing names so nothing that references them by name breaks.
         """
         # JSON and JSONish both parse as JSON
         if self.output_mode in (OutputMode.JSON, OutputMode.JSONISH):
@@ -693,70 +724,228 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             return self._parse_json(signature, completion)
 
     def _parse_json(self, signature: type[Signature], completion: str) -> dict[str, Any]:
-        """Parse JSON completion (used for both JSON and JSONish modes)."""
-        # Parse with llm-schema-lite for robustness
-        # (includes markdown extraction and JSON object extraction)
-        fields = loads(completion, mode="json", repair=True)
+        """Parse JSON completion (used for both JSON and JSONish modes).
 
-        if not isinstance(fields, dict):
-            raise AdapterParseError(
-                adapter_name="StructuredOutputAdapter",
-                signature=signature,
-                lm_response=completion,
-                message="LM response cannot be serialized to a JSON object.",
-            )
-
-        # Filter to only output fields
-        fields = {k: v for k, v in fields.items() if k in signature.output_fields}
-
-        # Cast values to expected types
-        for k, v in fields.items():
-            if k in signature.output_fields:
-                fields[k] = parse_value(v, signature.output_fields[k].annotation)
-
-        # Validate all fields present
-        if fields.keys() != signature.output_fields.keys():
-            raise AdapterParseError(
-                adapter_name="StructuredOutputAdapter",
-                signature=signature,
-                lm_response=completion,
-                parsed_result=fields,
-            )
-
-        return fields
+        Thin wrapper: mode-specific extraction via _extract_json, then the mode-shared
+        field pipeline via _build_output_fields.
+        """
+        raw = self._extract_json(signature, completion)
+        return self._build_output_fields(signature, completion, raw)
 
     def _parse_yaml(self, signature: type[Signature], completion: str) -> dict[str, Any]:
+        """Parse YAML completion (with a narrow JSON-extraction rescue).
+
+        Thin wrapper: mode-specific extraction via _extract_yaml, then the mode-shared
+        field pipeline via _build_output_fields. Unlike the previous implementation, no
+        `except Exception` here ever swallows a completeness-check AdapterParseError
+        raised further down the pipeline -- that defect is what this rewrite removes
+        structurally, not just at this call site.
         """
-        Parse YAML completion.
-        Convert YAML to dict then process normally.
+        raw = self._extract_yaml(signature, completion)
+        return self._build_output_fields(signature, completion, raw)
+
+    def _extract_json(self, signature: type[Signature], completion: str) -> Any:
+        """Mode-specific extraction for JSON/JSONish.
+
+        Returns whatever core `loads` produced -- dict, scalar, or list; dict-ness is
+        enforced by the shared pipeline (_build_output_fields), not here, so that a
+        non-dict result (e.g. the int 42) reaches the shared dict guard rather than
+        being intercepted at this layer. This is what keeps test_non_dict_response_raises
+        passing -- do not add an isinstance(..., dict) check here.
+
+        Args:
+            signature: The DSPy signature being parsed against.
+            completion: The raw LM completion text.
+
+        Returns:
+            The value `loads(completion, mode="json", repair=True)` produced, unchanged.
+
+        Raises:
+            AdapterParseError: if core `loads` raises ConversionError. Chained `from` the
+                ConversionError. Never raises ConversionError itself.
         """
         try:
-            # Use llm-schema-lite for robust YAML parsing with markdown extraction
-            fields = loads(completion, mode="yaml", repair=True)
+            return loads(completion, mode="json", repair=True)
+        except ConversionError as exc:
+            raise AdapterParseError(
+                adapter_name="StructuredOutputAdapter",
+                signature=signature,
+                lm_response=completion,
+                message=_JSON_PARSE_ERROR_MESSAGE,
+            ) from exc
 
-            if not isinstance(fields, dict):
-                raise ValueError("YAML did not parse to a dictionary")
+    def _extract_yaml(self, signature: type[Signature], completion: str) -> Any:
+        """Mode-specific extraction for YAML, with a narrow JSON rescue.
 
-            # Filter and cast
-            fields = {k: v for k, v in fields.items() if k in signature.output_fields}
+        Tries YAML first; on ConversionError ONLY (never a bare `except Exception`)
+        retries as JSON. No semantic check (dict-ness, completeness) is ever inside
+        this method's try -- both live in the shared pipeline downstream. This is the
+        fix for the old blanket `except Exception`, which also caught the completeness
+        check's own correct AdapterParseError and discarded it.
 
-            for k, v in fields.items():
-                if k in signature.output_fields:
-                    fields[k] = parse_value(v, signature.output_fields[k].annotation)
+        Args:
+            signature: The DSPy signature being parsed against.
+            completion: The raw LM completion text.
 
-            if fields.keys() != signature.output_fields.keys():
+        Returns:
+            The value produced by whichever of the two `loads` calls succeeded,
+            unchanged.
+
+        Raises:
+            AdapterParseError: if BOTH the YAML and the JSON-rescue `loads` calls raise
+                ConversionError. Chained `from` the YAML ConversionError specifically
+                (the mode the caller actually asked for), never from the JSON one.
+        """
+        try:
+            return loads(completion, mode="yaml", repair=True)
+        except ConversionError as yaml_exc:
+            try:
+                result = loads(completion, mode="json", repair=True)
+            except ConversionError:
                 raise AdapterParseError(
                     adapter_name="StructuredOutputAdapter",
                     signature=signature,
                     lm_response=completion,
-                    parsed_result=fields,
-                )
+                    message=_YAML_PARSE_ERROR_MESSAGE,
+                ) from yaml_exc
+            logger.debug("YAML extraction failed; JSON rescue succeeded for completion")
+            return result
 
-            return fields
-        except Exception as e:
-            logger.debug(f"YAML parsing failed: {e}, falling back to JSON parsing")
-            # Fallback to JSON parsing
-            return self._parse_json(signature, completion)
+    def _build_output_fields(
+        self, signature: type[Signature], completion: str, raw: Any
+    ) -> dict[str, Any]:
+        """The shared field pipeline: byte-identical semantics for JSON and YAML.
+
+        Mirrors upstream JSONAdapter.parse (DSPy 3.3.1) with the coercion rescue
+        (_coerce_field_value) as the only insertion. Both _parse_json and _parse_yaml
+        funnel through it after their mode-specific extraction.
+
+        Invariants that any change to this method must preserve:
+          - self.parse_config is None => structurally upstream-equivalent. The first
+            line of the except branch below re-raises before any new machinery is
+            reachable; this must not depend on config values happening to be inert.
+          - Defaults from apply_output_field_defaults are inserted as already-typed
+            Python values and are never fed back through parse_value.
+          - Return type is dict[str, Any] keyed by output-field name; CoercionMetadata
+            goes only to the logger, never into the returned dict or the Prediction.
+
+        Args:
+            signature: The DSPy signature being parsed against.
+            completion: The raw LM completion text (for AdapterParseError's lm_response).
+            raw: Whatever the mode-specific _extract_* method returned -- dict, scalar,
+                or list.
+
+        Returns:
+            dict[str, Any] with exactly signature.output_fields.keys() as keys.
+
+        Raises:
+            AdapterParseError: if `raw` is not a dict, or if a required field is missing
+                after coercion and defaults. pydantic.ValidationError / ValueError leak
+                through from parse_value when self.parse_config is None and no rescue is
+                attempted, matching upstream.
+        """
+        if not isinstance(raw, dict):
+            raise AdapterParseError(
+                adapter_name="StructuredOutputAdapter",
+                signature=signature,
+                lm_response=completion,
+                message=_JSON_PARSE_ERROR_MESSAGE,
+            )
+
+        fields = {k: v for k, v in raw.items() if k in signature.output_fields}
+
+        out: dict[str, Any] = {}
+        for k, v in fields.items():
+            annotation = signature.output_fields[k].annotation
+            try:
+                out[k] = parse_value(v, annotation)
+                continue
+            except (pydantic.ValidationError, ValueError):
+                if self.parse_config is None:
+                    raise
+                rescue = self._coerce_field_value(k, v, annotation)
+                if rescue is not None:
+                    coerced_value, metadata = rescue
+                    try:
+                        out[k] = parse_value(coerced_value, annotation)
+                    except (pydantic.ValidationError, ValueError):
+                        pass
+                    else:
+                        logger.debug(f"Coercion rescued output field {k!r}: {metadata}")
+                        continue
+                if self.parse_config.partial:
+                    logger.debug(f"Dropping unparseable output field {k!r} (partial=True)")
+                    continue
+                raise
+
+        out = apply_output_field_defaults(signature, out)
+
+        if out.keys() != signature.output_fields.keys():
+            raise AdapterParseError(
+                adapter_name="StructuredOutputAdapter",
+                signature=signature,
+                lm_response=completion,
+                parsed_result=out,
+            )
+
+        return out
+
+    def _coerce_field_value(
+        self, name: str, value: Any, annotation: Any
+    ) -> tuple[Any, list[CoercionMetadata]] | None:
+        """Attempt schema-aware coercion of ONE field value that parse_value rejected.
+
+        Rescue-only by design: only ever called from the except branch of the
+        parse_value loop in _build_output_fields, so it can only improve an outcome
+        that was already a failure -- it never touches a value that already parsed
+        cleanly. That inversion is what removes the corruption class where
+        `str | None` holding null became the literal string "None" and dict[str, Any]
+        values were silently stringified.
+
+        The scalar-only predicate below is hand-maintained; WIDENING IT RE-ADMITS THAT
+        CORRUPTION. tests/test_dspy_adapter_parse.py::TestParseConfig::
+        test_none_value_for_optional_field_survives_parse_config exists specifically to
+        fail if it is widened -- point any future change at that test by name.
+
+        Never raises: any failure at any step declines the rescue, logs at DEBUG, and
+        returns None. The rescue must never be the reason a parse fails.
+
+        Args:
+            name: The output field's name (used as the coerce_to_schema wrapper key and
+                in debug logging).
+            value: The raw value that parse_value rejected.
+            annotation: signature.output_fields[name].annotation.
+
+        Returns:
+            (coerced_value, metadata) if coercion was attempted and coerce_to_schema ran
+            without raising -- the caller re-runs parse_value on coerced_value and only
+            keeps it if that succeeds. None if the rescue declined to act (exotic
+            annotation, non-scalar predicate, or an internal exception) -- the caller
+            must treat None exactly like "coercion did not help".
+        """
+        try:
+            field_schema = TypeAdapter(annotation).json_schema()
+        except Exception as exc:
+            logger.debug(f"Coercion rescue declined for {name!r}: json_schema failed: {exc}")
+            return None
+
+        if not (
+            field_schema.get("type") in {"string", "integer", "number", "boolean"}
+            and not ({"anyOf", "$ref", "$defs"} & field_schema.keys())
+        ):
+            return None
+
+        try:
+            coerced, metadata = coerce_to_schema(
+                {name: value},
+                {"type": "object", "properties": {name: field_schema}},
+                self.parse_config,
+            )
+        except Exception as exc:
+            logger.debug(f"Coercion rescue declined for {name!r}: coerce_to_schema: {exc}")
+            return None
+
+        return coerced.get(name, value), metadata
 
     # ==================== Fine-tuning Support ====================
 

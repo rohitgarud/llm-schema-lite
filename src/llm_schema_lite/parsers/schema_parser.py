@@ -151,6 +151,100 @@ class SchemaParser(BaseParser):
         # Use module-level function
         self._json_schema = _get_json_schema(schema)
 
+    def _parse_to_dict(self, text: str, repair: bool, *, rescue_embedded: bool) -> Any:
+        """Sole text->dict entry point for both SchemaParser routes.
+
+        Parses via self._json_parser, optionally rescues embedded JSON on failure, then
+        normalizes required-marker keys via _normalize_marker_keys exactly once.
+
+        `rescue_embedded` PRESERVES an existing asymmetry between SchemaParser.parse's
+        non-partial branch and _parse_partial rather than introducing a new one: the
+        non-partial route lets a ConversionError from self._json_parser.parse
+        propagate; the partial route catches it and falls back to
+        self._extract_json_from_text. Folding both into one unconditional behaviour
+        would silently change the non-partial route's failure mode for garbage input
+        from a parse error into a validation error, which is out of scope for
+        lsl-2026-09-04-008. _extract_json_from_text itself is unchanged.
+
+        Args:
+            text: The text content to parse.
+            repair: Whether to attempt repair for malformed content, forwarded to
+                self._json_parser.parse.
+            rescue_embedded: True for the _parse_partial route (catches ConversionError
+                and retries via self._extract_json_from_text); False for the
+                SchemaParser.parse non-partial route (lets ConversionError propagate).
+
+        Returns:
+            Whatever self._json_parser.parse (or the embedded-JSON rescue) produced, run
+            through _normalize_marker_keys if it is a dict. Non-dict results are
+            returned unchanged -- both callers have their own non-dict handling.
+
+        Raises:
+            ConversionError: propagates from self._json_parser.parse when
+                rescue_embedded is False, or from the embedded-JSON rescue when
+                rescue_embedded is True and the rescue also fails.
+        """
+        if rescue_embedded:
+            try:
+                parsed = self._json_parser.parse(text, repair)
+            except ConversionError:
+                parsed = self._extract_json_from_text(text)
+        else:
+            parsed = self._json_parser.parse(text, repair)
+
+        if isinstance(parsed, dict):
+            return self._normalize_marker_keys(parsed)
+        return parsed
+
+    def _normalize_marker_keys(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Map trailing-marker reply keys onto their schema property names (top level).
+
+        Scope: self._json_schema["properties"] at the TOP LEVEL only. Nested marked
+        keys (e.g. {"person": {"name*": "x"}}) are deliberately not walked -- reaching
+        them would need $ref/anyOf/items traversal, which is a recorded follow-up and
+        not part of lsl-2026-09-04-008.
+
+        Uses self._parse_config.strip_required_marker as the marker. An empty marker,
+        or an empty properties dict, is a no-op escape hatch.
+
+        Rule order -- verbatim match wins FIRST, so a schema that legitimately declares
+        a property literally named "name*" is never disturbed, and a collision between
+        a verbatim key and its own marked form always keeps the verbatim key's value
+        (last-writer-wins would depend on dict iteration order and is rejected):
+
+          1. key already in properties -> keep as-is (checked FIRST).
+          2. key ends with marker AND stripping it yields a non-empty name that IS a
+             schema property AND that stripped name is NOT already a key in `data` ->
+             remap to the stripped name.
+          3. otherwise -> keep the key unchanged; it is left for downstream to drop as
+             the unknown key it is. Stripping must never invent a schema key that was
+             not already a property.
+
+        Args:
+            data: The parsed (dict) reply, pre-filtering, in whatever key order the LM
+                or self._json_parser produced.
+
+        Returns:
+            A new dict with the same values and remapped keys. Never mutates `data`.
+        """
+        marker = self._parse_config.strip_required_marker
+        properties = self._json_schema.get("properties", {})
+        if not marker or not properties:
+            return data
+
+        result: dict[str, Any] = {}
+        for key, value in data.items():
+            if key in properties:
+                result[key] = value
+                continue
+            if key.endswith(marker):
+                stripped = key[: -len(marker)]
+                if stripped and stripped in properties and stripped not in data:
+                    result[stripped] = value
+                    continue
+            result[key] = value
+        return result
+
     def parse(self, text: str, repair: bool = True) -> dict[str, Any]:
         """
         Parse text content with schema validation.
@@ -178,7 +272,7 @@ class SchemaParser(BaseParser):
             return self._parse_partial(text, repair)[0]
         else:
             # Full validation mode - parse then validate
-            parsed = self._json_parser.parse(text, repair)
+            parsed: dict[str, Any] = self._parse_to_dict(text, repair, rescue_embedded=False)
 
             # Validate against full schema
             is_valid, errors = JSONValidator(self._schema).validate(parsed, return_all_errors=True)
@@ -202,13 +296,8 @@ class SchemaParser(BaseParser):
         Raises:
             ConversionError: If required fields are missing or fail validation
         """
-        # First, parse the text to dict
-        try:
-            parsed = self._json_parser.parse(text, repair)
-            data: dict[str, Any] = parsed if isinstance(parsed, dict) else {}
-        except ConversionError:
-            # Try to extract JSON from the string even if it's embedded
-            data = self._extract_json_from_text(text)
+        # First, parse the text to dict (marker-key normalization happens inside)
+        data: dict[str, Any] = self._parse_to_dict(text, repair, rescue_embedded=True)
 
         if not isinstance(data, dict):
             data = {}

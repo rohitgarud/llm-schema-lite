@@ -79,6 +79,23 @@ class QAOptional(dspy.Signature):
     note: str | None = dspy.OutputField()
 
 
+class Typed(dspy.Signature):
+    """Typed outputs with an explicit default and a Literal, for the ParseConfig tests.
+
+    QAOptional cannot serve them: its only optional field is `note: str | None`, which
+    almost any scalar satisfies, so no input makes parse_value fail; and it has no
+    field with an explicit `default=`, so it can only reach apply_output_field_defaults
+    case 3 (annotation allows None). `count` supplies a genuinely-invalidatable value
+    AND case 2 (explicit default); `tier` supplies the Literal case the coercion
+    rescue acts on.
+    """
+
+    question: str = dspy.InputField()
+    answer: str = dspy.OutputField()
+    count: int = dspy.OutputField(default=0)
+    tier: Literal["a", "b"] = dspy.OutputField(default="a")
+
+
 class Unordered(dspy.Signature):
     """Declares zeta before alpha to probe YAML key-order preservation (Q19.2)."""
 
