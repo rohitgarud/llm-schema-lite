@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Any, Literal, get_origin
 
+import dspy
 import pydantic
 from dspy.adapters.chat_adapter import FieldInfoWithName
 from dspy.adapters.json_adapter import JSONAdapter
@@ -32,6 +33,7 @@ from llm_schema_lite import (
     ConversionError,
     FormatterConfig,
     ParseConfig,
+    StreamingNotSupportedError,
     coerce_to_schema,
     loads,
     simplify_schema,
@@ -47,6 +49,15 @@ _JSON_PARSE_ERROR_MESSAGE = "LM response cannot be serialized to a JSON object."
 # Names both formats actually attempted in YAML mode by the time this is raised
 # (see _extract_yaml).
 _YAML_PARSE_ERROR_MESSAGE = "LM response cannot be parsed as YAML or JSON."
+
+# Names the offending mode and both escape hatches; asserted on by
+# tests/test_dspy_adapter_streaming.py (must contain "YAML" and "streaming").
+_YAML_STREAMING_ERROR_MESSAGE = (
+    "Unsupported output mode for streaming: YAML. Per-field streaming requires "
+    'OutputMode.JSON or OutputMode.JSONISH; YAML output has no `"field":` boundary '
+    "for DSPy's StreamListener to detect. Either switch output_mode, or call "
+    "dspy.streamify() without stream_listeners."
+)
 
 
 class OutputMode(enum.Enum):
@@ -242,6 +253,22 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
 
         return _ResponseFormatPlan.SCHEMA
 
+    def _guard_streaming_mode(self) -> None:
+        """Reject per-field streaming in YAML mode before the LM request is issued.
+
+        Raises:
+            StreamingNotSupportedError: if output_mode is OutputMode.YAML and this call is
+                part of a dspy.streamify() run with at least one stream listener attached.
+                Non-streaming YAML calls, and YAML streamify() calls with an empty
+                stream_listeners list, are both unaffected.
+        """
+        if (
+            self.output_mode is OutputMode.YAML
+            and dspy.settings.send_stream is not None
+            and bool(dspy.settings.stream_listeners)
+        ):
+            raise StreamingNotSupportedError(_YAML_STREAMING_ERROR_MESSAGE)
+
     def __call__(
         self,
         lm: BaseLM,
@@ -251,6 +278,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         inputs: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Synchronous call with format-specific response_format handling."""
+        self._guard_streaming_mode()
         # Dispatch past JSONAdapter.__call__ to ChatAdapter.__call__: upstream re-derives
         # and overwrites lm_kwargs["response_format"], which we replace wholesale here.
         # We remain a JSONAdapter subclass on purpose (isinstance contracts).
@@ -287,6 +315,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         inputs: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Asynchronous call with format-specific response_format handling."""
+        self._guard_streaming_mode()
         # Dispatch past JSONAdapter.acall to ChatAdapter.acall - see __call__'s comment.
         # The try/except cannot be shared with __call__: the async LM exception surfaces
         # at `await`, not at coroutine creation.

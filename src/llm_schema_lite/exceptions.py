@@ -23,3 +23,9 @@ class ValidationError(SchemaLiteError):
     """Raised when schema validation fails."""
 
     pass
+
+
+class StreamingNotSupportedError(SchemaLiteError, ValueError):
+    """Raised when the configured output mode cannot be streamed field by field."""
+
+    pass

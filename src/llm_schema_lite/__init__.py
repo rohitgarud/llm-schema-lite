@@ -17,6 +17,7 @@ from .core import (
 from .exceptions import (
     ConversionError,
     SchemaLiteError,
+    StreamingNotSupportedError,
     UnsupportedModelError,
     ValidationError,
 )
@@ -65,6 +66,7 @@ __all__ = [
     "UnsupportedModelError",
     "ConversionError",
     "ValidationError",
+    "StreamingNotSupportedError",
     # Helper functions (for testing)
     "_get_json_schema",
     "_validate_field",

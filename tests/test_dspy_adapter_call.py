@@ -397,18 +397,3 @@ class TestNoPrivateDSPySymbol:
             "structured_output_adapter.py still references DSPy's private "
             "_json_adapter_call_common"
         )
-
-
-class TestStreaming:
-    """StreamListener adapter-identifier coverage (offline only)."""
-
-    @pytest.mark.xfail(
-        reason="lsl-2026-09-04-016: StreamListener.adapter_identifiers has no "
-        "StructuredOutputAdapter entry"
-    )
-    def test_stream_listener_accepts_adapter(self):
-        """StreamListener should recognise StructuredOutputAdapter."""
-        listener = dspy.streaming.StreamListener("answer")
-        assert (
-            "StructuredOutputAdapter" in listener.adapter_identifiers
-        ), f"Known adapters: {sorted(listener.adapter_identifiers)}"

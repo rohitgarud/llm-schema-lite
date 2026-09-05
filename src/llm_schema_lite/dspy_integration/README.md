@@ -297,6 +297,41 @@ adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
 4. Cast values to expected Pydantic types
 5. Validate all required fields are present
 
+## Streaming
+
+`dspy.streamify` with per-field `StreamListener`s works in **JSON** and **JSONISH** modes.
+Importing `llm_schema_lite.dspy_integration` registers `StructuredOutputAdapter` (and any
+subclass of it) with DSPy's `StreamListener`, which otherwise only recognises DSPy's own
+three built-in adapters by class name.
+
+```python
+import dspy
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
+dspy.configure(adapter=StructuredOutputAdapter(output_mode=OutputMode.JSONISH))
+
+program = dspy.streamify(
+    dspy.Predict("question->answer"),
+    stream_listeners=[dspy.streaming.StreamListener(signature_field_name="answer")],
+)
+
+async for value in program(question="What is the capital of France?"):
+    if isinstance(value, dspy.streaming.StreamResponse):
+        print(value.chunk, end="")
+```
+
+**YAML mode cannot be streamed field by field.** YAML output has no `"field":` boundary for
+`StreamListener` to detect, so a `streamify` run with at least one stream listener raises
+`StreamingNotSupportedError` (a `SchemaLiteError` and a `ValueError`) before any LM request is
+issued. Two escape hatches: switch `output_mode` to `OutputMode.JSON`/`OutputMode.JSONISH`, or
+call `dspy.streamify()` without `stream_listeners` (raw chunk streaming still works in YAML).
+
+**Ordering caveat.** Registration happens when `llm_schema_lite.dspy_integration` is first
+imported, and it only affects `StreamListener` instances constructed *after* that import. If you
+build a listener before importing this package, it keeps DSPy's stock table and will not
+recognise `StructuredOutputAdapter`. Construct listeners after the import, or call
+`register_streaming_support()` and rebuild the listener.
+
 ## Architecture
 
 ### Class Hierarchy
