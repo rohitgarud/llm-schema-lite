@@ -10,9 +10,12 @@ Two measurement arms live here, and they are never merged (see `outcomes.py`):
   `dspy.Predict` calls against a caller-supplied LM and classifies what happens.
 
 R6 is enforced structurally, not just by discipline: `run_offline_arm` (and everything it
-calls) never constructs a `dspy.LM`, and this module never imports `.config` or `.cli` --
-so "the collected test suite touches no network" is a fact about the import graph, not a
-promise about behaviour.
+calls) never constructs a `dspy.LM`, and this module never imports `.config`, `.cli` or
+`.encoding` -- so "the collected test suite constructs no `dspy.LM` and reads no
+environment variable" is a fact about the import graph, not a promise about behaviour.
+The one outbound call this module can still provoke is `tiktoken`'s one-time fetch of the
+`cl100k_base` table on a cold cache; `_get_encoding` treats that fetch as optional and
+returns `None` when it cannot be satisfied, so the arm never fails for want of a network.
 
 Δ2 construction rule: `run_live_arm` takes an `lm_factory: Callable[[Adapter], BaseLM]`
 rather than a single shared `lm`, because a `DummyLM`-family fake renders its canned answer
@@ -36,6 +39,7 @@ configured.
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable
 from typing import Any
@@ -57,18 +61,35 @@ from .signatures import SIGNATURE_IDS, SIGNATURES
 
 ENCODING_NAME = "cl100k_base"
 
-_ENCODING: tiktoken.Encoding | None = None
-
 _REPRO_1871_ANSWER: dict[str, Any] = {"answer": "blue", "confidence": 0.9}
 """Canned Flat-signature answer that satisfies every output mode used in the matrix."""
 
 
-def _get_encoding() -> tiktoken.Encoding:
-    """Return the module-level cl100k_base tiktoken encoding, built once and memoised."""
-    global _ENCODING
-    if _ENCODING is None:
-        _ENCODING = tiktoken.get_encoding(ENCODING_NAME)
-    return _ENCODING
+@functools.lru_cache(maxsize=1)
+def _get_encoding() -> tiktoken.Encoding | None:
+    """Return the memoised `cl100k_base` encoding, or `None` if it cannot be loaded.
+
+    `tiktoken.get_encoding` downloads the BPE table on a cold cache. Offline that
+    download raises, and this arm treats the token count as optional rather than
+    failing: the caller writes `prompt_tokens=None`, which `report.py` already renders
+    as `—` in both markdown tables and as an empty CSV cell. Both outcomes are memoised,
+    so a failure is attempted once per process, not 54 times.
+
+    Tests reset the memo with `_get_encoding.cache_clear()`.
+    """
+    try:
+        return tiktoken.get_encoding(ENCODING_NAME)
+    except OSError:
+        # `requests.exceptions.RequestException` subclasses `OSError`, so this single
+        # catch covers every offline failure tiktoken/load.py can raise (ProxyError,
+        # ConnectionError, Timeout, SSLError, HTTPError, and the cache-write re-raise).
+        # Do not widen it, and do not `import requests` to name them explicitly.
+        return None
+
+
+def encoding_available() -> bool:
+    """Whether `cl100k_base` could be loaded. Memoised; never retries a failed load."""
+    return _get_encoding() is not None
 
 
 def normalize_response_format(value: Any) -> str:
@@ -114,7 +135,8 @@ def measure_prompt(adapter: Adapter, cell_id: str, sig_id: str) -> PromptRow:
     n_messages = len(messages)
     prompt_chars = sum(len(str(message["content"])) for message in messages)
     concatenated_content = "".join(str(message["content"]) for message in messages)
-    prompt_tokens = len(_get_encoding().encode(concatenated_content))
+    encoding = _get_encoding()
+    prompt_tokens = None if encoding is None else len(encoding.encode(concatenated_content))
     return PromptRow(
         adapter=cell_id,
         adapter_config=adapter_config,
@@ -134,7 +156,8 @@ def run_offline_arm(
     """Measure every (adapter, signature) prompt-cost cell. Never constructs a `dspy.LM`.
 
     Defaults to all 9 adapters x all 6 signatures = 54 rows, in `ADAPTERS` x `SIGNATURES`
-    insertion order. Deterministic, network-free, sub-second.
+    insertion order. Deterministic and sub-second. Needs no network: token counting degrades
+    to `prompt_tokens=None` when `cl100k_base` cannot be loaded offline.
     """
     ids = list(ADAPTERS) if adapter_ids is None else adapter_ids
     sig_ids = list(SIGNATURE_IDS) if signature_ids is None else signature_ids

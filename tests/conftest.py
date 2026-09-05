@@ -1,11 +1,82 @@
 """Shared test fixtures and configuration for llm-schema-lite tests."""
 
+import hashlib
+import os
+import tempfile
 from datetime import datetime
 from enum import Enum
+from importlib.util import find_spec
+from pathlib import Path
 from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel, EmailStr, Field, HttpUrl
+
+# ============================================================================
+# Offline tiktoken cache seeding (see thoughts/tasks/lsl-2026-09-05-008-*)
+# ============================================================================
+
+_CL100K_BLOBPATH = "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
+_TIKTOKEN_CACHE_ENV = "TIKTOKEN_CACHE_DIR"
+_CUSTOM_TIKTOKEN_CACHE_ENV = "CUSTOM_TIKTOKEN_CACHE_DIR"
+_DATA_GYM_CACHE_ENV = "DATA_GYM_CACHE_DIR"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Make tiktoken's `cl100k_base` table loadable offline, before anything is imported.
+
+    Runs once per pytest process, before collection, so every test module, every doc
+    block, and the `examples/` subprocess (which inherits `os.environ`) sees the same
+    cache directory. Deliberately a hook and not a session fixture -- see the design
+    note in the ticket folder.
+    """
+    _seed_tiktoken_cache()
+
+
+def _seed_tiktoken_cache() -> str | None:
+    """Deliberate, self-contained copy of `benchmarking/dspy_adapters/encoding.py`.
+
+    `benchmarking` is not an installed package and importing
+    `benchmarking.dspy_adapters.encoding` would execute the package `__init__`, pulling
+    `dspy` (an optional extra) into every pytest session including the pre-commit
+    `pytest -x` hook. This copy is stdlib-only and fails closed. Keep the two in sync;
+    `encoding.py` is canonical.
+    """
+    try:
+        if os.environ.get(_TIKTOKEN_CACHE_ENV) == "":
+            return None
+
+        directory = (
+            os.environ.get(_TIKTOKEN_CACHE_ENV)
+            or os.environ.get(_DATA_GYM_CACHE_ENV)
+            or str(Path(tempfile.gettempdir()) / "data-gym-cache")
+        )
+        key = hashlib.sha1(_CL100K_BLOBPATH.encode()).hexdigest()
+        if os.path.isfile(os.path.join(directory, key)):
+            return directory
+
+        try:
+            spec = find_spec("litellm")
+        except (ImportError, ValueError):
+            return None
+        if spec is None or spec.origin is None:
+            return None
+        candidate = Path(spec.origin).parent / "litellm_core_utils" / "tokenizers"
+        if (candidate / key).is_file():
+            # Safety: `import litellm` calls `tiktoken.get_encoding("cl100k_base")` at
+            # *import* time (litellm_core_utils/default_encoding.py:23). A
+            # CUSTOM_TIKTOKEN_CACHE_DIR pointing at a directory without the blob would
+            # make `import litellm` itself fail. The `(candidate / key).is_file()`
+            # check above has already confirmed this directory holds the sha1-named
+            # blob -- that verification is not optional.
+            os.environ[_TIKTOKEN_CACHE_ENV] = os.environ[_CUSTOM_TIKTOKEN_CACHE_ENV] = str(
+                candidate
+            )
+            return str(candidate)
+        return None
+    except Exception:
+        return None
+
 
 # ============================================================================
 # Test Models and Schemas

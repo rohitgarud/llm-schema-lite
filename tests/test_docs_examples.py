@@ -21,6 +21,7 @@ their opening fence and are skipped, never executed -- see section B.4/A.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import re
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import tiktoken
 
 # --------------------------------------------------------------------------
 # Module-level constants
@@ -64,6 +66,32 @@ _DIRECTIVE_RE: re.Pattern[str] = re.compile(r"^<!--\s*lsl-docs:\s*(?P<directive>
 directive (``sikp``, ``skip -``) is rejected loudly instead of silently
 executing or silently skipping."""
 
+_TOKEN_COUNTING_CALLS: tuple[str, ...] = ("token_count(", "compare_tokens(")
+"""Substrings that mark a doc block as needing a loadable tiktoken encoding.
+Matches exactly two blocks today -- README.md:L32 and
+src/llm_schema_lite/dspy_integration/README.md:L529 -- out of sixteen python
+blocks, so the dynamic skip can never leave a scanned file with nothing to
+execute (`test_scanned_file_has_executable_blocks` needs no companion rail)."""
+
+
+@functools.cache
+def _token_encoding_available(name: str = "cl100k_base") -> bool:
+    """Whether tiktoken can load `name` in this process. Memoised for the session.
+
+    Mirrors the module's existing `requires_dspy` / `pytest.importorskip` idiom: a
+    capability probe, not a hard requirement. On a *networked* machine with a cold
+    cache this performs one real HTTPS fetch -- the same fetch the doc block would
+    perform anyway, so not a regression; the acceptance criteria only constrain the
+    offline case, where `tests/conftest.py`'s `pytest_configure` seed has normally
+    already made this a cache hit.
+    """
+    try:
+        tiktoken.get_encoding(name)
+    except OSError:
+        # `requests.exceptions.RequestException` subclasses `OSError`; do not widen.
+        return False
+    return True
+
 
 # --------------------------------------------------------------------------
 # Data shape
@@ -84,6 +112,8 @@ class DocCodeBlock:
         skip_reason: Reason captured from an immediately-preceding
             ``<!-- lsl-docs: skip: <reason> -->`` marker, else ``None``.
         requires_dspy: ``True`` iff ``"dspy"`` occurs anywhere in ``body``.
+        requires_token_encoding: ``True`` iff any of ``_TOKEN_COUNTING_CALLS``
+            occurs anywhere in ``body``.
     """
 
     rel_path: str
@@ -92,6 +122,7 @@ class DocCodeBlock:
     body: str
     skip_reason: str | None
     requires_dspy: bool
+    requires_token_encoding: bool
 
     @property
     def test_id(self) -> str:
@@ -175,6 +206,7 @@ def _scan_fenced_blocks(text: str, rel_path: str) -> list[DocCodeBlock]:
                 body=body,
                 skip_reason=_skip_reason_before(lines, index, rel_path, open_lineno),
                 requires_dspy="dspy" in body,
+                requires_token_encoding=any(call in body for call in _TOKEN_COUNTING_CALLS),
             )
         )
         index = cursor + 1
@@ -260,6 +292,8 @@ def test_markdown_python_block_executes(block: DocCodeBlock) -> None:
         pytest.skip(block.skip_reason)
     if block.requires_dspy:
         pytest.importorskip("dspy", minversion="3.3.1")
+    if block.requires_token_encoding and not _token_encoding_available():
+        pytest.skip("tiktoken cannot load cl100k_base here (no cache, no network)")
     # ``dont_inherit=True`` is load-bearing: this module has
     # ``from __future__ import annotations``, and ``compile()`` inherits the
     # caller's __future__ flags by default. Under PEP 563 a doc block's

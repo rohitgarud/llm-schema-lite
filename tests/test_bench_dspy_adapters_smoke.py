@@ -3,8 +3,13 @@
 This module imports **only** from ``benchmarking.dspy_adapters`` (plus stdlib, pytest,
 pydantic and dspy exception types). It never imports the shared dspy test helpers in this
 directory, and it never imports the benchmark package's ``config`` or ``cli`` modules --
-so "the collected test suite touches no environment variable and no network" is a
-structural property of the import graph rather than a matter of discipline.
+so "the collected test suite constructs no ``dspy.LM``" is a structural property of the
+import graph rather than a matter of discipline. It does import ``.encoding``, but the
+seeding tests pass an injected ``dict`` as ``environ``, so nothing here reads or writes
+the real ``os.environ``. Token counting is the one operation that can want a network:
+``tiktoken`` fetches ``cl100k_base`` once on a cold cache. Nothing here requires that
+fetch to succeed -- ``test_offline_arm_degrades_when_encoding_is_unavailable`` pins the
+degraded contract.
 
 ``DummyLM`` reports every token count as ``0``, so every live-arm assertion here is about
 **structure and classification**, never about token magnitudes. The exact token
@@ -16,7 +21,8 @@ runs a local ``pytest -x`` hook on every commit.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import csv
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +50,8 @@ from benchmarking.dspy_adapters import (  # noqa: E402
     write_live_report,
     write_offline_report,
 )
+from benchmarking.dspy_adapters import encoding as encoding_module  # noqa: E402
+from benchmarking.dspy_adapters import runner as runner_module  # noqa: E402
 from benchmarking.dspy_adapters.fakes import RawTextLM  # noqa: E402
 from benchmarking.dspy_adapters.report import (  # noqa: E402
     LIVE_CSV_HEADER,
@@ -96,6 +104,22 @@ def _parse_error(lm_response: str) -> AdapterParseError:
     )
 
 
+@pytest.fixture
+def cold_encoding_memo() -> Iterator[None]:
+    """Clear `runner._get_encoding`'s lru_cache around one test.
+
+    Cleared *before* so a patched failure is actually observed rather than short-
+    circuited by a warm memo, and *after* so the real encoding is restored for this
+    file's other tests -- the memo is process-global and xdist workers run
+    sequentially within a process.
+    """
+    runner_module._get_encoding.cache_clear()
+    try:
+        yield
+    finally:
+        runner_module._get_encoding.cache_clear()
+
+
 def test_benchmarking_package_imports() -> None:
     """The `benchmarking.dspy_adapters` import mechanism works under pytest."""
     assert len(ADAPTERS) == 9
@@ -128,11 +152,59 @@ def test_offline_arm_covers_full_matrix() -> None:
 
 def test_offline_arm_reports_positive_tokens() -> None:
     """Every ok offline row has positive chars/tokens and exactly two messages."""
+    if not runner_module.encoding_available():
+        pytest.skip("cl100k_base unavailable: no tiktoken cache reachable offline")
     for row in run_offline_arm():
         if row.outcome is Outcome.OK:
             assert row.prompt_tokens is not None and row.prompt_tokens > 0
             assert row.prompt_chars is not None and row.prompt_chars > 0
             assert row.n_messages == 2
+
+
+def test_offline_arm_degrades_when_encoding_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, cold_encoding_memo: None
+) -> None:
+    """A cold cache with no network degrades `prompt_tokens` to None, not to 0.
+
+    `ConnectionError` is the builtin (an `OSError` subclass), which is exactly what
+    `_get_encoding` catches -- no `requests` import needed to prove the contract.
+    """
+
+    def _raise(name: str) -> None:
+        raise ConnectionError(f"no network for {name}")
+
+    monkeypatch.setattr(runner_module.tiktoken, "get_encoding", _raise)
+
+    (row,) = runner_module.run_offline_arm(adapter_ids=["json"], signature_ids=["flat"])
+
+    assert row.outcome is Outcome.OK
+    assert row.n_messages == 2
+    assert row.prompt_chars is not None and row.prompt_chars > 0
+    assert row.prompt_tokens is None
+    assert runner_module.encoding_available() is False
+
+
+def test_offline_report_renders_unavailable_tokens_as_dash(tmp_path: Path) -> None:
+    """An unavailable token count renders as an empty CSV cell and a markdown em-dash."""
+    row = PromptRow(
+        adapter="json",
+        adapter_config="cfg",
+        signature="flat",
+        n_messages=2,
+        prompt_chars=123,
+        prompt_tokens=None,
+        outcome=Outcome.OK,
+        error_class="",
+    )
+    md_path, csv_path = write_offline_report([row], tmp_path)
+
+    (record,) = csv.DictReader(csv_path.read_text().splitlines())
+    assert record["prompt_tokens"] == ""
+    assert record["prompt_chars"] == "123"
+
+    md_lines = md_path.read_text().splitlines()
+    assert "| json | — | — | — | — | — | — |" in md_lines
+    assert "| json | cfg | flat | 2 | 123 | — | ok |" in md_lines
 
 
 def test_baml_recursive_is_format_error() -> None:
@@ -271,3 +343,38 @@ def test_report_never_overwrites(tmp_path: Path) -> None:
     assert second_md.stem.endswith("-2")
     assert second_csv.stem.endswith("-2")
     assert first_csv.exists() and second_csv.exists()
+
+
+def test_seed_tiktoken_cache_finds_a_bundled_blob_without_network(tmp_path: Path) -> None:
+    """A candidate holding the sha1-named blob is adopted, pinning both cache variables."""
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    (bundled / encoding_module.cache_key()).write_bytes(b"not-a-real-bpe-table")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    environ = {"TIKTOKEN_CACHE_DIR": str(empty)}
+    result = encoding_module.seed_tiktoken_cache(environ=environ, candidates=[bundled])
+
+    assert result == str(bundled)
+    assert environ["TIKTOKEN_CACHE_DIR"] == str(bundled)
+    assert environ["CUSTOM_TIKTOKEN_CACHE_DIR"] == str(bundled)
+
+
+def test_seed_tiktoken_cache_leaves_a_working_cache_alone(tmp_path: Path) -> None:
+    """A cache that already holds the blob is never overridden -- no-override, idempotent."""
+    warm = tmp_path / "warm"
+    other = tmp_path / "other"
+    for directory in (warm, other):
+        directory.mkdir()
+        (directory / encoding_module.cache_key()).write_bytes(b"not-a-real-bpe-table")
+
+    environ = {"TIKTOKEN_CACHE_DIR": str(warm)}
+
+    assert encoding_module.seed_tiktoken_cache(environ=environ, candidates=[other]) == str(warm)
+    assert environ == {"TIKTOKEN_CACHE_DIR": str(warm)}
+
+
+def test_encoding_name_constants_agree() -> None:
+    """`runner.py` keeps its own `cl100k_base` literal; this pins it to `encoding.py`'s."""
+    assert runner_module.ENCODING_NAME == encoding_module.ENCODING_NAME

@@ -11,7 +11,10 @@ signature ids) but they are **never joined into one table**, anywhere, in any fi
 
 - **`prompt-cost`** — offline, exact, deterministic, model-free. It calls
   `adapter.format()` directly and counts the resulting prompt with `tiktoken`
-  (`cl100k_base`). No `dspy.LM`, no network, no environment variables.
+  (`cl100k_base`). No `dspy.LM`, no environment variables. The arm itself makes no
+  network call; `tiktoken` fetches the `cl100k_base` table once if no cache is
+  reachable, and when that fetch is impossible the arm still completes and reports
+  `prompt_tokens` as `—` (unavailable) rather than failing.
 - **`outcomes`** — live, against a real `dspy.LM` endpoint (verified against Ollama
   serving `qwen3:8b`). Token counts here are whatever the provider reports back, and a
   live run is not deterministic run to run.
@@ -68,7 +71,7 @@ exposes eight flags:
 
 | flag | `argparse` type | default | meaning |
 |---|---|---|---|
-| `--offline` | `store_true` | `False` | Offline prompt-cost arm **plus** the synthetic #1871 reproduction. No env, no network, no `dspy.LM`. Sub-second. |
+| `--offline` | `store_true` | `False` | Offline prompt-cost arm **plus** the synthetic #1871 reproduction. No `dspy.LM`; no network required — token counts degrade to `—` if `cl100k_base` cannot be loaded. Sets `TIKTOKEN_CACHE_DIR` only when doing so is what makes an offline count possible. Sub-second. |
 | `--live` | `store_true` | `False` | Live outcomes arm only. Requires the two env vars. |
 | `--adapters` | `str` (comma-separated) | offline: all 9 · live: the 6 `*-sections` ids | Filter by adapter id. Unknown id → stderr listing valid ids, exit 2. |
 | `--signatures` | `str` (comma-separated) | all 6 | Filter by signature id. Unknown id → same treatment. |
@@ -99,7 +102,8 @@ method directly on a signature and its inputs, with no `dspy.LM` involved. The
 resulting list of chat messages is concatenated and tokenized with `tiktoken`'s
 `cl100k_base` encoding. This is exact and deterministic: the same adapter, the same
 signature, and the same inputs always produce the same `prompt_tokens` count, on any
-machine, with no model required.
+machine, with no model required. When no `cl100k_base` cache is reachable and no
+network is available, the count is reported as `—` rather than estimated.
 
 **`outcomes` (live).** Each cell runs the signature through a real `dspy.Predict` call
 against the configured `dspy.LM`. Whether the call succeeds, how it fails if it

@@ -5,7 +5,8 @@ two arms that never share a row or a file:
 
 - **Offline ``prompt-cost`` arm** — ``adapter.format(sig, [], inputs)`` plus ``tiktoken``,
   producing ``PromptRow`` records. Exact, deterministic, model-free, sub-second, and
-  requires no network access and no ``dspy.LM``.
+  requires no ``dspy.LM``. It requires no network either, given a reachable ``tiktoken``
+  cache; without one it reports ``prompt_tokens`` as unavailable instead of failing.
 - **Live ``outcomes`` arm** — real ``dspy.Predict`` calls against a local LM, producing
   ``TrialRow`` records.
 

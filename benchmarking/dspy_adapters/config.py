@@ -18,7 +18,9 @@ bookkeeping (see Anti-masking, R9). An override of either value via
 
 This module is never imported by ``__init__.py``, ``runner.py``, or the smoke test —
 those must remain importable and runnable fully offline, with no dependency on
-``os.environ``.
+``os.environ``. ``encoding.py`` follows the same quarantine for the same reason: it is
+the only other module here that writes ``os.environ``, only ``cli.py`` imports it in the
+package, and it does so lazily inside ``_run_offline``.
 """
 
 from __future__ import annotations

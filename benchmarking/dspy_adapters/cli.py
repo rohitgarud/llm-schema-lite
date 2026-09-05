@@ -7,9 +7,12 @@ mutually-adjusting defaults, which argparse is built for) and ``main()``, the fu
 
 This module is the **only** caller of :mod:`.config` in the whole package. ``config``,
 ``.runner`` and ``.report`` are imported **lazily, inside the branches that need them** --
-never at module import time -- so that ``--offline``, ``--list`` and (in the common case,
-with no ``LSL_BENCH_MODEL``/``LSL_BENCH_API_BASE`` set) ``--repro-1871`` never touch
-``os.environ``: cli.py itself never calls ``os.environ`` directly either. The one exception
+never at module import time -- so that ``--list`` and (in the common case, with no
+``LSL_BENCH_MODEL``/``LSL_BENCH_API_BASE`` set) ``--repro-1871`` never touch
+``os.environ``. ``--offline`` is the one exception: it calls
+``.encoding.seed_tiktoken_cache()``, which may set ``TIKTOKEN_CACHE_DIR`` and
+``CUSTOM_TIKTOKEN_CACHE_DIR`` so the ``cl100k_base`` table can be loaded without a
+network. cli.py itself still never calls ``os.environ`` directly. The one exception
 is ``--repro-1871``'s optional live-probe row, which is genuinely conditional on the live
 environment ("plus ``probe_1871_live()`` iff env is configured"); that check is a bare
 presence check of the two required variable *names* (re-exported as constants by
@@ -61,7 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Run the offline prompt-cost arm plus the synthetic #1871 reproduction. "
-            "No env, no network, no dspy.LM. Sub-second."
+            "No dspy.LM and no network needed; token counts are reported as unavailable "
+            "if the tiktoken cl100k_base table cannot be loaded offline. Sub-second."
         ),
     )
     parser.add_argument(
@@ -187,17 +191,29 @@ def _run_repro_1871() -> int:
 def _run_offline(args: argparse.Namespace) -> int:
     """Run the offline prompt-cost arm, write its report, then print the #1871 repro table."""
     from . import report as report_module
-    from .runner import run_offline_arm, run_repro_1871_offline
+    from .encoding import ENCODING_NAME, seed_tiktoken_cache
+    from .runner import encoding_available, run_offline_arm, run_repro_1871_offline
+
+    seed_tiktoken_cache()
 
     adapter_ids = resolve_adapter_ids(args.adapters, tuple(ADAPTERS))
     signature_ids = resolve_signature_ids(args.signatures)
 
     rows = run_offline_arm(adapter_ids, signature_ids)
+    available = encoding_available()
+    if not available:
+        print(
+            f"warning: could not load the {ENCODING_NAME} tiktoken encoding offline; "
+            "prompt_tokens is reported as unavailable in this report. Point "
+            "TIKTOKEN_CACHE_DIR at a directory holding the cl100k_base blob, or run "
+            "once with network access, for real counts.",
+            file=sys.stderr,
+        )
     meta = dataclasses.replace(
         report_module.RunMeta.minimal("prompt-cost"),
         command=" ".join(sys.argv),
         git_head=report_module.git_head(),
-        encoding="cl100k_base",
+        encoding=ENCODING_NAME if available else f"{ENCODING_NAME} (unavailable)",
     )
     try:
         md_path, csv_path = report_module.write_offline_report(rows, args.out, meta=meta)

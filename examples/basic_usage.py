@@ -114,11 +114,22 @@ def main():
     # Example 11: Token savings
     print("\n11. Token Savings (JSONish vs. the raw JSON Schema):")
     print("-" * 80)
-    stats = user_schema.compare_tokens()
-    print(f"Original JSON Schema tokens: {stats['original_tokens']}")
-    print(f"Simplified schema tokens:    {stats['simplified_tokens']}")
-    print(f"Tokens saved:                {stats['tokens_saved']}")
-    print(f"Reduction:                   {stats['reduction_percent']}%")
+    # tiktoken downloads its BPE table on a cold cache, so an offline run must not
+    # crash here. Caught narrowly: requests.exceptions.RequestException, what tiktoken
+    # raises, subclasses OSError. The README snippets deliberately keep the bare call --
+    # a runnable program should be robust, a teaching excerpt should show the API.
+    try:
+        stats = user_schema.compare_tokens()
+    except OSError as exc:
+        print(
+            "Token counts unavailable: could not load the tiktoken encoding "
+            f"({type(exc).__name__})."
+        )
+    else:
+        print(f"Original JSON Schema tokens: {stats['original_tokens']}")
+        print(f"Simplified schema tokens:    {stats['simplified_tokens']}")
+        print(f"Tokens saved:                {stats['tokens_saved']}")
+        print(f"Reduction:                   {stats['reduction_percent']}%")
 
     print("\n" + "=" * 80)
 
