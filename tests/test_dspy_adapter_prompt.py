@@ -115,7 +115,6 @@ class TestFieldStructure:
         assert '\\"' not in out
         assert YAML_HEADER in out
 
-    @pytest.mark.xfail(reason="lsl-2026-09-04-006: YAML formatter emits hoisted Class.field keys")
     def test_yaml_field_structure_has_no_hoisted_class_keys(self):
         """The hoisted `Address.street` block is the YAML formatter's, not the adapter's."""
         out = make_adapter(OutputMode.YAML).format_field_structure(Extract)

@@ -103,7 +103,13 @@ def _formatter(
 
 def test_recursion_placeholder_form_a() -> None:
     """Form A uses the formatter's own comment prefix."""
-    assert YAMLFormatter({}).recursion_placeholder("Node") == "object  # recursive: Node"
+    # YAML defers its note so a later ``OR null``/default can join the same slot; hoisted,
+    # it is byte-identical to the literal base emits.
+    yaml_formatter = YAMLFormatter({})
+    assert (
+        yaml_formatter.hoist_deferred_comments(yaml_formatter.recursion_placeholder("Node"))
+        == "object  # recursive: Node"
+    )
     assert JSONishFormatter({}).recursion_placeholder("Node") == "object  // recursive: Node"
 
 
@@ -190,7 +196,7 @@ def test_process_ref_truncates_on_same_type_reentry(
 ) -> None:
     """Re-entering the same ``$ref`` beyond the budget yields a placeholder."""
     formatter = _formatter(formatter_cls, RECURSIVE_DEFS_SCHEMA, depth=1)
-    out = formatter.process_ref({"$ref": "#/$defs/Node"})
+    out = formatter.hoist_deferred_comments(formatter.process_ref({"$ref": "#/$defs/Node"}))
 
     assert "recursive: Node" in out
     assert "name" in out
@@ -202,7 +208,7 @@ def test_first_expansion_is_unconditional_at_depth_zero(
 ) -> None:
     """Depth 0 still renders the first body — the guard fires only on re-entry."""
     formatter = _formatter(formatter_cls, RECURSIVE_DEFS_SCHEMA, depth=0)
-    out = formatter.process_ref({"$ref": "#/$defs/Node"})
+    out = formatter.hoist_deferred_comments(formatter.process_ref({"$ref": "#/$defs/Node"}))
 
     assert "name" in out
     assert "recursive: Node" in out
@@ -344,10 +350,7 @@ for _model in (Node, RootNode, A, B, Tree, ListNode, MapNode, LLNode, N):
 
 
 JSONISH_D1 = "{\n  label*: string,\n  kids: object [] // recursive: ListNode\n}"
-YAML_D1 = (
-    "# ListNode\nListNode.label*: string\nListNode.kids: 'list[object  # recursive:"
-    " ListNode]'\n\nlabel*: string\nkids: 'list[object  # recursive: ListNode]'"
-)
+YAML_D1 = "label*: string\nkids: list[object]  # recursive: ListNode"
 TS_D1 = (
     "interface ListNode {\n  label*: string;\n  kids: Array<object /* recursive: ListNode"
     " */>;\n}\n\n// Fields marked with * are required\ninterface Schema {\n  label*:"
@@ -358,11 +361,7 @@ JSONISH_D2 = (
     "{\n  label*: string,\n  kids: [{\n    label*: string,\n    kids: object [] //"
     " recursive: ListNode\n  }] // recursive: ListNode\n}"
 )
-YAML_D2 = (
-    "# ListNode\nListNode.label*: string\nListNode.kids: 'list[label*: string\n\n  kids:"
-    " list[object  # recursive: ListNode]]'\n\nlabel*: string\nkids: 'list[label*:"
-    " string\n\n  kids: list[object  # recursive: ListNode]]'"
-)
+YAML_D2 = "label*: string\nkids:\n- label*: string\n  kids: list[object]  # recursive: ListNode"
 TS_D2 = (
     "interface ListNode {\n  label*: string;\n  kids: Array<{ label*: string, kids:"
     " Array<object /* recursive: ListNode */> }>;\n}\n\n// Fields marked with * are"
@@ -376,10 +375,8 @@ JSONISH_D3 = (
     " ListNode\n  }] // recursive: ListNode\n}"
 )
 YAML_D3 = (
-    "# ListNode\nListNode.label*: string\nListNode.kids: 'list[label*: string\n\n  kids:"
-    " list[label*: string\n\n  kids: list[object  # recursive: ListNode]]]'\n\nlabel*:"
-    " string\nkids: 'list[label*: string\n\n  kids: list[label*: string\n\n  kids:"
-    " list[object  # recursive: ListNode]]]'"
+    "label*: string\nkids:\n- label*: string\n  kids:\n  - label*: string\n"
+    "    kids: list[object]  # recursive: ListNode"
 )
 TS_D3 = (
     "interface ListNode {\n  label*: string;\n  kids: Array<{ label*: string, kids:"
@@ -552,7 +549,7 @@ def test_placeholder_never_swallows_delimiters() -> None:
     [
         ("jsonish", "kids: {\n    <string>: object /* recursive: MapNode */\n  }"),
         ("typescript", "kids: Record<string, object /* recursive: MapNode */>"),
-        ("yaml", "<string>: 'object  # recursive: MapNode'"),
+        ("yaml", "<string>: object  # recursive: MapNode"),
     ],
     ids=["jsonish", "typescript", "yaml"],
 )
@@ -595,8 +592,12 @@ def test_truncated_rendering_is_not_cached(formatter_cls: type[BaseFormatter]) -
     assert tail.count("name") == 2, tail
 
     cache = getattr(formatter, CACHE_ATTRIBUTE[formatter_cls])
-    assert "Addr" in cache
-    assert "Node" not in cache
+    assert "Node" not in cache  # the poisoning guard -- holds for all three formats
+    if formatter_cls is not YAMLFormatter:
+        # YAML's property-level block builder bypasses _ref_cache by design: it never reaches
+        # base.process_ref, the cache's only writer. Caching a real dict would let PyYAML
+        # emit &id001/*id001 aliases for a def referenced by two properties.
+        assert "Addr" in cache
 
 
 # ---------------------------------------------------------------------------

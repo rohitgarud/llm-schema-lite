@@ -787,6 +787,37 @@ class Root(BaseModel):
 
 
 # ============================================================================
+# Closed-world markers on nested blocks (lsl-2026-09-04-006, R1)
+# ============================================================================
+# ``Root.strict`` only covers the required, non-nullable case. R1 also has to hold for a
+# nullable nested block and for a list-wrapped one, and an ``extra="allow"`` sibling has to
+# stay unmarked. These three fixtures give each of those a home.
+
+
+class StrictSub(BaseModel):
+    """``extra="forbid"`` nested model: its block must carry ``no additional properties``."""
+
+    model_config = {"extra": "forbid"}
+    s: str
+
+
+class OpenSub(BaseModel):
+    """``extra="allow"`` nested model: its block must carry NO closed-world note."""
+
+    model_config = {"extra": "allow"}
+    s: str
+
+
+class R1Model(BaseModel):
+    """R1 matrix: a closed-world nested block required, nullable, list-wrapped, and open."""
+
+    strict: StrictSub
+    opt: StrictSub | None = None
+    many: list[StrictSub] = []
+    open_one: OpenSub
+
+
+# ============================================================================
 # Test Data and Schemas
 # ============================================================================
 

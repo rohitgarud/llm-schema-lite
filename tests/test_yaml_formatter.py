@@ -39,10 +39,12 @@ from tests.conftest import (
     ObjectAdditionalPropsFalse,
     ObjectRequiredOnly,
     ObjectWithDefaults,
+    OptionalTree,
     Order,
     OrderedFieldsModel,
     PatternConstraints,
     PersonWithAddress,
+    R1Model,
     RequiredOptionalModel,
     Role,
     Root,
@@ -51,6 +53,7 @@ from tests.conftest import (
     StringFormatEmail,
     StringFormatUri,
     StringPattern,
+    TreeNode,
     UnionHeavy,
     UnionTypes,
     WithFieldDescriptions,
@@ -103,28 +106,28 @@ def test_yaml_formatter_without_metadata():
 
 
 def test_yaml_formatter_with_nested_defs():
-    """Test YAML formatter with nested $defs."""
+    """A ``$defs`` model renders INLINE, as a real nested block on the referring property.
+
+    There is no longer a hoisted ``# Address`` section and no ``Address.street*`` key: the
+    def's fields live under ``address*`` as a genuine YAML mapping, carrying **Address's own**
+    required markers (D3) rather than the root model's.
+    """
     schema = PersonWithAddress.model_json_schema()
     formatter = YAMLFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
-    # Should contain both Address section and main Person properties.
-    # (Nested definitions are emitted as separate YAML blocks with dotted keys.)
-    assert "# Address" in result
-
-    # Nested $defs keys should exist for required fields.
     defs = schema.get("$defs", schema.get("definitions", {})) or {}
     address_schema = defs.get("Address")
     assert isinstance(address_schema, dict), "Expected $defs.Address schema"
-    required = set(address_schema.get("required", []) or [])
 
-    # Load the entire output and check both dotted keys and root keys.
     parsed = yaml.safe_load(result)
     assert isinstance(parsed, dict)
 
-    root_only = {k: v for k, v in parsed.items() if isinstance(k, str) and "." not in k}
+    # No ``root_only`` filter any more: Axis 2 guarantees no key can contain a ``.``, so the
+    # old ``"." not in k`` guard was a no-op. (It was a local comprehension, not a shared
+    # helper -- nothing else used it.)
     root_fields = []
-    for k in root_only.keys():
+    for k in parsed:
         if k.endswith("*"):
             root_fields.append((k[:-1], True))
         else:
@@ -132,8 +135,18 @@ def test_yaml_formatter_with_nested_defs():
     assert_required_optional_fields_match_schema(root_fields, schema)
     assert_required_optional_consistent(result, schema)
 
-    for field in required:
-        assert f"Address.{field}*" in parsed, f"Missing required nested field: Address.{field}*"
+    # AC1: nothing is hoisted, and no key carries a ``Class.field`` prefix.
+    assert "# Address" not in result
+    assert "Address." not in result
+
+    # AC1/D3: the nested block is a real dict whose keys are exactly Address's fields, marked
+    # against Address's OWN required list rather than PersonWithAddress's.
+    nested = parsed["address*"]
+    assert isinstance(nested, dict), f"address* is {type(nested).__name__}, not a mapping"
+    address_required = set(address_schema.get("required", []) or [])
+    assert set(nested) == {
+        f"{name}*" if name in address_required else name for name in address_schema["properties"]
+    }
 
 
 def test_yaml_formatter_key_order_preserved():
@@ -1027,18 +1040,19 @@ def test_metadata_inclusion_title_false_suppresses_title_yaml():
     assert "The user's full name" in result.replace("''", "'")
 
 
-def test_order_yaml_product_name_appears_exactly_twice():
-    """``Product name`` renders once per genuinely distinct property line.
+def test_order_yaml_product_name_appears_exactly_once():
+    """AC3: a field's description renders exactly ONCE in the whole document.
 
-    ``Order`` yields two such lines -- the ``$defs``-hoisted ``Product.name`` line and
-    the inlined one -- so the description must appear exactly twice overall and never
-    twice on the same line.
+    ``Product.name`` used to appear twice -- once in the hoisted ``$defs`` section and once
+    inline. With the section gone there is only the inlined occurrence, which makes this a
+    strictly stronger oracle than the old ``== 2`` (that count was satisfied even in a
+    duplication-riddled world, because it summed one hoisted and one inline occurrence).
     """
     schema = Order.model_json_schema()
     formatter = YAMLFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
-    assert result.count("Product name") == 2, result
+    assert result.count("Product name") == 1, result
     for line in result.splitlines():
         assert line.count("Product name") <= 1, f"duplicated on one line: {line!r}"
 
@@ -1147,27 +1161,32 @@ def test_yaml_formatter_root_fixture_default():
 
     expected = "\n".join(
         [
-            "# Inner",
-            "Inner.d*: dict[string, int]",
-            "Inner.t*: tuple[int, string]",
-            "",
-            "# Strict",
-            "Strict.s*: string",
-            " # no additional properties",
-            "",
-            "# SubModel",
-            "SubModel.a*: int",
-            "SubModel.b*: string",
-            "",
             # Deviation from the plan's golden (recorded in the Phase 5c progress notes):
             # the plan expected "# Title: Root". The `Root` fixture's auto-generated title is
             # stripped by ticket 003's `normalize_schema_titles`, and its class docstring
             # (landed with P4) becomes the Description comment instead. Both code paths are
-            # untouched by Phase 5c.
+            # untouched.
+            #
+            # lsl-2026-09-04-006 reshaped the rest of this golden. Four independent changes:
+            #   1. The hoisted `# Inner` / `# Strict` / `# SubModel` $defs sections are GONE.
+            #      `Inner` and `Strict` are now real nested blocks on the properties that
+            #      reference them, and `SubModel` is inlined under `dict_of_models*`. That is
+            #      the whole point of the ticket: no `Class.field` keys, no duplication.
+            #   2. `#` now prefixes the description's SECOND paragraph. Previously that line
+            #      was emitted bare, which made this render the one that failed
+            #      `yaml.safe_load` (D8).
+            #   3. `strict*` carries `# no additional properties`. The closed-world marker is
+            #      structural, so it survives on the nested block (R1) instead of being lost
+            #      with the deleted `Strict` section.
+            #   4. `# any properties allowed` newly appears. `Root` did NOT have this trailer
+            #      before; the D7 re-entrancy fix lets `dict_of_models*`'s placeholder count
+            #      propagate out of the nested block it is now counted in. Escalating that
+            #      trailer's frequency is a known consequence, tracked as FU-2.
             "# Description: Kitchen-sink fixture for lsl-2026-09-04-015 "
             "(dict/tuple/set/Any container rendering).",
-            "",
-            "Fields verbatim from the approved design (2026-09-04-design-discussion-v2.md 5.1).",
+            "#",
+            "# Fields verbatim from the approved design "
+            "(2026-09-04-design-discussion-v2.md 5.1).",
             "",
             "# Fields marked with * are required",
             "",
@@ -1181,14 +1200,16 @@ def test_yaml_formatter_root_fixture_default():
             "var_tuple*: list[int]",
             "tags*: list[string] (unique)",
             "anything*: any",
-            "described*: 'any  # free form'",
-            "opt_any: 'any OR null  # (default=null)'",
+            "described*: any  # free form",
+            "opt_any: any OR null  # (default=null)",
             "any_list*: list[any]",
-            "opt_extra: 'dict[string, int] OR null  # (default=null)'",
-            "inner*: 'd: dict[string, int]",
-            "",
-            "  t: tuple[int, string]'",
-            "strict*: 's: string'",
+            "opt_extra: dict[string, int] OR null  # (default=null)",
+            "inner*:",
+            "  d*: dict[string, int]",
+            "  t*: tuple[int, string]",
+            "strict*:  # no additional properties",
+            "  s*: string",
+            "# any properties allowed",
         ]
     )
 
@@ -1290,16 +1311,10 @@ def test_yaml_recursive_list_golden_default_depth():
     result = simplify_schema(_ListNode, format_type="yaml").to_string()
 
     expected = (
-        "# _ListNode\n"
-        "_ListNode.label*: string\n"
-        "_ListNode.kids: 'list[label*: string\n"
-        "\n"
-        "  kids: list[object  # recursive: _ListNode]]'\n"
-        "\n"
         "label*: string\n"
-        "kids: 'list[label*: string\n"
-        "\n"
-        "  kids: list[object  # recursive: _ListNode]]'"
+        "kids:\n"
+        "- label*: string\n"
+        "  kids: list[object]  # recursive: _ListNode"
     )
     assert result == expected
 
@@ -1346,3 +1361,247 @@ def test_yaml_recursive_render_is_idempotent():
     second = formatter.transform_schema()
 
     assert first == second
+
+
+# ============================================================================
+# lsl-2026-09-04-006 — nested-model blocks and de-duplication
+# ============================================================================
+
+
+def test_yaml_r1_closed_world_markers_on_nested_blocks_metadata_off():
+    """R1: a nested block carries its own def's closed-world marker, ungated by metadata.
+
+    ``emits_closed_world_marker`` is structural, not metadata, so all three ``StrictSub``
+    blocks are marked even with metadata off, while the ``extra="allow"`` sibling is not.
+    """
+    result = YAMLFormatter(R1Model.model_json_schema(), include_metadata=False).transform_schema()
+
+    assert result == (
+        "strict*:  # no additional properties\n"
+        "  s*: string\n"
+        "opt:  # OR null; no additional properties\n"
+        "  s*: string\n"
+        "many:  # no additional properties\n"
+        "- s*: string\n"
+        "open_one*:\n"
+        "  s*: string"
+    )
+
+
+def test_yaml_r1_closed_world_markers_on_nested_blocks_metadata_on():
+    """R1 with metadata on: the structural notes and the defaults share ONE slot per key."""
+    result = YAMLFormatter(R1Model.model_json_schema()).transform_schema()
+
+    assert result == (
+        "# Description: R1 matrix: a closed-world nested block required, nullable, "
+        "list-wrapped, and open.\n"
+        "\n"
+        "# Fields marked with * are required\n"
+        "\n"
+        "strict*:  # no additional properties\n"
+        "  s*: string\n"
+        "opt:  # OR null; no additional properties; (default=null)\n"
+        "  s*: string\n"
+        "many:  # no additional properties; (default=[])\n"
+        "- s*: string\n"
+        "open_one*:\n"
+        "  s*: string"
+    )
+
+
+def test_yaml_array_of_refs_renders_list_of_mappings():
+    """AC2: ``list[Model]`` is a YAML sequence of mappings, never the ``list[object]`` token.
+
+    Asserted structurally through ``yaml.safe_load`` rather than by substring, so it cannot
+    be satisfied by a quoted multi-line scalar that merely happens to contain the right text.
+    """
+    result = YAMLFormatter(ArrayOfRefsModel.model_json_schema()).transform_schema()
+    parsed = yaml.safe_load(result)
+
+    assert isinstance(parsed, dict)
+    # Top level: list[Address] and list[Product] are real sequences of real mappings.
+    assert isinstance(parsed["addresses*"], list)
+    assert isinstance(parsed["addresses*"][0], dict)
+    assert set(parsed["addresses*"][0]) == {
+        "street*",
+        "city*",
+        "state*",
+        "postal_code*",
+        "country",
+    }
+    assert isinstance(parsed["products*"][0], dict)
+
+    # Four levels deep, through a nullable ``list[User]`` (design v2 4.4).
+    assert isinstance(parsed["users"], list)
+    user = parsed["users"][0]
+    assert isinstance(user, dict)
+    assert isinstance(user["addresses*"], list)
+    assert isinstance(user["addresses*"][0], dict)
+    assert "street*" in user["addresses*"][0]
+    assert isinstance(user["contact_info*"], dict)
+    assert "email*" in user["contact_info*"]
+
+    assert "list[object]" not in result
+
+
+def test_yaml_tree_node_default_depth_block_shape():
+    """Recursion at ``max_recursion_depth=2`` expands once inside the list, then truncates."""
+    result = YAMLFormatter(TreeNode.model_json_schema(), include_metadata=False).transform_schema()
+
+    assert result == (
+        "name*: string\n"
+        "children:\n"
+        "- name*: string\n"
+        "  children: list[object]  # recursive: TreeNode"
+    )
+
+
+def test_yaml_tree_node_default_depth_block_shape_metadata_on():
+    """The ``(default=[])`` folds into the SAME slot as the recursion note (design v2 4.5)."""
+    result = YAMLFormatter(TreeNode.model_json_schema()).transform_schema()
+
+    assert "children:  # (default=[])" in result
+    assert "- name*: string" in result
+    assert "  children: list[object]  # recursive: TreeNode; (default=[])" in result
+
+
+def test_yaml_optional_tree_nullable_recursive_block_shape():
+    """``Model | None`` recursion: the block is real, and ``OR null`` rides the key's slot."""
+    result = YAMLFormatter(OptionalTree.model_json_schema()).transform_schema()
+
+    assert result.endswith(
+        "value*: string\n"
+        "left:  # OR null; (default=null)\n"
+        "  value*: string\n"
+        "  left: object OR null  # recursive: OptionalTree; (default=null)\n"
+        "  right: object OR null  # recursive: OptionalTree; (default=null)\n"
+        "right:  # OR null; (default=null)\n"
+        "  value*: string\n"
+        "  left: object OR null  # recursive: OptionalTree; (default=null)\n"
+        "  right: object OR null  # recursive: OptionalTree; (default=null)"
+    )
+    parsed = yaml.safe_load(result)
+    assert isinstance(parsed["left"], dict)
+    assert isinstance(parsed["right"], dict)
+
+
+def test_yaml_person_with_address_metadata_off():
+    """The metadata-OFF companion to ``test_yaml_formatter_with_nested_defs``."""
+    result = YAMLFormatter(
+        PersonWithAddress.model_json_schema(), include_metadata=False
+    ).transform_schema()
+
+    # With metadata off the pattern constraints are gated away too, so every nested field is
+    # a bare token -- the block structure and ``Address``'s OWN required markers are what this
+    # pins.
+    assert result == (
+        "name*: string\n"
+        "address*:\n"
+        "  street*: string\n"
+        "  city*: string\n"
+        "  state*: string\n"
+        "  postal_code*: string\n"
+        "  country: string"
+    )
+    assert "Address." not in result
+
+
+def test_yaml_formatter_root_fixture_metadata_off_golden():
+    """Whole-string metadata-OFF companion to ``test_yaml_formatter_root_fixture_default``.
+
+    With metadata off only the STRUCTURAL notes survive: ``strict*`` keeps its closed-world
+    marker (R1/6.8) while every description, default and title is gated away.
+    """
+    result = YAMLFormatter(Root.model_json_schema(), include_metadata=False).transform_schema()
+
+    assert result == "\n".join(
+        [
+            "extra*: dict[string, int]",
+            "dict_of_models*:",
+            "  <string>:",
+            "    a*: int",
+            "    b*: string",
+            "by_color*: dict[string, int]",
+            "pair*: tuple[int, string]",
+            "var_tuple*: list[int]",
+            "tags*: list[string]",
+            "anything*: any",
+            "described*: any",
+            "opt_any: any OR null",
+            "any_list*: list[any]",
+            "opt_extra: dict[string, int] OR null",
+            "inner*:",
+            "  d*: dict[string, int]",
+            "  t*: tuple[int, string]",
+            "strict*:  # no additional properties",
+            "  s*: string",
+            "# any properties allowed",
+        ]
+    )
+
+
+def test_yaml_formatter_does_not_mutate_caller_config():
+    """D6: ``YAMLFormatter`` must not poison a ``FormatterConfig`` a sibling format reuses.
+
+    HEAD rewrote ``config.union_separator`` in place, so a ``TypeScriptFormatter`` handed the
+    same object afterwards emitted ``number OR string``.
+    """
+    from llm_schema_lite.formatters.typescript_formatter import TypeScriptFormatter
+
+    config = FormatterConfig()
+    assert config.union_separator == " | "
+
+    YAMLFormatter(UnionTypes.model_json_schema(), config=config).transform_schema()
+
+    assert config.union_separator == " | ", "YAMLFormatter mutated the caller's config"
+
+    ts_result = TypeScriptFormatter(
+        UnionTypes.model_json_schema(), config=config
+    ).transform_schema()
+
+    assert "number | string" in ts_result
+    assert "number OR string" not in ts_result
+
+
+def _conftest_base_models() -> list[type[BaseModel]]:
+    """Every ``BaseModel`` defined at module level in ``tests/conftest.py``."""
+    import inspect
+
+    from tests import conftest
+
+    return [
+        obj
+        for _, obj in sorted(vars(conftest).items())
+        if inspect.isclass(obj) and issubclass(obj, BaseModel) and obj is not BaseModel
+    ]
+
+
+@pytest.mark.parametrize("include_metadata", [True, False], ids=["metadata_on", "metadata_off"])
+def test_yaml_every_conftest_model_round_trips_through_safe_load(include_metadata: bool):
+    """6.9 / A-D6: ``safe_load``-ability is a hard invariant, not a best effort.
+
+    HEAD fails this for ``Root`` with metadata on (D8: the description's second paragraph is
+    emitted as a bare, uncommented document line).
+    """
+    failures = []
+    for model in _conftest_base_models():
+        result = YAMLFormatter(
+            model.model_json_schema(), include_metadata=include_metadata
+        ).transform_schema()
+        try:
+            yaml.safe_load(result)
+        except yaml.YAMLError as exc:  # pragma: no cover - only on regression
+            failures.append(f"{model.__name__}: {exc}")
+
+    assert not failures, "renders that failed yaml.safe_load:\n" + "\n".join(failures)
+
+
+def test_yaml_render_contains_no_pyyaml_anchors():
+    """6.4 / A-D12: the block builder bypasses ``_ref_cache``, so no ``&id001`` alias appears."""
+    for model in _conftest_base_models():
+        for include_metadata in (True, False):
+            result = YAMLFormatter(
+                model.model_json_schema(), include_metadata=include_metadata
+            ).transform_schema()
+            assert "&id0" not in result, f"{model.__name__} emitted a PyYAML anchor:\n{result}"
+            assert "*id0" not in result, f"{model.__name__} emitted a PyYAML alias:\n{result}"

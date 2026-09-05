@@ -6,12 +6,24 @@ Feature parity with JSONish formatter for metadata, enums, unions, types,
 dependencies, and $ref default.
 """
 
+import dataclasses
 from typing import Any
 
 import yaml
 
 from .base import BaseFormatter, ContainerShape, classify_container
 from .config import FormatterConfig
+
+
+def _is_null_schema(member: Any) -> bool:
+    """True for the ``{"type": "null"}`` half of a Pydantic ``X | None`` union.
+
+    Also accepts the draft-7 spelling where ``type`` is a list containing ``"null"``.
+    """
+    if not isinstance(member, dict):
+        return False
+    type_name = member.get("type")
+    return type_name == "null" or (isinstance(type_name, list) and "null" in type_name)
 
 
 class YAMLFormatter(BaseFormatter):
@@ -45,8 +57,10 @@ class YAMLFormatter(BaseFormatter):
         if config is None:
             config = FormatterConfig(union_separator=" OR ")
         elif config.union_separator == FormatterConfig().union_separator:
-            # User didn't override union_separator, use YAML default
-            config.union_separator = " OR "
+            # User didn't override union_separator, use YAML default (D6: never mutate the
+            # caller's object — hand a fresh copy to super().__init__ instead. Mutating it
+            # poisoned any sibling formatter later handed the same config.)
+            config = dataclasses.replace(config, union_separator=" OR ")
 
         super().__init__(schema, config, include_metadata)
 
@@ -281,8 +295,9 @@ class YAMLFormatter(BaseFormatter):
             if "type" in item and "properties" in item and item.get("type") == "object":
                 # Expand object schemas so allOf merge shows field names (base-formatter behavior)
                 processed_props = self.process_properties(item["properties"])
-                items_structure = self.dict_to_string(processed_props, indent=2)
-                item_types.append(f"{{\n{items_structure}\n}}")
+                # No re-wrap: ``dict_to_string`` already returns a brace flow literal, so
+                # wrapping it again would double-brace AND re-embed a newline.
+                item_types.append(self.dict_to_string(processed_props, indent=2))
             elif "properties" in item:
                 processed_props = self.process_properties(item["properties"])
                 item_types.append(self.dict_to_string(processed_props, indent=2))
@@ -377,7 +392,7 @@ class YAMLFormatter(BaseFormatter):
 
         shape = classify_container(type_value)
         if shape.kind == "mapping":
-            return self.add_metadata(self.render_mapping(shape), type_value)
+            return self.render_mapping(shape)
         if shape.kind == "tuple":
             tuple_str = self.render_tuple(shape)
             if not (
@@ -386,7 +401,7 @@ class YAMLFormatter(BaseFormatter):
                 == len(shape.prefix_schemas)
             ):
                 tuple_str += self.format_array_constraints(type_value)
-            return self.add_metadata(tuple_str, type_value)
+            return tuple_str
 
         if type_name == "string":
             extra = self._format_string_constraints_jsonish(type_value)
@@ -424,7 +439,10 @@ class YAMLFormatter(BaseFormatter):
                 type_str += self.format_array_constraints(type_value)
                 if "contains" in type_value:
                     type_str += self.process_contains(type_value)
-            return self.add_metadata(type_str, type_value)
+            # ``str(...)`` mirrors the fallthrough return below: ``type_str`` starts life as
+            # ``TYPE_MAP.get(type_name, type_name)`` with an ``Any``-typed key, and the
+            # ``add_metadata`` call that used to launder it here is gone (D9).
+            return str(type_str)
         elif type_name == "object":
             if (
                 "properties" not in type_value
@@ -432,7 +450,7 @@ class YAMLFormatter(BaseFormatter):
                 and not isinstance(type_value.get("additionalProperties"), dict)
             ):
                 return "{}"
-            return self.add_metadata("object", type_value)
+            return "object"
 
         return self.add_metadata(str(type_str), type_value)
 
@@ -460,6 +478,234 @@ class YAMLFormatter(BaseFormatter):
         if pairs is None:
             return self.process_property(value_schema)
         return "{" + ", ".join(f"{k}: {v}" for k, v in pairs.items()) + "}"
+
+    # ------------------------------------------------------------------
+    # Nested-block builder (lsl-2026-09-04-006, Axis 1)
+    #
+    # An object-shaped property becomes a real ``dict``/``list`` that ``yaml.dump``
+    # renders as an indented mapping, instead of being stringified into a quoted
+    # multi-line scalar and duplicated into a hoisted ``Class.field`` section.
+    # ------------------------------------------------------------------
+
+    def _object_ref_key(self, schema: Any) -> str | None:
+        """The ``$defs`` key of ``schema["$ref"]`` iff that def has non-empty ``properties``.
+
+        Returns ``None`` for anything else: not a dict, no ``$ref``, an unresolved ref, or a
+        ``$defs`` entry that isn't an object-with-properties (enum, oneOf, scalar def, ...).
+        Mirrors ``base.process_ref``'s own def-type dispatch (``if "properties" in ref_def
+        and ref_def["properties"]``) so the two never disagree about which ``$ref`` targets
+        are block-eligible.
+        """
+        if not isinstance(schema, dict):
+            return None
+        ref = schema.get("$ref")
+        if not isinstance(ref, str):
+            return None
+        ref_match = self.REF_PATTERN.search(ref)
+        if not ref_match:
+            return None
+        ref_key = ref_match.group(1)
+        ref_def = self.defs.get(ref_key)
+        if isinstance(ref_def, dict) and ref_def.get("properties"):
+            return ref_key
+        return None
+
+    def _closed_world_note(self, schema: dict[str, Any]) -> str:
+        """R1: the def's ``no additional properties`` / ``additional: <type>`` fragment, bare.
+
+        The closed-world marker is STRUCTURAL, so ``emits_closed_world_marker`` bypasses the
+        metadata gates -- this reproduces the gate the deleted ``$defs`` loops used, verbatim.
+        Rendering is delegated to the untouched ``process_additional_properties``; only its
+        leading comment prefix is stripped so the fragment can share a key's comment slot.
+        """
+        if not (self.include_metadata or self.emits_closed_world_marker(schema)):
+            return ""
+        text = self.process_additional_properties(schema)
+        if not text:
+            return ""
+        text = text.strip()
+        if text.startswith(self.comment_prefix):
+            text = text[len(self.comment_prefix) :]
+        return text.strip()
+
+    def _properties_block(
+        self, def_schema: dict[str, Any], ref_key: str | None = None
+    ) -> dict[str, Any] | None:
+        """The nested ``dict`` for an object node (a resolved ``$ref`` or an inline object).
+
+        When ``ref_key`` is given (the ``$ref`` case) this enforces the full 014 recursion
+        contract and returns ``None`` to hand the property back to the string path
+        (``process_ref`` -> ``recursion_placeholder``) when truncation applies. When
+        ``ref_key`` is ``None`` (an inline ``type: object`` + ``properties``, with no ``$ref``
+        to re-enter) it renders unconditionally.
+
+        Deliberately never reads or writes ``self._ref_cache``: caching a real ``dict`` would
+        let PyYAML emit ``&id001``/``*id001`` aliases for a def used by two properties.
+        """
+        if ref_key is not None:
+            # base.process_ref's own order: the unconditional global-budget guard, then the
+            # same-type re-entry guard, and only then the budget increment -- so a truncated
+            # re-entry never consumes a budget slot.
+            if self._global_expansion_count >= self._global_expansion_budget:
+                return None
+            reentries = self._ref_expansion_path.count(ref_key)
+            if reentries >= 1 and reentries >= self.config.max_recursion_depth:
+                self._truncation_epoch += 1
+                return None
+            self._global_expansion_count += 1
+        with self._expanding(ref_key):
+            # The def owns its own ``required`` list; ``format_field_name`` reads the top of
+            # this stack so nested markers come from the DEF, not from the ROOT (D3). The
+            # ``finally`` is load-bearing: a leaked push inverts every later root-level marker.
+            self._nested_required_stack.append(set(def_schema.get("required", [])))
+            try:
+                return self.process_properties(def_schema["properties"])
+            finally:
+                self._nested_required_stack.pop()
+
+    def _structural_block(
+        self, value: dict[str, Any]
+    ) -> tuple[dict[str, Any] | list[Any] | None, list[str]]:
+        """``(container, structural_notes)`` for the block-eligible shapes, else ``(None, [])``.
+
+        ``structural_notes`` is pre-ordered ``OR null`` first, then the closed-world note; the
+        caller (``_compose_key_note``) appends metadata after those. A shape not on the
+        eligibility table below intentionally falls through to the pre-existing string path in
+        ``process_properties``, which is unconditionally safe -- it is today's behaviour.
+        """
+        # Rule 1 -- a ``$ref`` to an object def.
+        ref_key = self._object_ref_key(value)
+        if ref_key is not None:
+            block = self._properties_block(self.defs[ref_key], ref_key)
+            if block is None:
+                return None, []  # 014-truncated: the string path renders the placeholder
+            note = self._closed_world_note(self.defs[ref_key])
+            return block, [note] if note else []
+
+        # Rule 2 -- a two-member ``X | None`` union whose non-null half is block-eligible.
+        for composition_key in ("anyOf", "oneOf"):
+            members = value.get(composition_key)
+            if not isinstance(members, list) or len(members) != 2:
+                continue
+            others = [m for m in members if not _is_null_schema(m)]
+            if len(others) != 1 or not isinstance(others[0], dict):
+                return None, []
+            inner, inner_notes = self._structural_block(others[0])
+            if inner is None:
+                return None, []
+            null_note = f"{self.config.union_separator.strip()} null"
+            return inner, [null_note, *inner_notes]
+
+        # Rule 3 -- an array of block-eligible items. A nullable ITEM is declined: a YAML
+        # sequence has no key to hang the item's own ``OR null`` note on.
+        if value.get("type") == "array":
+            items = value.get("items")
+            if isinstance(items, dict):
+                inner, inner_notes = self._structural_block(items)
+                if inner is not None and not any(n.endswith(" null") for n in inner_notes):
+                    return [inner], inner_notes
+            return None, []
+
+        # Rule 4 -- an inline ``type: object`` + ``properties``, with no ``$ref`` (raw JSON
+        # Schema only; Pydantic always emits a ``$ref``). ``classify_container`` is used in
+        # place of a hand-rolled check so composition keys and list/tuple shapes decline on
+        # their own, and so the ``patternProperties``-as-object-marker subtleties stay in the
+        # one place that already knows about them.
+        if classify_container(value).kind == "object" and value.get("properties"):
+            block = self._properties_block(value, ref_key=None)
+            if block is None:  # pragma: no cover - unreachable without a ref_key
+                return None, []
+            note = self._closed_world_note(value)
+            return block, [note] if note else []
+
+        # Rule 5 -- not block-eligible.
+        return None, []
+
+    def _metadata_parts(self, value: dict[str, Any]) -> list[str]:
+        """The comment fragments ``add_metadata`` would append for ``value``, in its order.
+
+        The block-branch analogue of ``add_metadata``'s part-collection body, minus the
+        ``representation``-specific bits (a block's "representation" is the ``dict``/``list``
+        itself, which cannot carry an inline comment). Reuses the same single gate so the two
+        can never drift apart.
+        """
+        if not self.include_metadata:
+            return []
+
+        title, description, default_value, example = self._get_title_description_default_value(
+            value
+        )
+        parts = []
+        if title:
+            parts.append(title.strip())
+        if description:
+            parts.append(description.strip())
+        if default_value:
+            parts.append(default_value.strip())
+        if example:
+            parts.append(example.strip())
+
+        # ``title``/``description``/``default`` are already supplied above; METADATA_MAP must
+        # never re-supply them (D5: that is what restated ``(defaults to X)`` next to
+        # ``(default=X)``).
+        exclude = ("title", "description", "default")
+        available_metadata = self.get_available_metadata(value)
+        if available_metadata:
+            filtered_metadata = [m for m in available_metadata if m not in exclude]
+            if filtered_metadata:
+                parts.extend(self.format_metadata_parts(value, exclude=exclude))
+        return parts
+
+    def _compose_key_note(
+        self,
+        formatted_name: str,
+        structural_notes: list[str],
+        value: dict[str, Any],
+        prop_name: str,
+    ) -> str:
+        """Join every fragment for one block-eligible property into ONE slot on its key.
+
+        Order: structural notes (already ``OR null``-then-closed-world ordered), then the
+        gated metadata parts, then the gated ``(DEPENDS ON: ...)``. Returns ``formatted_name``
+        unchanged when there is nothing to say -- no empty ``defer_comment``, no stray marker.
+        """
+        fragments = list(structural_notes)
+        fragments.extend(self._metadata_parts(value))
+
+        dep = self._get_fields_dependencies(self.schema, prop_name)
+        if dep and self.include_metadata:
+            # ``_get_fields_dependencies`` already returns a fully parenthesised
+            # "(DEPENDS ON: a, b)" -- append it verbatim or it double-wraps. Gated on the
+            # master switch only, matching the plain branch in ``process_properties``.
+            fragments.append(dep)
+
+        if not fragments:
+            return formatted_name
+        return formatted_name + self.defer_comment("; ".join(fragments))
+
+    def format_field_name(self, field_name: str) -> str:
+        """Mark requiredness against the innermost ``$defs`` ``required``, not the ROOT one.
+
+        The stack is pushed by ``_properties_block`` and by ``base.process_ref``; YAML simply
+        never read it before, so a nested field inherited the root model's required set (D3).
+        An empty stack means we are at the root, where ``super()`` is already correct.
+        """
+        if self._nested_required_stack:
+            required = self._nested_required_stack[-1]
+            if field_name in required:
+                return f"{field_name}{self.config.required_marker}"
+            return f"{field_name}{self.config.optional_marker}"
+        return super().format_field_name(field_name)
+
+    def recursion_placeholder(self, type_name: str) -> str:
+        """Defer the ``recursive: X`` note so a later ``OR null``/metadata joins the same slot.
+
+        Hoists back to base's literal ``"object  # recursive: X"`` byte for byte, but until
+        the hoist the scalar carries no ``#``, so PyYAML leaves it unquoted and an enclosing
+        nullable union or field default folds into the one slot instead of trailing a second
+        comment behind a quoted string.
+        """
+        return f"object{self.defer_comment(f'recursive: {type_name}')}"
 
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
@@ -499,7 +745,14 @@ class YAMLFormatter(BaseFormatter):
         # ``_get_title_description_default_value``; METADATA_MAP must never re-supply them.
         # ``const`` is excluded as well for a marker-bearing representation, whose slot body
         # already renders that value as ``one of: ...``.
-        exclude = ("title", "description", "const") if deferred else ("title", "description")
+        # ``default`` is excluded in BOTH arms (D5): ``default_value`` was already appended to
+        # ``parts`` above, and METADATA_MAP would otherwise restate it as ``(defaults to X)``
+        # right beside the ``(default=X)`` that is already there. ``(default=X)`` survives.
+        exclude = (
+            ("title", "description", "default", "const")
+            if deferred
+            else ("title", "description", "default")
+        )
         available_metadata = self.get_available_metadata(value)
         if available_metadata:
             filtered_metadata = [m for m in available_metadata if m not in exclude]
@@ -519,8 +772,18 @@ class YAMLFormatter(BaseFormatter):
             return self.append_deferred_comment(str(representation), "; ".join(survivors))
 
         suffix = f"  # {', '.join(parts)}"
-        if isinstance(representation, str) and representation.endswith(suffix):
-            return representation
+        if isinstance(representation, str):
+            # Half A: kept deliberately. It is provably unreachable now that the branch below
+            # defers (``defer_comment`` always returns a fresh opaque marker token, never the
+            # literal suffix text), but it is two lines of idempotence insurance that a future
+            # cleanup pass should not remove without re-reading this note.
+            if representation.endswith(suffix):
+                return representation
+            # A plain scalar must never gain a literal ``#`` here: PyYAML would quote the whole
+            # line, and a later structural note on the same key could not join it. Defer.
+            return representation + self.defer_comment(", ".join(parts))
+        # Half B: a non-str representation (the ``const`` case passes a raw ``int``) cannot
+        # carry a marker token, so it keeps the literal suffix.
         return f"{representation}{suffix}"
 
     def process_properties(self, properties: dict[str, Any]) -> dict[str, Any]:
@@ -529,11 +792,27 @@ class YAMLFormatter(BaseFormatter):
         For object properties with complex additionalProperties and no fixed properties,
         emit a dict with <key> placeholder.
         """
+        # D7: this method is now RE-ENTERED recursively (via ``_properties_block``), so the
+        # reset below would clobber whatever the outer call had accumulated. Save the outer
+        # count and ADD it back at the end -- an accumulating save/restore, not a plain one,
+        # because the trailer has to explain every ``<...>`` placeholder in the whole document,
+        # including the ones that occur inside a nested block.
+        outer_placeholder_count = getattr(self, "_nested_placeholder_count", 0)
         self._nested_placeholder_count = 0
         processed_properties: dict[str, Any] = {}
         for prop_name, value in properties.items():
             formatted_name = self.format_field_name(prop_name)
             if isinstance(value, dict):
+                # Axis 1: an object-shaped property becomes a real dict/list that yaml.dump
+                # indents, with every structural and metadata note collapsed into ONE slot on
+                # its key. Disjoint from the mapping branch below by construction (a schema
+                # declaring ``properties`` classifies as "object", never "mapping"), so trying
+                # it first cannot steal a case the mapping branch would have handled.
+                block, structural_notes = self._structural_block(value)
+                if block is not None:
+                    key = self._compose_key_note(formatted_name, structural_notes, value, prop_name)
+                    processed_properties[key] = block
+                    continue
                 shape = classify_container(value)
                 if shape.kind == "mapping":
                     key = f"<{self.key_token(shape)}>"
@@ -555,6 +834,7 @@ class YAMLFormatter(BaseFormatter):
                 else:
                     prop_str = f"{prop_str}  # {dep}"
             processed_properties[formatted_name] = prop_str
+        self._nested_placeholder_count += outer_placeholder_count
         return processed_properties
 
     def process_ref(self, ref: dict[str, Any]) -> str:
@@ -592,7 +872,16 @@ class YAMLFormatter(BaseFormatter):
         ):
             comments.append(f"Description: {self.schema['description']}")
         if comments:
-            return f"{self.comment_prefix} " + ", ".join(comments) + "\n"
+            # D8: a multi-line ``description`` puts real newlines inside ``body``. Prefixing
+            # only the joined string leaves every line after the first as a bare, uncommented
+            # document line, which is a ``yaml.safe_load`` ScannerError. Prefix every line;
+            # a blank one becomes a bare ``#`` with no dangling space.
+            body = ", ".join(comments)
+            lines = [
+                f"{self.comment_prefix} {line}" if line.strip() else self.comment_prefix
+                for line in body.split("\n")
+            ]
+            return "\n".join(lines) + "\n"
         return ""
 
     def get_required_fields_comment(self) -> str:
@@ -648,8 +937,9 @@ class YAMLFormatter(BaseFormatter):
 
         Args:
             value: The value to convert (dict, list, or primitive).
-            indent: Current indentation level (used for recursion depth
-                tracking in nested structures).
+            indent: Recursion depth, threaded through the list branch's nested-dict
+                recursion. The dict branch is a single-line flow literal and no longer
+                indentation-sensitive.
 
         Returns:
             Formatted string representation as YAML key: value lines.
@@ -658,11 +948,12 @@ class YAMLFormatter(BaseFormatter):
             if not value:  # Empty dict
                 return "{}"
 
-            # Format as YAML key: value pairs
-            lines = []
-            for k, v in value.items():
-                lines.append(f"{k}: {v}")
-            return "\n".join(lines)
+            # Format as a YAML flow-mapping literal: the caller embeds this string inside a
+            # larger scalar (a 3-way union member, an allOf/oneOf branch, or a $ref whose
+            # target is not block-eligible), so it must never introduce a literal newline --
+            # PyYAML has no way to fold a multi-line single-quoted scalar back out.
+            # ``TypeScriptFormatter.dict_to_string`` already does exactly this.
+            return "{" + ", ".join(f"{k}: {v}" for k, v in value.items()) + "}"
         elif isinstance(value, list):
             # For arrays, show the item type
             if value and isinstance(value[0], dict):
@@ -700,41 +991,9 @@ class YAMLFormatter(BaseFormatter):
             self._root_ref_key = root_ref_key
         # First branch: if _processed_data is set, build from cache
         if hasattr(self, "_processed_data") and self._processed_data:
-            all_sections = []
-
-            # Process nested definitions first (from $defs) - same as main flow
-            for def_name, def_schema in self.defs.items():
-                if "properties" in def_schema:
-                    nested_props = def_schema["properties"]
-                    nested_required = set(def_schema.get("required", []))
-
-                    # Build dict for this $def (with per-field DEPENDS ON from def_schema)
-                    def_dict = {}
-                    for prop_name, prop_def in nested_props.items():
-                        with self._expanding(def_name):
-                            prop_type = self.process_property(prop_def)
-                        dep = self._get_fields_dependencies(def_schema, prop_name)
-                        if dep and self.include_metadata:
-                            if self.carries_deferred_comment(prop_type):
-                                prop_type = self.append_deferred_comment(prop_type, dep)
-                            else:
-                                prop_type = f"{prop_type}  # {dep}"
-                        formatted_prop_name = self.format_field_name(prop_name)
-                        def_dict[f"{def_name}.{formatted_prop_name}"] = prop_type
-
-                    # Dump to YAML and optionally prepend section header
-                    section_str = self._dump_yaml(def_dict)
-                    if self.include_metadata:
-                        section_str = f"# {def_name}\n{section_str}"
-                    if self.include_metadata or self.emits_closed_world_marker(def_schema):
-                        # Add additionalProperties comment if present
-                        additional_props_comment = self.process_additional_properties(def_schema)
-                        if additional_props_comment:
-                            section_str += f"\n{additional_props_comment}"
-
-                    all_sections.append(section_str)
-
-            # Build main content from cached processed data
+            # No $defs section loop: every def with ``properties`` is now rendered INLINE, as
+            # a real nested block on the property that references it. The hoisted
+            # ``Class.field`` sections this used to emit were a duplicate of that data.
             main_parts = []
 
             # Add schema info comment if present
@@ -767,11 +1026,6 @@ class YAMLFormatter(BaseFormatter):
                 additional_props_comment = ""
             if additional_props_comment:
                 main_parts.append(additional_props_comment)
-
-            # Combine nested sections with main content
-            if all_sections:
-                all_sections.append("\n".join(main_parts))
-                return "\n\n".join(all_sections)
 
             return "\n".join(main_parts)
 
@@ -869,46 +1123,8 @@ class YAMLFormatter(BaseFormatter):
             else:
                 return self._add_prefix("{}")
 
-        # Third branch: main flow with properties
-        all_sections = []
-
-        # Process nested definitions first (from $defs)
-        for def_name, def_schema in self.defs.items():
-            if "properties" in def_schema:
-                nested_props = def_schema["properties"]
-                nested_required = set(def_schema.get("required", []))
-
-                # Build dict for this $def (with per-field DEPENDS ON from def_schema)
-                def_dict = {}
-                for prop_name, prop_def in nested_props.items():
-                    with self._expanding(def_name):
-                        prop_type = self.process_property(prop_def)
-                    dep = self._get_fields_dependencies(def_schema, prop_name)
-                    if dep and self.include_metadata:
-                        if self.carries_deferred_comment(prop_type):
-                            prop_type = self.append_deferred_comment(prop_type, dep)
-                        else:
-                            prop_type = f"{prop_type}  # {dep}"
-                    # Use config markers for formatting
-                    if prop_name in nested_required:
-                        formatted_prop_name = f"{prop_name}{self.config.required_marker}"
-                    else:
-                        formatted_prop_name = f"{prop_name}{self.config.optional_marker}"
-                    def_dict[f"{def_name}.{formatted_prop_name}"] = prop_type
-
-                # Dump to YAML and optionally prepend section header
-                section_str = self._dump_yaml(def_dict)
-                if self.include_metadata:
-                    section_str = f"# {def_name}\n{section_str}"
-                if self.include_metadata or self.emits_closed_world_marker(def_schema):
-                    # Add additionalProperties comment if present
-                    additional_props_comment = self.process_additional_properties(def_schema)
-                    if additional_props_comment:
-                        section_str += f"\n{additional_props_comment}"
-
-                all_sections.append(section_str)
-
-        # Build main content parts
+        # Third branch: main flow with properties.
+        # No $defs section loop here either -- see the cached branch above.
         main_parts = []
 
         # Add schema info comment if present
@@ -982,12 +1198,7 @@ class YAMLFormatter(BaseFormatter):
         # Set _processed_data for future calls (caching)
         self._processed_data = processed_properties
 
-        # If there are nested sections, combine them
-        if all_sections:
-            all_sections.append("\n".join(main_parts))
-            result = "\n\n".join(all_sections)
-        else:
-            result = "\n".join(main_parts)
+        result = "\n".join(main_parts)
 
         # Add prefix if configured
         if self.config.prefix:

@@ -423,10 +423,12 @@ def test_yaml_optional_enum_renders_null_outside_comment() -> None:
 
     # ``tests/conftest.py``'s real ``Role`` carries the class docstring "User role enum.",
     # which is the ``$defs`` description and is folded into the same comment (contract row
-    # 15a). ``(defaults to user)`` is the METADATA_MAP part contract row 8 also requires.
+    # 15a). The default is stated ONCE, as ``(default='user')``: lsl-2026-09-04-006 (D5)
+    # widened ``add_metadata``'s ``exclude`` to drop METADATA_MAP's duplicate
+    # ``(defaults to user)`` restatement, which was an AC3 duplication defect.
     expected = (
         'role: string OR null  # one of: "admin", "user", "guest"; '
-        "User role enum.; (default='user'); (defaults to user)"
+        "User role enum.; (default='user')"
     )
     assert line == expected
     assert "null" not in line.split("one of:", 1)[1].split(";")[0]
