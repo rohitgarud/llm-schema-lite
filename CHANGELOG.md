@@ -95,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A property literally named `__additional_properties__` also renders correctly instead
   of being swallowed by the sentinel machinery. Snapshot-visible: `recursive:` marker
   placement and same-name-collision comment text change on the next render; output for
-  every schema without a same-named property at two depths is byte-identical. (`<sha>`)
+  every schema without a same-named property at two depths is byte-identical. (`5cbfc23`)
 
 <!-- insertion marker -->
 ## [v0.6.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27
