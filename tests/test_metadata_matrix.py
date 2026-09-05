@@ -8,6 +8,7 @@ Phase 3C.3 drift-pickup regression for the TypeScript no-`type` fallback branch.
 from __future__ import annotations
 
 import itertools
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
@@ -57,15 +58,36 @@ DESCRIPTION_MARKERS = {
     ],
 }
 CONSTRAINT_MARKERS = {
-    "jsonish": ["PATTERN:", "<= 50 chars", "0 to 130", "<= 5 items", "(default=", "one of:"],
+    "jsonish": ["PATTERN:", "<= 50 chars", "0 to 130", "<= 5 items", "(default="],
     # The lower-case "pattern:" entry is gone: pattern/format are now owned by the YAML
     # type token and the trailing comment no longer restates them (lsl-2026-09-05-006).
-    "yaml": ["PATTERN:", "<= 50 chars", "0 to 130", "<= 5 items", "(default=", "one of:"],
-    "typescript": ["≤50 chars", "0-130", "<= 5 items", "(defaults to", "pattern:"],
+    "yaml": ["PATTERN:", "<= 50 chars", "0 to 130", "<= 5 items", "(default="],
+    "typescript": ["<= 50 chars", "0 to 130", "<= 5 items", "(defaults to", "pattern:"],
 }
 STRUCTURAL_MARKERS = {
-    "jsonish": ["name*", "age*", "role", "tags", "address*", "nickname", "OR null", "[]", "{"],
-    "yaml": ["name*", "age*", "role", "tags", "address*", "nickname", "OR null", "list["],
+    "jsonish": [
+        "name*",
+        "age*",
+        "role",
+        "tags",
+        "address*",
+        "nickname",
+        "OR null",
+        "[]",
+        "{",
+        "one of:",
+    ],
+    "yaml": [
+        "name*",
+        "age*",
+        "role",
+        "tags",
+        "address*",
+        "nickname",
+        "OR null",
+        "list[",
+        "one of:",
+    ],
     "typescript": [
         "name*",
         "age*",
@@ -76,14 +98,22 @@ STRUCTURAL_MARKERS = {
         "| null",
         "Array<",
         "interface Schema",
+        '"admin" | "user"',
     ],
 }
 
-# The closed-world marker can surface as its own slot ("no additional properties"),
-# folded into a schema-level "Schema-level constraints:" slot, or prefixed per-object
-# ("Root: no additional properties") -- so callers must check by substring, never by
-# strict slot equality.
-_CLOSED_WORLD_SUBSTRINGS = ("no additional properties", "Schema-level constraints:")
+# The structural allow-list covers every comment slot that survives
+# `include_metadata=False`: the closed-world marker, which can surface as its own slot
+# ("no additional properties"), folded into a schema-level "Schema-level constraints:"
+# slot, or prefixed per-object ("Root: no additional properties"); and an enum's value
+# set ("one of: ..."), which is structural (`STRUCTURAL_KEYWORDS` in config.py) and
+# therefore also survives. Callers must check by substring, never by strict slot
+# equality.
+_STRUCTURAL_SLOT_SUBSTRINGS = (
+    "no additional properties",
+    "Schema-level constraints:",
+    "one of:",
+)
 
 CLOSED_SHAPES = {
     "bare_closed": {"type": "object", "additionalProperties": False},
@@ -119,7 +149,8 @@ def test_metadata_matrix(
     - every constraint marker present iff `im and cons`
     - every structural marker present in all 24 cases
     - no metadata comment slot survives when `include_metadata` is False; the only
-      comment slot permitted there relates to the closed-world marker.
+      comment slot permitted there is structural (the closed-world marker or an enum
+      value set).
     """
 
     config = FormatterConfig(
@@ -150,7 +181,7 @@ def test_metadata_matrix(
     if not im:
         slots = extract_comment_slots(rendered, fmt)
         for slot in slots:
-            assert any(sub in slot for sub in _CLOSED_WORLD_SUBSTRINGS), (
+            assert any(sub in slot for sub in _STRUCTURAL_SLOT_SUBSTRINGS), (
                 f"unexpected metadata comment slot {slot!r} survived include_metadata=False "
                 f"for fmt={fmt} desc={desc} cons={cons}. Output:\n{rendered}"
             )
@@ -187,3 +218,150 @@ def test_typescript_no_type_closed_schema_keeps_closed_world_marker() -> None:
         schema, config=FormatterConfig(include_metadata=False), format_type="typescript"
     ).to_string()
     assert "no additional properties" in out
+
+
+_TUPLE_ELEMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "pair": {
+            "type": "array",
+            "prefixItems": [
+                {"type": "string", "minLength": 1, "maxLength": 5},
+                {"type": "integer"},
+            ],
+            "minItems": 2,
+            "maxItems": 2,
+        }
+    },
+    "required": ["pair"],
+}
+_ARRAY_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "items_field": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 5},
+        }
+    },
+    "required": ["items_field"],
+}
+_MAPPING_VALUE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "mapping_field": {
+            "type": "object",
+            "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 5},
+        }
+    },
+    "required": ["mapping_field"],
+}
+_NESTED_POSITION_SCHEMAS = {
+    "tuple_element": _TUPLE_ELEMENT_SCHEMA,
+    "array_item": _ARRAY_ITEM_SCHEMA,
+    "mapping_value": _MAPPING_VALUE_SCHEMA,
+}
+
+
+@pytest.mark.parametrize("fmt", ["jsonish", "yaml", "typescript"])
+@pytest.mark.parametrize("position", list(_NESTED_POSITION_SCHEMAS.keys()))
+@pytest.mark.parametrize("cons", [True, False])
+def test_nested_positions_honour_include_constraints(fmt: str, position: str, cons: bool) -> None:
+    """The length constraint at a tuple element / array item / mapping value must obey
+    `include_constraints` in every formatter (AC1 / research §B — the JSONish tuple
+    element was the sole leak at HEAD).
+    """
+    schema = _NESTED_POSITION_SCHEMAS[position]
+    config = FormatterConfig(include_constraints=cons)
+    rendered = simplify_schema(schema, config=config, format_type=fmt).to_string()
+
+    assert (
+        "1-5 chars" in rendered
+    ) is cons, f"position={position} fmt={fmt} cons={cons}. Output:\n{rendered}"
+
+
+_BOTH_BOUNDS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string", "minLength": 1, "maxLength": 5},
+        "score": {"type": "integer", "minimum": 1, "maximum": 10},
+    },
+    "required": ["code", "score"],
+}
+_ONE_BOUND_EXPECTATIONS = {
+    "minLength": ("<= 5 chars", "1-5 chars"),
+    "maxLength": (">= 1 chars", "1-5 chars"),
+    "minimum": ("<= 10", "1 to 10"),
+    "maximum": (">= 1", "1 to 10"),
+}
+
+
+@pytest.mark.parametrize("fmt", ["jsonish", "yaml", "typescript"])
+@pytest.mark.parametrize("disabled", list(_ONE_BOUND_EXPECTATIONS.keys()))
+def test_disabling_one_bound_hides_only_that_bound(fmt: str, disabled: str) -> None:
+    """AC2: disabling exactly one of minLength/maxLength (or minimum/maximum) must hide
+    only that bound and render the one-sided form -- the TypeScript `or`-over-the-pair
+    defect this ticket closes.
+    """
+    surviving, two_sided = _ONE_BOUND_EXPECTATIONS[disabled]
+    config = FormatterConfig(metadata_inclusion={disabled: False})
+    rendered = simplify_schema(_BOTH_BOUNDS_SCHEMA, config=config, format_type=fmt).to_string()
+
+    assert surviving in rendered, f"disabled={disabled} fmt={fmt}. Output:\n{rendered}"
+    assert two_sided not in rendered, f"disabled={disabled} fmt={fmt}. Output:\n{rendered}"
+
+
+_GLYPH_SWEEP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "len_both": {"type": "string", "minLength": 1, "maxLength": 5},
+        "len_min_only": {"type": "string", "minLength": 1},
+        "len_max_only": {"type": "string", "maxLength": 5},
+        "num_both": {"type": "integer", "minimum": 1, "maximum": 10},
+        "num_min_only": {"type": "integer", "minimum": 1},
+        "num_max_only": {"type": "integer", "maximum": 10},
+        "counted": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 2,
+            "maxItems": 4,
+        },
+        "pair": {
+            "type": "array",
+            "prefixItems": [
+                {"type": "string", "maxLength": 5},
+                {"type": "integer"},
+            ],
+            "minItems": 2,
+            "maxItems": 2,
+        },
+        "cond_min": {
+            "type": "object",
+            "if": {"properties": {"age": {"minimum": 3}}},
+            "then": {"required": ["guardian"]},
+        },
+        "cond_max": {
+            "type": "object",
+            "if": {"properties": {"age": {"maximum": 9}}},
+            "then": {"required": ["guardian"]},
+        },
+    },
+}
+
+
+@pytest.mark.parametrize("fmt", ["jsonish", "yaml", "typescript"])
+@pytest.mark.parametrize("im,desc,cons", list(itertools.product((True, False), repeat=3)))
+def test_rendered_output_never_uses_unicode_comparison_glyphs(
+    fmt: str, im: bool, desc: bool, cons: bool
+) -> None:
+    """AC3 / D3 global invariant: no formatter output ever contains the Unicode
+    comparison glyphs, across every flag combination and every constraint family
+    (two-sided/one-sided length, two-sided/one-sided numeric range, item counts, a
+    tuple element, and the `_describe_condition` if/then sweep).
+    """
+    config = FormatterConfig(
+        include_metadata=im, include_descriptions=desc, include_constraints=cons
+    )
+    rendered = simplify_schema(_GLYPH_SWEEP_SCHEMA, config=config, format_type=fmt).to_string()
+
+    assert "≥" not in rendered, f"fmt={fmt} im={im} desc={desc} cons={cons}: {rendered}"
+    assert "≤" not in rendered, f"fmt={fmt} im={im} desc={desc} cons={cons}: {rendered}"

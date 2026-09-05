@@ -7,6 +7,11 @@ DESCRIPTION_KEYWORDS: frozenset[str] = frozenset(
     {"title", "description", "id", "$comment", "x-enum-descriptions"}
 )
 
+STRUCTURAL_KEYWORDS: frozenset[str] = frozenset({"enum"})
+"""Keywords whose value is structural, not metadata: emitted regardless of `include_metadata`,
+`include_constraints`/`include_descriptions`, and `metadata_inclusion`. See `FormatterConfig`'s
+`Precedence:` docstring paragraph. Not exported (matches `DESCRIPTION_KEYWORDS`)."""
+
 # Package-wide default union separator; formatters compare against this value (not a
 # sentinel) to decide whether the caller already chose their own separator.
 DEFAULT_UNION_SEPARATOR: str = " | "
@@ -79,8 +84,9 @@ class FormatterConfig:
         `DESCRIPTION_KEYWORDS`, `include_constraints` for every other keyword), and
         `metadata_inclusion.get(keyword, True)` are true; a narrower gate can only remove
         metadata, never restore what a wider gate removed. Structural information —
-        required/optional markers, container tokens, and the `additionalProperties: false`
-        closed-world marker — is not metadata and is emitted regardless of all three flags.
+        required/optional markers, container tokens, the `additionalProperties: false`
+        closed-world marker, and any keyword in `STRUCTURAL_KEYWORDS` (currently just
+        `"enum"`) — is not metadata and is emitted regardless of all three flags.
     """
 
     prefix: str | None = None
@@ -97,7 +103,9 @@ class FormatterConfig:
     metadata_inclusion: dict[str, bool] = None  # type: ignore[assignment]
 
     def includes(self, key: str) -> bool:
-        """Return True iff `key` survives all three narrowing gates."""
+        """Return True iff `key` is structural, or survives all three narrowing gates."""
+        if key in STRUCTURAL_KEYWORDS:
+            return True
         if not self.include_metadata:
             return False
         category_flag = (

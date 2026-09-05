@@ -1284,15 +1284,17 @@ class BaseFormatter(ABC):
             slot holds the ``"one of: ..."`` body (plus any description / default /
             example folded in with ``"; "``). ``"string"`` for an empty enum, with no
             marker minted. The gap before the comment is inserted later, by
-            ``_hoist_deferred_line``.
+            ``_hoist_deferred_line``. The enum's value set is in ``STRUCTURAL_KEYWORDS``
+            (``config.py``) and is therefore always emitted for a non-empty enum,
+            regardless of ``include_metadata`` / ``include_constraints`` /
+            ``metadata_inclusion``; only ``description`` / ``default`` / ``examples``
+            folded into the body remain individually gated.
         """
         enum_list = enum_value.get("enum", [])
         if not enum_list:
             return "string"  # Fallback for empty enum
 
         token = self.enum_type_token(enum_value)
-        if not self._should_include_metadata("enum"):
-            return token
         body = self.build_enum_comment(enum_value, enum_list)
 
         # ``title`` is deliberately read and DISCARDED: appending it is what leaked the
@@ -1406,36 +1408,26 @@ class BaseFormatter(ABC):
         # Now type_name is guaranteed to be a string
         type_str = self.TYPE_MAP.get(type_name, type_name)
 
-        # Add validation constraints to type description (only if metadata is enabled)
-        if self.include_metadata:
-            if type_name == "string":
-                constraints = []
+        # Validation constraints below are already gated by the producers themselves
+        # (pattern_token / format_token / length_range_token / numeric_range_token each
+        # call `_should_include_metadata`, which is False whenever `include_metadata` is
+        # False); this method must not re-gate.
+        if type_name == "string":
+            pattern_frag = self.pattern_token(type_value)
+            if pattern_frag:
+                type_str = f"{type_str} ({pattern_frag})"
 
-                # Add length constraints
-                length_range = self._format_validation_range(
-                    type_value, "minLength", "maxLength", " chars"
-                )
-                if length_range:
-                    constraints.append(length_range)
+            format_frag = self.format_token(type_value)
+            if format_frag:
+                type_str = f"{type_str} ({format_frag})"
 
-                # Add pattern constraints
-                if "pattern" in type_value:
-                    pattern = type_value["pattern"]
-                    # Truncate very long patterns for readability
-                    if len(pattern) > 50:
-                        pattern = pattern[:47] + "..."
-                    constraints.append(f"pattern: {pattern}")
-
-                # Add format constraints
-                if "format" in type_value:
-                    constraints.append(f"format: {type_value['format']}")
-
-                if constraints:
-                    type_str = f"{type_str} ({', '.join(constraints)})"
-            elif type_name in ["number", "integer"]:
-                range_info = self._format_validation_range(type_value, "minimum", "maximum")
-                if range_info:
-                    type_str = f"{type_str} ({range_info})"
+            length_range = self.length_range_token(type_value)
+            if length_range:
+                type_str = f"{type_str} ({length_range})"
+        elif type_name in ["number", "integer"]:
+            range_info = self.numeric_range_token(type_value)
+            if range_info:
+                type_str = f"{type_str} ({range_info})"
 
         if type_str == "array":
             shape = classify_container(type_value)
@@ -1897,6 +1889,68 @@ class BaseFormatter(ABC):
             return " //unique items"
         return ""
 
+    def pattern_token(self, schema: dict[str, Any]) -> str:
+        """Already-gated `pattern` fragment for the type-token channel.
+
+        Returns ``"PATTERN: <re>"`` or ``""``. Already filtered through
+        `_should_include_metadata`; callers must not re-gate.
+        """
+        pattern = schema.get("pattern")
+        if pattern and self._should_include_metadata("pattern"):
+            return f"PATTERN: {pattern}"
+        return ""
+
+    def format_token(self, schema: dict[str, Any]) -> str:
+        """Already-gated `format` fragment for the type-token channel.
+
+        Returns ``"FORMAT: <v>"`` (reading `format` then the underscore-prefixed
+        `_format` fallback) or ``""``. Already filtered through
+        `_should_include_metadata`; callers must not re-gate.
+        """
+        if not self._should_include_metadata("format"):
+            return ""
+        value = schema.get("format") or schema.get("_format")
+        return f"FORMAT: {value}" if value else ""
+
+    def length_range_token(self, schema: dict[str, Any]) -> str:
+        """Already-gated `minLength`/`maxLength` fragment: `"1-5 chars"` / `">= 1 chars"` /
+        `"<= 5 chars"` / `""`. Already filtered through `_should_include_metadata`; callers
+        must not re-gate.
+        """
+        return self._bounded_range_token(schema, "minLength", "maxLength", unit=" chars")
+
+    def numeric_range_token(self, schema: dict[str, Any]) -> str:
+        """Already-gated `minimum`/`maximum` fragment: `"1 to 10"` / `">= 1"` / `"<= 10"` /
+        `""`. Already filtered through `_should_include_metadata`; callers must not re-gate.
+        """
+        return self._bounded_range_token(schema, "minimum", "maximum", joiner=" to ")
+
+    def _bounded_range_token(
+        self,
+        schema: dict[str, Any],
+        min_key: str,
+        max_key: str,
+        *,
+        unit: str = "",
+        joiner: str = "-",
+    ) -> str:
+        """Shared three-branch assembler for the two bounded-range families.
+
+        Each bound is resolved independently (`is not None` presence AND
+        `_should_include_metadata`), never combined with `or` — that independence is the
+        fix for the TypeScript defect this ticket closes. Branches on the *gated* pair,
+        never on the raw schema.
+        """
+        has_min = schema.get(min_key) is not None and self._should_include_metadata(min_key)
+        has_max = schema.get(max_key) is not None and self._should_include_metadata(max_key)
+        if has_min and has_max:
+            return f"{schema[min_key]}{joiner}{schema[max_key]}{unit}"
+        if has_min:
+            return f">= {schema[min_key]}{unit}"
+        if has_max:
+            return f"<= {schema[max_key]}{unit}"
+        return ""
+
     def array_constraint_tokens(self, schema: dict[str, Any]) -> list[str]:
         """Ordered, already-gated constraint words for an array-ish schema.
 
@@ -1959,21 +2013,6 @@ class BaseFormatter(ABC):
             return str(schema.get("type", "any"))
         return str(schema)
 
-    def _format_validation_range(
-        self, schema: dict[str, Any], min_key: str, max_key: str, unit: str = ""
-    ) -> str:
-        """Format validation range constraints."""
-        min_val = schema.get(min_key)
-        max_val = schema.get(max_key)
-
-        if min_val is not None and max_val is not None:
-            return f"{min_val}-{max_val}{unit}"
-        elif min_val is not None:
-            return f"≥{min_val}{unit}"
-        elif max_val is not None:
-            return f"≤{max_val}{unit}"
-        return ""
-
     def _format_conditional(
         self,
         if_schema: dict[str, Any],
@@ -1997,9 +2036,9 @@ class BaseFormatter(ABC):
             if len(props) == 1:
                 prop_name, prop_schema = next(iter(props.items()))
                 if "minimum" in prop_schema:
-                    return f"{prop_name} ≥ {prop_schema['minimum']}"
+                    return f"{prop_name} >= {prop_schema['minimum']}"
                 elif "maximum" in prop_schema:
-                    return f"{prop_name} ≤ {prop_schema['maximum']}"
+                    return f"{prop_name} <= {prop_schema['maximum']}"
                 elif "pattern" in prop_schema:
                     return f"{prop_name} matches {prop_schema['pattern']}"
             return f"condition on {', '.join(props.keys())}"

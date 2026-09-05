@@ -277,27 +277,17 @@ class TypeScriptFormatter(BaseFormatter):
                 tuple_str += self.format_array_constraints(type_value)
             return tuple_str
 
-        # Add validation constraints to type description (only if metadata is enabled)
-        # Filter based on metadata_inclusion config
-        if self.include_metadata:
-            if type_name == "string":
-                # Check if minLength or maxLength should be included
-                include_min_length = self._should_include_metadata("minLength")
-                include_max_length = self._should_include_metadata("maxLength")
-                if include_min_length or include_max_length:
-                    length_range = self._format_validation_range(
-                        type_value, "minLength", "maxLength", " chars"
-                    )  # noqa: E501
-                    if length_range:
-                        type_str = f"{type_str} ({length_range})"
-            elif type_name in ["number", "integer"]:
-                # Check if minimum or maximum should be included
-                include_min = self._should_include_metadata("minimum")
-                include_max = self._should_include_metadata("maximum")
-                if include_min or include_max:
-                    range_info = self._format_validation_range(type_value, "minimum", "maximum")
-                    if range_info:
-                        type_str = f"{type_str} ({range_info})"
+        # Validation constraints below are already gated by the producers themselves
+        # (each bound is resolved independently — no `or` over the pair); this method
+        # must not re-gate.
+        if type_name == "string":
+            length_range = self.length_range_token(type_value)
+            if length_range:
+                type_str = f"{type_str} ({length_range})"
+        elif type_name in ["number", "integer"]:
+            range_info = self.numeric_range_token(type_value)
+            if range_info:
+                type_str = f"{type_str} ({range_info})"
 
         # Handle array type (consolidate both "Array" and "array" cases)
         if type_str == "Array" or type_name == "array":

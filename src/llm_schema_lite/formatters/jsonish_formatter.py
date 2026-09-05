@@ -186,19 +186,16 @@ class JSONishFormatter(BaseFormatter):
         `OPTIONS: ...` string built from `value["enum"]`. That branch was proven
         unreachable (every caller of `process_types` checks `enum` before reaching
         this code) and was removed.
+
+        Delegates to `BaseFormatter.pattern_token` / `format_token`; output is
+        byte-identical to the previous inline implementation.
         """
-        format_ = ""
-        # Filter pattern based on metadata_inclusion config
-        if "pattern" in value and value["pattern"] and self._should_include_metadata("pattern"):
-            pattern = f" (PATTERN: {value['pattern']})"
-        else:
-            pattern = ""
-        # Filter format based on metadata_inclusion config
-        if self._should_include_metadata("format"):
-            if "format" in value and value["format"]:
-                format_ = f" (FORMAT: {value['format']})"
-            elif "_format" in value and value["_format"]:
-                format_ = f" (FORMAT: {value['_format']})"
+        pattern_frag = self.pattern_token(value)
+        pattern = f" ({pattern_frag})" if pattern_frag else ""
+
+        format_frag = self.format_token(value)
+        format_ = f" ({format_frag})" if format_frag else ""
+
         return format_, pattern
 
     def _get_fields_dependencies(self, schema: dict[str, Any], field_name: str) -> str:
@@ -625,19 +622,8 @@ class JSONishFormatter(BaseFormatter):
             if value["type"] == "string":
                 type_name = "string"
 
-                length_range = ""
-                # Filter length constraints based on metadata_inclusion config
-                check_min_len = self._should_include_metadata("minLength")
-                check_max_len = self._should_include_metadata("maxLength")
-                if check_min_len or check_max_len:
-                    has_min = "minLength" in value and check_min_len
-                    has_max = "maxLength" in value and check_max_len
-                    if has_min and has_max:
-                        length_range = f" ({value['minLength']}-{value['maxLength']} chars)"
-                    elif has_min:
-                        length_range += f" (>= {value['minLength']} chars)"
-                    elif has_max:
-                        length_range += f" (<= {value['maxLength']} chars)"
+                length_tok = self.length_range_token(value)
+                length_range = f" ({length_tok})" if length_tok else ""
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
                 return self._defer_comment_body(
@@ -646,19 +632,8 @@ class JSONishFormatter(BaseFormatter):
                 )
             elif value["type"] in ["number", "integer"]:
                 type_name = "float" if value["type"] == "number" else "int"
-                value_range = ""
-                # Filter range constraints based on metadata_inclusion config
-                check_min = self._should_include_metadata("minimum")
-                check_max = self._should_include_metadata("maximum")
-                if check_min or check_max:
-                    has_min = "minimum" in value and check_min
-                    has_max = "maximum" in value and check_max
-                    if has_min and has_max:
-                        value_range = f" ({value['minimum']} to {value['maximum']})"
-                    elif has_min:
-                        value_range += f" (>= {value['minimum']})"
-                    elif has_max:
-                        value_range += f" (<= {value['maximum']})"
+                range_tok = self.numeric_range_token(value)
+                value_range = f" ({range_tok})" if range_tok else ""
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
                 return self._defer_comment_body(

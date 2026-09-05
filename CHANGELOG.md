@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **Constraint spelling is ASCII everywhere.** TypeScript's scalar length/range fragments
+  and JSONish's nested-position (tuple element, scalar `$ref`) fragments drop `≥`/`≤` for
+  `>=`/`<=`; JSONish and YAML property-position output is byte-identical to before. Numeric
+  two-sided ranges now read `(n to m)` (e.g. `(1 to 10)`, `(-5 to 10)`); string length and
+  item-count ranges keep `(n-m unit)`. (`lsl-2026-09-05-009`)
+- **An enum's allowed-value set is structural and survives `include_metadata=False` /
+  `include_constraints=False` in all three formatters.** `const` and `Literal` values ride
+  the same route. `metadata_inclusion={"enum": False}` no longer suppresses the value list
+  (it is no longer a recognised override point for this keyword). (`lsl-2026-09-05-009`)
 - **DSPy prompts no longer embed the schema inside a JSON string.** The adapter renders
   the field structure as plain text, and the layout is selectable through the new
   `PromptLayout` enum. Any snapshot asserting on the previous prompt text will change.
@@ -62,6 +71,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Constraint metadata at nested positions (tuple element, mapping value, array item) now
+  honours `include_constraints` and `metadata_inclusion` in every formatter.** Only the
+  JSONish tuple element leaked at HEAD; the fix is in the shared base method every nested
+  position funnels through, so array item and mapping value positions (already correct)
+  are unaffected. Snapshot-visible: a JSONish tuple element's constraint spelling now
+  matches its sibling scalar property exactly. (`lsl-2026-09-05-009`)
+- **TypeScript's `minLength`/`maxLength` and `minimum`/`maximum` gates no longer `or` over
+  the pair.** Disabling one bound via `metadata_inclusion` now renders the surviving bound
+  in its one-sided form (`>= n` / `<= n`) instead of the full two-sided range. Snapshot-visible
+  for any TypeScript output using `metadata_inclusion` to disable exactly one bound of a pair.
+  (`lsl-2026-09-05-009`)
 - **JSONish comment text now reproduces the authored description verbatim.** Quotes,
   backslashes and `//` in a `description` no longer leak `\"` or `\\` into the rendered
   comment, and a description containing a real newline collapses to a single `//` line

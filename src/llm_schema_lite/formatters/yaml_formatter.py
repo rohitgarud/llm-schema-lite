@@ -320,48 +320,36 @@ class YAMLFormatter(BaseFormatter):
         return str(item_types[0])
 
     def _format_string_constraints_jsonish(self, type_value: dict[str, Any]) -> str:
-        """Format string constraints like JSONish: length, PATTERN, FORMAT."""
+        """Format string constraints like JSONish: length, PATTERN, FORMAT.
+
+        Delegates to `BaseFormatter.length_range_token` / `pattern_token` /
+        `format_token`; fragment order (length, pattern, format) and output are
+        byte-identical to the previous inline implementation.
+        """
         parts = []
-        # Check minLength/maxLength based on metadata_inclusion config
-        include_min_length = self._should_include_metadata("minLength")
-        include_max_length = self._should_include_metadata("maxLength")
-        min_len = type_value.get("minLength")
-        max_len = type_value.get("maxLength")
-        if (
-            include_min_length
-            and include_max_length
-            and min_len is not None
-            and max_len is not None
-        ):
-            parts.append(f"({min_len}-{max_len} chars)")
-        elif include_min_length and min_len is not None:
-            parts.append(f"(>= {min_len} chars)")
-        elif include_max_length and max_len is not None:
-            parts.append(f"(<= {max_len} chars)")
-        # Check pattern based on metadata_inclusion config
-        if type_value.get("pattern") and self._should_include_metadata("pattern"):
-            parts.append(f"(PATTERN: {type_value['pattern']})")
-        # Check format based on metadata_inclusion config
-        if self._should_include_metadata("format"):
-            if type_value.get("format"):
-                parts.append(f"(FORMAT: {type_value['format']})")
-            elif type_value.get("_format"):
-                parts.append(f"(FORMAT: {type_value['_format']})")
+
+        length_tok = self.length_range_token(type_value)
+        if length_tok:
+            parts.append(f"({length_tok})")
+
+        pattern_tok = self.pattern_token(type_value)
+        if pattern_tok:
+            parts.append(f"({pattern_tok})")
+
+        format_tok = self.format_token(type_value)
+        if format_tok:
+            parts.append(f"({format_tok})")
+
         return " ".join(parts)
 
     def _format_number_range_jsonish(self, type_value: dict[str, Any]) -> str:
-        """Format number range like JSONish: (min to max), (>= min), (<= max)."""
-        include_min = self._should_include_metadata("minimum")
-        include_max = self._should_include_metadata("maximum")
-        min_val = type_value.get("minimum")
-        max_val = type_value.get("maximum")
-        if include_min and include_max and min_val is not None and max_val is not None:
-            return f"({min_val} to {max_val})"
-        if include_min and min_val is not None:
-            return f"(>= {min_val})"
-        if include_max and max_val is not None:
-            return f"(<= {max_val})"
-        return ""
+        """Format number range like JSONish: (min to max), (>= min), (<= max).
+
+        Delegates to `BaseFormatter.numeric_range_token`; output is byte-identical to
+        the previous inline implementation.
+        """
+        range_tok = self.numeric_range_token(type_value)
+        return f"({range_tok})" if range_tok else ""
 
     def process_type_value(self, type_value: dict[str, Any]) -> str:
         """
