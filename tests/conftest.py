@@ -2031,3 +2031,30 @@ class TestDataFactory:
 def test_data_factory():
     """Fixture for TestDataFactory."""
     return TestDataFactory
+
+
+class HashInPatternModel(BaseModel):
+    """Regex patterns containing ``#`` (lsl-2026-09-05-006).
+
+    Every field carries a SECOND metadata part on purpose: with pattern/format now owned
+    by the YAML type token, a pattern-only field mints no deferred marker at all and would
+    never enter ``_hoist_deferred_line``.
+    """
+
+    tag: str = Field(..., pattern=r"^#[0-9a-f]{6}$", description="Hex colour")
+    shade: str = Field(default="#ffffff", pattern=r"^#[0-9a-f]{3,6}$")
+    spaced: str = Field(..., pattern=r"^a #b$", description="Whitespace before the hash")
+
+
+class MultiLineDescriptionInner(BaseModel):
+    """Inner model for the nested-block and sequence-item multi-line cases."""
+
+    step: str = Field(..., description="first step\nsecond step")
+
+
+class MultiLineDescriptionModel(BaseModel):
+    """Per-field descriptions containing real newlines (lsl-2026-09-05-006)."""
+
+    summary: str = Field(..., description="line one\nline two")
+    nested: MultiLineDescriptionInner
+    items: list[MultiLineDescriptionInner]

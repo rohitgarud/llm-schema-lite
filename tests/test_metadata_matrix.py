@@ -54,15 +54,9 @@ DESCRIPTION_MARKERS = {
 }
 CONSTRAINT_MARKERS = {
     "jsonish": ["PATTERN:", "<= 50 chars", "0 to 130", "<= 5 items", "(default=", "one of:"],
-    "yaml": [
-        "PATTERN:",
-        "<= 50 chars",
-        "0 to 130",
-        "<= 5 items",
-        "(default=",
-        "one of:",
-        "pattern:",
-    ],
+    # The lower-case "pattern:" entry is gone: pattern/format are now owned by the YAML
+    # type token and the trailing comment no longer restates them (lsl-2026-09-05-006).
+    "yaml": ["PATTERN:", "<= 50 chars", "0 to 130", "<= 5 items", "(default=", "one of:"],
     "typescript": ["≤50 chars", "0-130", "<= 5 items", "(defaults to", "pattern:"],
 }
 STRUCTURAL_MARKERS = {

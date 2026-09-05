@@ -885,6 +885,89 @@ class BaseFormatter(ABC):
             and self._deferred_pattern.search(representation) is not None
         )
 
+    def comment_lines(self, body: str, indent: str = "") -> list[str]:
+        """Render ``body`` as one comment line per physical line, at ``indent``.
+
+        Args:
+            body: Comment text. May contain ``"\\n"``; each physical line becomes one
+                entry in the result. Leading/trailing whitespace on a line is preserved
+                after the prefix; callers strip if they want that.
+            indent: Literal whitespace prepended to every emitted line, before the
+                comment prefix. Defaults to column 0 (the schema-level case).
+
+        Returns:
+            One string per line of ``body``. A line with content becomes
+            ``f"{indent}{self.comment_prefix} {line}"``; a blank or whitespace-only line
+            becomes ``f"{indent}{self.comment_prefix}"`` with no dangling space. Never
+            returns an empty list: ``comment_lines("")`` is ``[self.comment_prefix]``.
+        """
+        prefix = self.comment_prefix
+        return [
+            f"{indent}{prefix} {line}" if line.strip() else f"{indent}{prefix}"
+            for line in body.split("\n")
+        ]
+
+    _CONTINUATION_INDENT: Final[re.Pattern[str]] = re.compile(r"^([ \t]*)(-[ \t]+)?")
+
+    @staticmethod
+    def _continuation_indent(line: str) -> str:
+        """Column at which a continuation comment for ``line`` must start.
+
+        The hoist runs on already-dumped text, so ``line``'s own leading whitespace is the
+        only available source of truth for depth -- ``add_metadata`` runs before
+        ``yaml.dump`` and cannot know it. A YAML sequence item (``"- key: value"``) puts its
+        content one ``"- "`` past the dash, so the dash is replaced by an equal run of
+        spaces rather than copied. Only a ``-`` FOLLOWED BY whitespace counts, so a mapping
+        key beginning with ``-`` is never mistaken for a sequence indicator.
+
+        Args:
+            line: One already-dumped physical line (post ``yaml.dump`` for YAML; neither
+                JSONish nor TypeScript emits a ``"- "`` line start, so the dash arm is a
+                no-op for them).
+
+        Returns:
+            The literal whitespace prefix a continuation comment line must use.
+        """
+        match = BaseFormatter._CONTINUATION_INDENT.match(line)
+        if match is None:  # pragma: no cover - the pattern also matches the empty string
+            return ""
+        lead, dash = match.group(1), match.group(2)
+        return lead + (" " * len(dash) if dash else "")
+
+    def resolved_deferred_text(self, representation: object) -> str:
+        """Marker-free text for CONTAINMENT QUERIES -- never for user-facing output.
+
+        ``hoist_deferred_comments`` is a renderer: it strips markers, joins bodies with
+        ``"; "``, inserts the comment gap and prefix, and (since lsl-2026-09-05-006) turns a
+        multi-line body into several comment lines. Using it to answer "is this fragment
+        already stated?" makes the answer depend on rendering decoration, so any change to
+        the renderer silently changes the answer. This method answers the query directly.
+
+        Args:
+            representation: A rendered token that may carry deferred markers. Typed
+                ``object`` so callers holding a ``str | dict | list`` union need not narrow.
+
+        Returns:
+            For a non-``str``, ``str(representation)``. For a ``str``, the representation
+            with every marker token excised, followed by each DISTINCT slot body in source
+            order, all joined by ``"\\n"``. The newline joiner guarantees every body appears
+            verbatim and that no fragment can match by straddling two bodies or the
+            head/body boundary. The result is NOT valid output text and must never be
+            emitted.
+        """
+        if not isinstance(representation, str):
+            return str(representation)
+        bodies: list[str] = []
+        seen: set[str] = set()
+        for match in self._deferred_pattern.finditer(representation):
+            body = self._deferred_bodies[int(match.group(1))]
+            if body in seen:
+                continue
+            seen.add(body)
+            bodies.append(body)
+        head = self._deferred_pattern.sub("", representation)
+        return "\n".join([head, *bodies]) if bodies else head
+
     def hoist_deferred_comments(self, text: str) -> str:
         """Resolve every deferred marker in ``text`` to a real trailing comment, per line.
 
@@ -907,8 +990,9 @@ class BaseFormatter(ABC):
 
         Returns:
             ``line`` unchanged if it carries no marker; otherwise ``line`` with every marker
-            removed and one trailing ``f"{gap}{comment_prefix} {frag}"`` appended before any
-            trailing comma.
+            removed and its slot bodies re-emitted as one or more trailing comment lines
+            (multiple lines only when a body contains ``"\\n"``), appended before any
+            trailing comma. May now contain ``"\\n"`` -- see step 6.
         """
         matches = list(self._deferred_pattern.finditer(line))
         if not matches:
@@ -935,17 +1019,25 @@ class BaseFormatter(ABC):
             head, trailing_comma = head[:-1], ","
         head = head.rstrip()
 
-        # 6. Absorb any pre-existing comment on the line into the fragment.
         prefix = self.comment_prefix
-        if prefix in head:
-            head, _, existing = head.partition(prefix)
-            head = head.rstrip()
-            existing = existing.strip()
-            if existing and existing not in frag:
-                frag = f"{frag}; {existing}"
 
-        # 7. Emit the single trailing comment.
-        return "".join((head, self.deferred_comment_gap, prefix, " ", frag, trailing_comma))
+        # 6. Emit the trailing comment. A multi-fragment body may carry real newlines (a
+        #    per-field ``description="a\nb"``); every continuation line must be a comment
+        #    line at this line's own indent, or it lands in the document as a bare scalar
+        #    (a ``yaml.safe_load`` ScannerError).
+        #    Step 6 (removed, lsl-2026-09-05-006): the hoist used to absorb a pre-existing
+        #    ``comment_prefix`` on the line by ``head.partition(prefix)``. That treats the
+        #    FIRST prefix anywhere in ``head`` as a marker, which corrupts any value token
+        #    containing ``#`` (a regex pattern) or ``//`` (a URL). The hoist now owns only
+        #    the text it minted; a line that already carries a literal comment ends with
+        #    two comments, which every target syntax accepts, instead of a split value.
+        #    Reachable in exactly one measured place today -- JSONish's optional-enum line
+        #    (``tests/test_enum_rendering.py``), whose golden is updated with this change.
+        first, _, rest = frag.partition("\n")
+        rendered = "".join((head, self.deferred_comment_gap, prefix, " ", first, trailing_comma))
+        if not rest:
+            return rendered
+        return "\n".join([rendered, *self.comment_lines(rest, self._continuation_indent(line))])
 
     def _extract_enum_metadata(
         self, enum_value: dict[str, Any]

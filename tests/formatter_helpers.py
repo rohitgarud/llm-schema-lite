@@ -256,14 +256,16 @@ def render_all_formatters(
 def _line_comment_slots(line: str, marker: str) -> list[str]:
     """Extract every `marker`-delimited comment body found on one physical line.
 
-    A `marker` occurrence only starts a comment slot when it sits at the very start of
-    the line or is immediately preceded by whitespace. Every formatter here always emits
-    its trailing comment after such a whitespace gap (see `base.py`'s
-    `deferred_comment_gap` / `_hoist_deferred_line`, and the schema-level `f"{prefix} ..."`
-    comments), while occurrences of the same characters *inside a value* never are: a
-    `//` inside `https://...` is glued directly to the scheme letters, and a literal `#`
-    inside a regex pattern is glued to whatever character precedes it. This one rule
-    disambiguates both cases without special-casing URLs or patterns individually.
+    ASSERTION-SIDE HEURISTIC ONLY (lsl-2026-09-05-006): a `marker` occurrence starts a
+    comment slot when it sits at the very start of the line or is immediately preceded by
+    whitespace. This rule has no production counterpart -- `_hoist_deferred_line` (base.py)
+    no longer recognises a pre-existing comment prefix at all, by design, because doing so
+    corrupted any value token containing `#` or `//`. This scanner is kept only for tests
+    that assert on the `include_metadata=False` shape, where no `#`/`//`-bearing metadata
+    reaches the line. It CANNOT parse a whitespace-preceded `#` inside a quoted YAML scalar
+    (e.g. `'string (PATTERN: ^a #b$)'  # pattern: ^a #b$` mis-slices into three "comments");
+    output containing one must be asserted with a direct exact-line comparison instead, not
+    routed through this helper or `extract_comment_slots`.
 
     Multiple qualifying markers on one line each start their own slot, running up to the
     next qualifying marker (or end of line) -- this matters for YAML, whose folded

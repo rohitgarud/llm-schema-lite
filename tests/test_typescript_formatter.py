@@ -37,6 +37,7 @@ from tests.conftest import (
     LiteralSingle,
     LiteralUnion,
     ModelWithAlias,
+    MultiLineDescriptionModel,
     ObjectAdditionalPropsFalse,
     ObjectRequiredOnly,
     ObjectWithDefaults,
@@ -1598,3 +1599,81 @@ def test_typescript_recursive_placeholder_preserves_array_of_object_invariant() 
 
         assert "recursive: ListNode" in result, f"depth={depth}: no placeholder"
         assert "Array<object>" not in result, f"depth={depth}: degraded to Array<object>"
+
+
+# ============================================================================
+# lsl-2026-09-05-006 -- multi-line descriptions
+# ============================================================================
+
+
+def test_typescript_multiline_description_interface_member_continuation() -> None:
+    """First line inline, rest as ``// `` comments at the fixed 2-space member indent."""
+    result = TypeScriptFormatter(
+        MultiLineDescriptionModel.model_json_schema(), include_metadata=True
+    ).transform_schema()
+    lines = result.split("\n")
+    assert "  summary*: string  // line one" in lines
+    assert "  // line two;" in lines
+
+
+def test_typescript_multiline_description_emits_no_bare_document_line() -> None:
+    """No physical line is a bare continuation fragment outside a comment."""
+    result = TypeScriptFormatter(
+        MultiLineDescriptionModel.model_json_schema(), include_metadata=True
+    ).transform_schema()
+    for line in result.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//") or stripped in {"{", "}"}:
+            continue
+        assert ":" in stripped or stripped.startswith(
+            "interface"
+        ), f"bare document line in TypeScript render: {line!r}"
+
+
+def test_typescript_multiline_description_nested_inline_literal_folds_to_block_comment() -> None:
+    """A nested inline object literal folds to one ``/* a b */`` with no leaked ``//``."""
+    result = TypeScriptFormatter(
+        MultiLineDescriptionModel.model_json_schema(), include_metadata=True
+    ).transform_schema()
+    lines = result.split("\n")
+    assert "  nested*: { step*: string /* first step second step */ };" in lines
+    assert "  items*: Array<{ step*: string /* first step second step */ }>;" in lines
+    for line in lines:
+        if "/*" in line:
+            block = line.split("/*", 1)[1].split("*/", 1)[0]
+            assert "//" not in block, f"leaked // inside a block comment: {line!r}"
+
+
+def test_typescript_multiline_description_whole_render_is_stable() -> None:
+    """Whole-string golden for the interface-member and inline-literal shapes."""
+    result = TypeScriptFormatter(
+        MultiLineDescriptionModel.model_json_schema(), include_metadata=True
+    ).transform_schema()
+    assert "interface MultiLineDescriptionInner {" in result
+    assert "  step*: string  // first step" in result
+    assert "  // second step;" in result
+
+
+def test_typescript_inline_comment_folds_continuation_lines() -> None:
+    """``_inline_comment`` unit: the ``\n  // `` break becomes a single space."""
+    assert (
+        TypeScriptFormatter._inline_comment("  z*: string  // a\n  // b")
+        == "  z*: string /* a b */"
+    )
+    assert (
+        TypeScriptFormatter._inline_comment("  z*: string  // a\n  // b\n  // c")
+        == "  z*: string /* a b c */"
+    )
+
+
+def test_typescript_inline_comment_escapes_star_slash_after_folding() -> None:
+    """Ordering pin: the fold runs first, then the ``*/`` escape; both invariants hold."""
+    assert (
+        TypeScriptFormatter._inline_comment("  z*: string  // a */ b\n  // c")
+        == "  z*: string /* a * / b c */"
+    )
+
+
+def test_typescript_inline_comment_passes_through_without_a_comment() -> None:
+    """No ``  // `` separator means the value is returned unchanged."""
+    assert TypeScriptFormatter._inline_comment("plain: string") == "plain: string"

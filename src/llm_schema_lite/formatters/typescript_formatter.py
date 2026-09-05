@@ -1,7 +1,8 @@
 """TypeScript interface formatter for transforming Pydantic schemas."""
 
+import re
 from io import StringIO
-from typing import Any
+from typing import Any, Final
 
 from .base import BaseFormatter, ContainerShape, classify_container
 
@@ -53,7 +54,9 @@ class TypeScriptFormatter(BaseFormatter):
             value: The field definition containing metadata.
 
         Returns:
-            Field representation with metadata comments.
+            Field representation with metadata comments. A multi-line description
+            (a real ``"\\n"`` in a metadata part) becomes an inline first line plus one or
+            more continuation comment lines at a fixed 2-space member indent.
         """
         if not self.include_metadata:
             return representation
@@ -62,7 +65,15 @@ class TypeScriptFormatter(BaseFormatter):
         if not metadata_parts:
             return representation
 
-        return f"{representation}  // {', '.join(metadata_parts)}"
+        joined = ", ".join(metadata_parts)
+        first, _, rest = joined.partition("\n")
+        rendered = f"{representation}  // {first}"
+        if not rest:
+            return rendered
+        # Every interface member is emitted at a fixed two-space indent (see the
+        # f"  {name}: {type};" sites), so the continuation indent is a constant --
+        # unlike YAML, TypeScript has no depth-varying member indent to derive.
+        return "\n".join([rendered, *self.comment_lines(rest, "  ")])
 
     def process_additional_properties(
         self, schema: dict[str, Any], show_structure: bool = True
@@ -352,17 +363,27 @@ class TypeScriptFormatter(BaseFormatter):
         """Block-comment form: a `//` inside an inline object literal swallows the line."""
         return f"object /* recursive: {type_name} */"
 
+    _EMBEDDED_COMMENT_BREAK: Final[re.Pattern[str]] = re.compile(r"\s*\n\s*//\s*")
+
     @staticmethod
     def _inline_comment(value: Any) -> str:
         """Rewrite a trailing ``// ...`` comment as a block comment.
 
         A ``//`` comment inside a single-line inline object literal would swallow the
-        remainder of the line, including the closing brace and every later field.
+        remainder of the line, including the closing brace and every later field. When
+        ``add_metadata`` emitted continuation lines for a multi-line description, those
+        lines carry their own ``\\n  // `` breaks; folding this literal back into one
+        physical line must strip those markers too, or a ``//`` leaks inside the
+        ``/* ... */`` wrapper and reads as a nested comment.
         """
         text = str(value)
         head, sep, tail = text.partition("  // ")
         if not sep:
             return text
+        # An inline literal is one physical line: fold the continuation comment lines
+        # add_metadata produced back in, stripping their "//" so no marker leaks inside
+        # the /* ... */ wrapper. Runs BEFORE the "*/" escape below.
+        tail = TypeScriptFormatter._EMBEDDED_COMMENT_BREAK.sub(" ", tail)
         safe_tail = tail.replace("*/", "* /")
         return f"{head} /* {safe_tail} */"
 

@@ -613,6 +613,29 @@ class YAMLFormatter(BaseFormatter):
         # Rule 5 -- not block-eligible.
         return None, []
 
+    @staticmethod
+    def _token_owned_metadata_keys(value: dict[str, Any]) -> tuple[str, ...]:
+        """Metadata keys this formatter's TYPE TOKEN already states for ``value``.
+
+        ``process_type_value`` embeds ``(PATTERN: ...)``/``(FORMAT: ...)`` into the token
+        only on the ``type_name == "string"`` arm, so those keys must be excluded from the
+        trailing comment for exactly that node shape -- and only that one. A ``pattern`` on
+        a node without ``"type": "string"`` is never in the token, so it must still reach
+        the comment or the constraint disappears from the prompt entirely.
+
+        Length and range keys are NOT listed here: ``format_metadata_parts`` already skips
+        those internally (base.py, the "integrated into the type description" arms), and
+        that skip is correct for TypeScript too. ``pattern``/``format`` cannot move into
+        that function because TypeScript's token does not embed them.
+
+        Args:
+            value: The field/node definition being rendered.
+
+        Returns:
+            ``("pattern", "format")`` when ``value["type"] == "string"``, else ``()``.
+        """
+        return ("pattern", "format") if value.get("type") == "string" else ()
+
     def _metadata_parts(self, value: dict[str, Any]) -> list[str]:
         """The comment fragments ``add_metadata`` would append for ``value``, in its order.
 
@@ -640,7 +663,7 @@ class YAMLFormatter(BaseFormatter):
         # ``title``/``description``/``default`` are already supplied above; METADATA_MAP must
         # never re-supply them (D5: that is what restated ``(defaults to X)`` next to
         # ``(default=X)``).
-        exclude = ("title", "description", "default")
+        exclude = ("title", "description", "default") + self._token_owned_metadata_keys(value)
         available_metadata = self.get_available_metadata(value)
         if available_metadata:
             filtered_metadata = [m for m in available_metadata if m not in exclude]
@@ -744,7 +767,7 @@ class YAMLFormatter(BaseFormatter):
             ("title", "description", "default", "const")
             if deferred
             else ("title", "description", "default")
-        )
+        ) + self._token_owned_metadata_keys(value)
         available_metadata = self.get_available_metadata(value)
         if available_metadata:
             filtered_metadata = [m for m in available_metadata if m not in exclude]
@@ -757,7 +780,10 @@ class YAMLFormatter(BaseFormatter):
         if deferred:
             # Drop anything the slot body (or the representation itself) already states,
             # then fold the survivors into the slot instead of appending a comment.
-            resolved = self.hoist_deferred_comments(str(representation))
+            # QUERY, not render: the hoist rewrites a multi-line body into several comment
+            # lines, so a rendered resolve would no longer contain a multi-line part
+            # verbatim and the description would be folded in twice.
+            resolved = self.resolved_deferred_text(representation)
             survivors = [part for part in parts if part not in resolved]
             if not survivors:
                 return representation
@@ -869,11 +895,7 @@ class YAMLFormatter(BaseFormatter):
             # document line, which is a ``yaml.safe_load`` ScannerError. Prefix every line;
             # a blank one becomes a bare ``#`` with no dangling space.
             body = ", ".join(comments)
-            lines = [
-                f"{self.comment_prefix} {line}" if line.strip() else self.comment_prefix
-                for line in body.split("\n")
-            ]
-            return "\n".join(lines) + "\n"
+            return "\n".join(self.comment_lines(body)) + "\n"
         return ""
 
     def get_required_fields_comment(self) -> str:

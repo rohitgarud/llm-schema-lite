@@ -32,10 +32,12 @@ from tests.conftest import (
     EventWithDate,
     ExclusiveMinMax,
     FullFeaturedModel,
+    HashInPatternModel,
     IntEnumModel,
     LiteralSingle,
     LiteralUnion,
     ModelWithAlias,
+    MultiLineDescriptionModel,
     ObjectAdditionalPropsFalse,
     ObjectRequiredOnly,
     ObjectWithDefaults,
@@ -56,6 +58,7 @@ from tests.conftest import (
     TreeNode,
     UnionHeavy,
     UnionTypes,
+    User,
     WithFieldDescriptions,
     WithTitleDescription,
 )
@@ -1605,3 +1608,183 @@ def test_yaml_render_contains_no_pyyaml_anchors():
             ).transform_schema()
             assert "&id0" not in result, f"{model.__name__} emitted a PyYAML anchor:\n{result}"
             assert "*id0" not in result, f"{model.__name__} emitted a PyYAML alias:\n{result}"
+
+
+# ============================================================================
+# lsl-2026-09-05-006 -- hash-in-pattern and multi-line descriptions
+# ============================================================================
+
+
+def _yaml(model: type[BaseModel], *, include_metadata: bool = True) -> str:
+    """Render ``model`` as YAML for this section's assertions."""
+    return YAMLFormatter(
+        model.model_json_schema(), include_metadata=include_metadata
+    ).transform_schema()
+
+
+def test_yaml_hash_glued_pattern_renders_intact() -> None:
+    """A ``#`` glued to a preceding character is never treated as a comment marker.
+
+    Exact-line assertion, NOT routed through ``extract_comment_slots``: that helper is an
+    assertion-side heuristic that cannot parse a ``#`` inside a quoted YAML scalar.
+    """
+    result = _yaml(HashInPatternModel)
+    lines = result.split("\n")
+    assert "tag*: 'string (PATTERN: ^#[0-9a-f]{6}$)'  # Hex colour" in lines
+    yaml.safe_load(result)
+
+
+def test_yaml_hash_glued_pattern_in_default_renders_intact() -> None:
+    """A ``#`` inside a *default* value survives too (ticket Risk: defaults containing #)."""
+    result = _yaml(HashInPatternModel)
+    lines = result.split("\n")
+    assert "shade: 'string (PATTERN: ^#[0-9a-f]{3,6}$)'  # (default='#ffffff')" in lines
+    yaml.safe_load(result)
+
+
+def test_yaml_whitespace_preceded_hash_in_pattern_renders_intact() -> None:
+    """Research Q28's ``^a #b$``: a whitespace-preceded ``#`` inside a quoted scalar."""
+    result = _yaml(HashInPatternModel)
+    lines = result.split("\n")
+    assert "spaced*: 'string (PATTERN: ^a #b$)'  # Whitespace before the hash" in lines
+    yaml.safe_load(result)
+
+
+def test_yaml_multiline_description_top_level_round_trips() -> None:
+    """A top-level field's continuation line is a ``#`` comment at column 0."""
+    result = _yaml(MultiLineDescriptionModel)
+    lines = result.split("\n")
+    assert "summary*: string  # line one" in lines
+    assert "# line two" in lines
+    assert "line two" not in [line.strip() for line in lines if not line.lstrip().startswith("#")]
+    yaml.safe_load(result)
+
+
+def test_yaml_multiline_description_nested_block_round_trips() -> None:
+    """A nested block field's continuation line matches that field's own 2-space indent."""
+    result = _yaml(MultiLineDescriptionModel)
+    lines = result.split("\n")
+    assert "  step*: string  # first step" in lines
+    assert "  # second step" in lines
+    yaml.safe_load(result)
+
+
+def test_yaml_multiline_description_sequence_item_round_trips() -> None:
+    """A ``- `` sequence item aligns its continuation past the dash, not to it."""
+    result = _yaml(MultiLineDescriptionModel)
+    lines = result.split("\n")
+    assert "- step*: string  # first step" in lines
+    assert "  # second step" in lines
+    yaml.safe_load(result)
+
+
+def test_yaml_multiline_description_emits_no_bare_document_line() -> None:
+    """No physical line of the render is a bare, uncommented continuation fragment."""
+    result = _yaml(MultiLineDescriptionModel)
+    for line in result.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        assert ":" in stripped, f"bare document line in YAML render: {line!r}"
+
+
+def test_yaml_multiline_description_whole_render_is_stable() -> None:
+    """Whole-string golden for the three indent contexts in one model."""
+    assert _yaml(MultiLineDescriptionModel).rstrip("\n") == (
+        "# Description: Per-field descriptions containing real newlines "
+        "(lsl-2026-09-05-006).\n"
+        "\n"
+        "# Fields marked with * are required\n"
+        "\n"
+        "summary*: string  # line one\n"
+        "# line two\n"
+        "nested*:\n"
+        "  step*: string  # first step\n"
+        "  # second step\n"
+        "items*:\n"
+        "- step*: string  # first step\n"
+        "  # second step\n"
+    ).rstrip("\n")
+
+
+def test_yaml_multiline_description_metadata_off_is_plain() -> None:
+    """With metadata off there is no comment at all and still no bare line."""
+    result = _yaml(MultiLineDescriptionModel, include_metadata=False)
+    assert "#" not in result
+    yaml.safe_load(result)
+
+
+# ============================================================================
+# lsl-2026-09-05-006 -- pattern/format stated once per field (fix 3)
+# ============================================================================
+
+
+def _yaml_field_lines(result: str) -> list[str]:
+    """Every physical line of ``result`` that renders a field (not a comment/blank)."""
+    return [ln for ln in result.split("\n") if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def test_yaml_pattern_is_not_restated_in_the_comment() -> None:
+    """The token already renders ``(PATTERN: ...)``; the comment must not repeat it."""
+    result = _yaml(PatternConstraints)
+    assert "(PATTERN:" in result
+    assert "pattern:" not in result
+
+
+def test_yaml_format_is_not_restated_in_the_comment() -> None:
+    """Same rule for ``format``, including the ``_format`` underscore variant."""
+    for model in (StringFormatEmail, StringFormatUri):
+        result = _yaml(model)
+        assert "(FORMAT:" in result
+        assert "format:" not in result
+
+
+def test_yaml_pattern_appears_at_most_once_per_field_line() -> None:
+    """3C acceptance: no field line states the same constraint keyword twice."""
+    for model in (Address, PatternConstraints, StringPattern, User, HashInPatternModel):
+        result = _yaml(model)
+        for line in _yaml_field_lines(result):
+            assert line.lower().count("pattern") <= 1, f"{model.__name__}: {line!r}"
+            assert line.lower().count("format") <= 1, f"{model.__name__}: {line!r}"
+
+
+def test_yaml_pattern_survives_on_a_non_string_typed_node() -> None:
+    """Information-loss guard: a ``pattern`` NOT on a ``"type": "string"`` node still reports.
+
+    ``_token_owned_metadata_keys`` gates on ``value.get("type") == "string"`` only, so a
+    hand-authored schema without that key keeps its ``pattern:`` comment fragment.
+    """
+    schema: dict[str, Any] = {
+        "type": "object",
+        "title": "HandAuthored",
+        "properties": {"code": {"pattern": r"^[A-Z]{3}$", "description": "Code"}},
+        "required": ["code"],
+    }
+    result = YAMLFormatter(schema, include_metadata=True).transform_schema()
+    assert "pattern: ^[A-Z]{3}$" in result
+
+
+def test_yaml_metadata_off_is_unchanged_by_the_exclusion() -> None:
+    """``include_metadata=False`` renders carry no constraint text at all, before or after."""
+    for model in (PatternConstraints, StringFormatEmail):
+        result = _yaml(model, include_metadata=False)
+        assert "PATTERN:" not in result
+        assert "pattern:" not in result
+        assert "FORMAT:" not in result
+
+
+def test_yaml_hash_pattern_model_whole_render_is_stable() -> None:
+    """Whole-string golden: the ticket's headline fixture, all three bugs fixed."""
+    assert _yaml(HashInPatternModel).rstrip("\n") == (
+        "# Description: Regex patterns containing ``#`` (lsl-2026-09-05-006).\n"
+        "#\n"
+        "# Every field carries a SECOND metadata part on purpose: with pattern/format now owned\n"
+        "# by the YAML type token, a pattern-only field mints no deferred marker at all and would\n"
+        "# never enter ``_hoist_deferred_line``.\n"
+        "\n"
+        "# Fields marked with * are required\n"
+        "\n"
+        "tag*: 'string (PATTERN: ^#[0-9a-f]{6}$)'  # Hex colour\n"
+        "shade: 'string (PATTERN: ^#[0-9a-f]{3,6}$)'  # (default='#ffffff')\n"
+        "spaced*: 'string (PATTERN: ^a #b$)'  # Whitespace before the hash\n"
+    ).rstrip("\n")

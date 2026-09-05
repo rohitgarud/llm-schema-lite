@@ -119,9 +119,13 @@ def test_jsonish_optional_enum_renders_null_outside_comment() -> None:
 
     # `Role`'s class docstring ("User role enum.") is the $defs description and is folded
     # into the same comment, exactly as contract row 15a folds `Country`'s docstring.
+    # lsl-2026-09-05-006: the hoist no longer absorbs a pre-existing literal `//` comment
+    # into its own fragment (it corrupted any value containing `#` or `//`), so this line
+    # now ends with two `//` comments. A `//` comment runs to end of line, so both are one
+    # legal comment and no information is lost -- only the fragment order changed.
     expected = (
-        'role: string OR null // one of: "admin", "user", "guest"; '
-        "User role enum.; (default='user')"
+        "role: string OR null // (default='user') "
+        '// one of: "admin", "user", "guest"; User role enum.'
     )
     assert line == expected
     assert line.index(" OR null") < line.index("//")

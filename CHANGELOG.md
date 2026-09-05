@@ -96,6 +96,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of being swallowed by the sentinel machinery. Snapshot-visible: `recursive:` marker
   placement and same-name-collision comment text change on the next render; output for
   every schema without a same-named property at two depths is byte-identical. (`5cbfc23`)
+- YAML no longer splits a field's value at the first `#`. The deferred-comment hoist used
+  to treat any `comment_prefix` inside a rendered line as a pre-existing comment marker, so
+  a regex pattern containing `#` (`^#[0-9a-f]{6}$`) was cut in half and the constraint the
+  LM had to satisfy was destroyed. The hoist now owns only the text it minted and emits the
+  value intact; a line that already carries a literal comment ends with two comments, which
+  YAML and JavaScript both accept. (`<sha>`)
+- Multi-line per-field descriptions no longer emit bare document lines. Every continuation
+  line becomes a comment at the field's own indent -- including inside nested blocks and
+  `- ` sequence items in YAML, and at the fixed member indent in TypeScript -- so
+  `yaml.safe_load` accepts the output for every model, and a TypeScript interface no longer
+  gains an orphan `line two;`. An inline object literal folds the continuation lines back
+  into its `/* ... */` comment instead of leaking a `//`. (`<sha>`)
+- YAML states `pattern` and `format` once per field instead of twice. The type token
+  already renders `(PATTERN: ...)` / `(FORMAT: ...)` for a `"type": "string"` node, and the
+  trailing metadata comment restated both. The comment now omits them for exactly that node
+  shape; a `pattern` on a node that is not a typed string is still reported, and TypeScript
+  and JSONish are unaffected. (`<sha>`)
 
 <!-- insertion marker -->
 ## [v0.6.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27

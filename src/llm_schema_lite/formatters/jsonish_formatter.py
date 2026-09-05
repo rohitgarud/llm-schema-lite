@@ -201,7 +201,7 @@ class JSONishFormatter(BaseFormatter):
                 # and be swallowed into it by the hoist. Route the text into the
                 # marker's slot instead -- and only when `process_enum` has not already
                 # folded this same `$defs` description in.
-                resolved = self.hoist_deferred_comments(str(output))
+                resolved = self.resolved_deferred_text(output)
                 if str(_def["description"]) not in resolved:
                     output = self.append_deferred_comment(str(output), str(_def["description"]))
             elif isinstance(output, str) and def_description not in output:

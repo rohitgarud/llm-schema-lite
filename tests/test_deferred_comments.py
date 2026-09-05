@@ -7,6 +7,7 @@ from typing import Any
 
 from llm_schema_lite.formatters.base import BaseFormatter, format_literal_value, infer_json_type
 from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
+from llm_schema_lite.formatters.yaml_formatter import YAMLFormatter
 
 TOKEN_RE = re.compile(r"^⟪lsl[0-9a-f]{8}\.\d+⟫$")
 
@@ -213,3 +214,183 @@ def test_base_get_title_description_default_value_returns_empty() -> None:
         "",
         "",
     )
+
+
+# ============================================================================
+# comment_lines / _continuation_indent / resolved_deferred_text
+# (lsl-2026-09-05-006)
+# ============================================================================
+
+
+def _yaml_formatter() -> YAMLFormatter:
+    """Build a concrete ``YAMLFormatter`` instance for hoist/helper unit tests."""
+    return YAMLFormatter({"type": "object", "properties": {}})
+
+
+def test_comment_lines_blank_line_has_no_dangling_space() -> None:
+    """A blank physical line becomes a bare prefix, with no trailing space."""
+    assert _yaml_formatter().comment_lines("a\n\nb") == ["# a", "#", "# b"]
+
+
+def test_comment_lines_empty_body_returns_bare_prefix() -> None:
+    """``comment_lines("")`` is ``[prefix]`` -- never an empty list."""
+    assert _yaml_formatter().comment_lines("") == ["#"]
+
+
+def test_comment_lines_applies_indent_to_every_line() -> None:
+    """``indent`` is prepended before the prefix on every emitted line."""
+    assert _yaml_formatter().comment_lines("a\nb", "  ") == ["  # a", "  # b"]
+
+
+def test_comment_lines_uses_the_formatter_s_own_prefix() -> None:
+    """JSONish renders ``//``, not ``#`` -- the prefix is read off ``self``."""
+    assert _formatter().comment_lines("a\nb") == ["// a", "// b"]
+
+
+def test_continuation_indent_top_level_is_empty() -> None:
+    """A line starting in column 0 needs no continuation indent."""
+    assert BaseFormatter._continuation_indent("ml: string") == ""
+
+
+def test_continuation_indent_copies_leading_whitespace() -> None:
+    """A nested block line's own leading run is copied verbatim."""
+    assert BaseFormatter._continuation_indent("  z: string") == "  "
+    assert BaseFormatter._continuation_indent("\t x: 1") == "\t "
+
+
+def test_continuation_indent_replaces_dash_run_with_spaces() -> None:
+    """A ``"- "`` line start aligns to the item's content column, not to the dash."""
+    assert BaseFormatter._continuation_indent("- a: int") == "  "
+    assert BaseFormatter._continuation_indent("  - a: int") == "    "
+
+
+def test_continuation_indent_does_not_treat_bare_dash_key_as_sequence() -> None:
+    """A mapping key beginning with ``-`` but no following space is not a sequence marker."""
+    assert BaseFormatter._continuation_indent("-key: v") == ""
+
+
+def test_resolved_deferred_text_returns_bodies_verbatim_for_multiline_body() -> None:
+    """The query result keeps a multi-line body intact -- no comment-line rewriting."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("l1\nl2")
+    assert formatter.resolved_deferred_text(f"ml: string{token}") == "ml: string\nl1\nl2"
+
+
+def test_resolved_deferred_text_never_leaks_a_marker_token() -> None:
+    """Every marker is excised from the query result."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("body")
+    assert "⟪" not in formatter.resolved_deferred_text(f"k: v{token}")
+
+
+def test_resolved_deferred_text_drops_duplicate_bodies() -> None:
+    """Two markers referencing the same body contribute that body once."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("same")
+    assert formatter.resolved_deferred_text(f"a{token} b{token}") == "a b\nsame"
+
+
+def test_resolved_deferred_text_without_markers_is_the_input() -> None:
+    """No marker means no body list and no newline joiner."""
+    assert _yaml_formatter().resolved_deferred_text("k: v") == "k: v"
+
+
+def test_resolved_deferred_text_non_string_input_stringifies() -> None:
+    """``object`` typing: a non-str ``representation`` returns ``str(representation)``."""
+    assert _yaml_formatter().resolved_deferred_text(5) == "5"
+
+
+# ============================================================================
+# _hoist_deferred_line (lsl-2026-09-05-006)
+# ============================================================================
+
+
+def test_hoist_deferred_line_absorbs_no_pre_existing_hash_comment() -> None:
+    """Step-6 removal, pinned deliberately (design A7): ``# old  # new``, not a split value.
+
+    A future reader who dislikes the double comment must change this test and read the
+    removal note in ``_hoist_deferred_line`` rather than silently restoring the branch.
+    """
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("new")
+    assert formatter._hoist_deferred_line(f"k: v{token}  # old") == "k: v  # old  # new"
+
+
+def test_hoist_deferred_line_preserves_hash_glued_pattern_value() -> None:
+    """The ticket's headline case: a ``#`` glued to a preceding character stays intact."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("pattern: ^#[0-9a-f]{6}$")
+    line = f"tag: 'string (PATTERN: ^#[0-9a-f]{{6}}$)'{token}"
+    assert formatter._hoist_deferred_line(line) == (
+        "tag: 'string (PATTERN: ^#[0-9a-f]{6}$)'  # pattern: ^#[0-9a-f]{6}$"
+    )
+
+
+def test_hoist_deferred_line_preserves_whitespace_preceded_hash_in_pattern() -> None:
+    """Research Q28's ``^a #b$`` counter-example: whitespace before ``#`` also stays intact.
+
+    This is the case option 1B ("only a whitespace-preceded prefix is a marker") would NOT
+    have fixed, and is why the design deletes the absorb branch outright.
+    """
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("odd")
+    line = f"tag: 'string (PATTERN: ^a #b$)'{token}"
+    assert formatter._hoist_deferred_line(line) == "tag: 'string (PATTERN: ^a #b$)'  # odd"
+
+
+def test_hoist_deferred_line_jsonish_absorbs_no_pre_existing_slash_comment() -> None:
+    """JSONish analogue of the ``# old  # new`` pin, including the trailing-comma rule."""
+    formatter = _formatter()
+    token = formatter.defer_comment("new")
+    assert (
+        formatter._hoist_deferred_line(f"  url: string{token}, // old")
+        == "  url: string, // old // new"
+    )
+
+
+def test_hoist_deferred_line_multiline_body_top_level() -> None:
+    """A body with ``"\\n"`` becomes one comment line per physical line, at column 0."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("l1\nl2\n\nl4")
+    assert formatter._hoist_deferred_line(f"ml: string{token}") == (
+        "ml: string  # l1\n# l2\n#\n# l4"
+    )
+
+
+def test_hoist_deferred_line_multiline_body_nested_block_indent() -> None:
+    """Continuation lines inherit the dumped line's own leading-space indent."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("l1\nl2\n\nl4")
+    assert formatter._hoist_deferred_line(f"  z: string{token}") == (
+        "  z: string  # l1\n  # l2\n  #\n  # l4"
+    )
+
+
+def test_hoist_deferred_line_multiline_body_sequence_item_indent() -> None:
+    """A ``"- "`` line start aligns continuations to the item's content column."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("l1\nl2\n\nl4")
+    assert formatter._hoist_deferred_line(f"- a: int{token}") == (
+        "- a: int  # l1\n  # l2\n  #\n  # l4"
+    )
+
+
+def test_hoist_deferred_line_multiline_body_nested_sequence_item_indent() -> None:
+    """A ``"  - "`` line start compounds the leading-run and dash-run rules."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("l1\nl2\n\nl4")
+    assert formatter._hoist_deferred_line(f"  - a: int{token}") == (
+        "  - a: int  # l1\n    # l2\n    #\n    # l4"
+    )
+
+
+def test_hoist_deferred_line_single_line_body_is_byte_identical() -> None:
+    """The single-line path is unchanged: no newline is ever introduced."""
+    formatter = _yaml_formatter()
+    token = formatter.defer_comment("one line")
+    assert formatter._hoist_deferred_line(f"k: v{token}") == "k: v  # one line"
+
+
+def test_hoist_deferred_line_without_marker_returns_input_unchanged() -> None:
+    """The fast path is untouched."""
+    assert _yaml_formatter()._hoist_deferred_line("k: 'a #b'  # plain") == "k: 'a #b'  # plain"
