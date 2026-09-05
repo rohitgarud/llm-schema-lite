@@ -1,5 +1,5 @@
 .PHONY: help install sync install-dev install-dspy install-pre-commit pre-commit-run
-.PHONY: test test-cov test-cov-full test-parallel test-fast test-slow test-dspy
+.PHONY: test test-cov test-cov-full test-parallel test-fast test-slow test-dspy bench-dspy
 .PHONY: lint check format clean build changelog release_notes
 .PHONY: publish-test publish update venv setup
 
@@ -52,6 +52,11 @@ test-fast:  ## Run tests excluding slow ones
 
 test-slow:  ## Run only slow tests
 	pytest -m slow -rP
+
+# Benchmarking
+bench-dspy:  ## Run the DSPy adapter benchmark (see benchmarking/dspy_adapters/README.md)
+	@uv pip install -e ".[dspy]" > /dev/null 2>&1 || echo "DSPy already installed"
+	.venv/bin/python -m benchmarking.dspy_adapters $(BENCH_ARGS)
 
 # Code Quality
 pre-commit-run:  ## Run pre-commit on all files

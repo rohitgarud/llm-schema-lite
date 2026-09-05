@@ -1,0 +1,371 @@
+"""Runners for the two DSPy adapter benchmark arms, plus the #1871 reproduction.
+
+Two measurement arms live here, and they are never merged (see `outcomes.py`):
+
+- The offline **prompt-cost** arm (`run_offline_arm` / `measure_prompt`) renders
+  `adapter.format(signature, [], inputs)` for every (adapter, signature) cell and counts
+  messages/characters/`tiktoken` tokens. It is exact, deterministic, model-free, and
+  sub-second.
+- The live **outcomes** arm (`run_live_arm` / `run_one_trial`) drives real
+  `dspy.Predict` calls against a caller-supplied LM and classifies what happens.
+
+R6 is enforced structurally, not just by discipline: `run_offline_arm` (and everything it
+calls) never constructs a `dspy.LM`, and this module never imports `.config` or `.cli` --
+so "the collected test suite touches no network" is a fact about the import graph, not a
+promise about behaviour.
+
+Δ2 construction rule: `run_live_arm` takes an `lm_factory: Callable[[Adapter], BaseLM]`
+rather than a single shared `lm`, because a `DummyLM`-family fake renders its canned answer
+*through the adapter passed to its own constructor* -- a fake seeded with the wrong adapter
+manufactures false `parse_error`s. The factory lets each cell build its own
+adapter-seeded LM.
+
+Anti-masking (R9) enforced here: `run_one_trial` isolates every call with
+`dspy.context(lm=..., adapter=..., track_usage=True)`, never global
+`dspy.settings.configure`; it records the raw LM-history-length delta as `lm_calls` and
+flags `fallback_suspected` whenever `lm_calls >= 2` regardless of the classified outcome;
+and `run_live_arm` disables dspy's cache once, up front, via `dspy.configure_cache(...)`
+when `disable_cache` is `True` (the smoke test passes `False` so it never mutates global
+dspy cache state).
+
+Also here: `run_repro_1871_offline`, a synthetic, fully offline reproduction of DSPy issue
+#1871 (ticket AC-4) built from the adapter-seeded fakes in `.fakes`, and `probe_1871_live`,
+the single live probe row -- called only by `cli.py`, only when the live environment is
+configured.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+from typing import Any
+
+import dspy
+import tiktoken
+from dspy.adapters.base import Adapter
+from dspy.clients.base_lm import BaseLM
+
+from .adapters import (
+    ADAPTERS,
+    LIVE_DEFAULT_ADAPTER_IDS,
+    REPRO_1871_ADAPTER_IDS,
+    REPRO_1871_ADAPTERS,
+)
+from .fakes import JSON_OBJECT_RESPONSE_FORMAT, Issue1871LM, JsonObjectOnlyLM
+from .outcomes import Outcome, PromptRow, ReproRow, TrialRow, classify
+from .signatures import SIGNATURE_IDS, SIGNATURES
+
+ENCODING_NAME = "cl100k_base"
+
+_ENCODING: tiktoken.Encoding | None = None
+
+_REPRO_1871_ANSWER: dict[str, Any] = {"answer": "blue", "confidence": 0.9}
+"""Canned Flat-signature answer that satisfies every output mode used in the matrix."""
+
+
+def _get_encoding() -> tiktoken.Encoding:
+    """Return the module-level cl100k_base tiktoken encoding, built once and memoised."""
+    global _ENCODING
+    if _ENCODING is None:
+        _ENCODING = tiktoken.get_encoding(ENCODING_NAME)
+    return _ENCODING
+
+
+def normalize_response_format(value: Any) -> str:
+    """Map a recorded `response_format` kwarg onto "none" | "json_object" | "json_schema".
+
+    `None` (and any other falsy value, e.g. an absent key defaulting to `None`) -> "none".
+    `{"type": "json_object"}` -> "json_object". A Pydantic model class, or
+    `{"type": "json_schema", ...}`, -> "json_schema". Imitates
+    `tests/dspy_helpers.py::recorded_response_format`'s callers; does not import it.
+    """
+    if not value:
+        return "none"
+    if isinstance(value, dict):
+        return "json_object" if value.get("type") == "json_object" else "json_schema"
+    return "json_schema"
+
+
+def measure_prompt(adapter: Adapter, cell_id: str, sig_id: str) -> PromptRow:
+    """Measure one offline prompt-cost cell via `adapter.format()`. Never constructs an LM.
+
+    `adapter_config` is read from the `ADAPTERS` registry's `config_repr` for `cell_id`. On
+    a `format()`-time failure, `classify(exc, lm_calls=0)` decides the `Outcome` and the
+    three measured fields (`n_messages`, `prompt_chars`, `prompt_tokens`) are `None`.
+    """
+    adapter_config = ADAPTERS[cell_id].config_repr
+    sig_cell = SIGNATURES[sig_id]
+
+    try:
+        messages = adapter.format(sig_cell.signature, [], sig_cell.inputs)
+    except BaseException as exc:
+        outcome, error_class = classify(exc, lm_calls=0)
+        return PromptRow(
+            adapter=cell_id,
+            adapter_config=adapter_config,
+            signature=sig_id,
+            n_messages=None,
+            prompt_chars=None,
+            prompt_tokens=None,
+            outcome=outcome,
+            error_class=error_class,
+        )
+
+    n_messages = len(messages)
+    prompt_chars = sum(len(str(message["content"])) for message in messages)
+    concatenated_content = "".join(str(message["content"]) for message in messages)
+    prompt_tokens = len(_get_encoding().encode(concatenated_content))
+    return PromptRow(
+        adapter=cell_id,
+        adapter_config=adapter_config,
+        signature=sig_id,
+        n_messages=n_messages,
+        prompt_chars=prompt_chars,
+        prompt_tokens=prompt_tokens,
+        outcome=Outcome.OK,
+        error_class="",
+    )
+
+
+def run_offline_arm(
+    adapter_ids: list[str] | None = None,
+    signature_ids: list[str] | None = None,
+) -> list[PromptRow]:
+    """Measure every (adapter, signature) prompt-cost cell. Never constructs a `dspy.LM`.
+
+    Defaults to all 9 adapters x all 6 signatures = 54 rows, in `ADAPTERS` x `SIGNATURES`
+    insertion order. Deterministic, network-free, sub-second.
+    """
+    ids = list(ADAPTERS) if adapter_ids is None else adapter_ids
+    sig_ids = list(SIGNATURE_IDS) if signature_ids is None else signature_ids
+
+    rows: list[PromptRow] = []
+    for adapter_id in ids:
+        for sig_id in sig_ids:
+            adapter = ADAPTERS[adapter_id].factory()
+            rows.append(measure_prompt(adapter, adapter_id, sig_id))
+    return rows
+
+
+def run_live_arm(
+    lm_factory: Callable[[Adapter], BaseLM],
+    adapter_ids: list[str] | None = None,
+    signature_ids: list[str] | None = None,
+    trials: int = 1,
+    disable_cache: bool = True,
+) -> list[TrialRow]:
+    """Run live `dspy.Predict` trials for every (adapter, signature, trial) cell.
+
+    `lm_factory` receives the adapter instance under test and returns the LM for that cell
+    (Δ2 construction rule: a fake LM must be seeded with the adapter under test). Defaults
+    to `LIVE_DEFAULT_ADAPTER_IDS` x all 6 signatures x 1 trial. When `disable_cache` is
+    `True`, `dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)` is
+    called once, before the first cell; the smoke test passes `False` so it never mutates
+    global dspy cache state.
+    """
+    if disable_cache:
+        dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)
+
+    ids = list(LIVE_DEFAULT_ADAPTER_IDS) if adapter_ids is None else adapter_ids
+    sig_ids = list(SIGNATURE_IDS) if signature_ids is None else signature_ids
+
+    rows: list[TrialRow] = []
+    for adapter_id in ids:
+        cell = ADAPTERS[adapter_id]
+        for sig_id in sig_ids:
+            for trial in range(1, trials + 1):
+                adapter = cell.factory()
+                lm = lm_factory(adapter)
+                rows.append(run_one_trial(adapter, adapter_id, cell.config_repr, sig_id, trial, lm))
+    return rows
+
+
+def run_one_trial(
+    adapter: Adapter,
+    adapter_id: str,
+    adapter_config: str,
+    sig_id: str,
+    trial: int,
+    lm: BaseLM,
+) -> TrialRow:
+    """Run one live `dspy.Predict` trial, isolated via `dspy.context`, and classify it.
+
+    Isolation is always via `dspy.context(lm=lm, adapter=adapter, track_usage=True)`, never
+    global `dspy.settings.configure` (R9). `lm_calls` is the LM-history-length delta across
+    the call; `lm_calls >= 2` sets `fallback_suspected=True` regardless of the classified
+    outcome. The three token fields are `None` when `lm_calls == 0` or when every recorded
+    usage dict is empty (a cache hit).
+    """
+    sig_cell = SIGNATURES[sig_id]
+    n0 = len(lm.history)
+    t0 = time.perf_counter()
+    exc: BaseException | None = None
+    try:
+        with dspy.context(lm=lm, adapter=adapter, track_usage=True):
+            dspy.Predict(sig_cell.signature)(**sig_cell.inputs)
+    except BaseException as caught:
+        exc = caught
+    wall_s = time.perf_counter() - t0
+
+    lm_calls = len(lm.history) - n0
+    outcome, error_class = classify(exc, lm_calls)
+    fallback_suspected = lm_calls >= 2
+
+    if lm_calls >= 1:
+        response_format_sent = normalize_response_format(
+            lm.history[-1]["kwargs"].get("response_format")
+        )
+    else:
+        response_format_sent = "none"
+
+    if lm_calls == 0:
+        total_tokens = prompt_tokens_reported = completion_tokens_reported = None
+    else:
+        usages = [entry["usage"] for entry in lm.history[n0:]]
+        if all(not usage for usage in usages):
+            total_tokens = prompt_tokens_reported = completion_tokens_reported = None
+        else:
+            total_tokens = sum(usage.get("total_tokens") or 0 for usage in usages)
+            prompt_tokens_reported = sum(usage.get("prompt_tokens") or 0 for usage in usages)
+            completion_tokens_reported = sum(
+                usage.get("completion_tokens") or 0 for usage in usages
+            )
+
+    return TrialRow(
+        adapter=adapter_id,
+        adapter_config=adapter_config,
+        signature=sig_id,
+        trial=trial,
+        outcome=outcome,
+        error_class=error_class,
+        wall_s=wall_s,
+        lm_calls=lm_calls,
+        fallback_suspected=fallback_suspected,
+        response_format_sent=response_format_sent,
+        total_tokens=total_tokens,
+        prompt_tokens_reported=prompt_tokens_reported,
+        completion_tokens_reported=completion_tokens_reported,
+    )
+
+
+def run_repro_1871_offline() -> list[ReproRow]:
+    """Synthetic, fully offline reproduction of DSPy issue #1871 (ticket AC-4).
+
+    Part 1 (`part="capability"`) drives each of `REPRO_1871_ADAPTER_IDS` through an
+    adapter-seeded `JsonObjectOnlyLM` and records only `response_format_sent`
+    (`outcome=Outcome.OK` always -- this fake never raises). Part 2 (`part="error"`) drives
+    the same seven ids through an adapter-seeded `Issue1871LM`, which rejects
+    `response_format={"type": "json_object"}` the way LM Studio does, via `run_one_trial` so
+    `outcome`/`error_class`/`lm_calls` come from the exact same `classify()` contract as the
+    live arm. 14 rows, in the id order of `REPRO_1871_ADAPTER_IDS`. No env, no network, no
+    `dspy.LM`.
+    """
+    flat = SIGNATURES["flat"]
+    rows: list[ReproRow] = []
+
+    for adapter_id in REPRO_1871_ADAPTER_IDS:
+        cell = REPRO_1871_ADAPTERS[adapter_id]
+        adapter = cell.factory()
+        lm = JsonObjectOnlyLM([dict(_REPRO_1871_ANSWER)], adapter=adapter)
+        with dspy.context(lm=lm, adapter=adapter, track_usage=True):
+            dspy.Predict(flat.signature)(**flat.inputs)
+        response_format_sent = normalize_response_format(
+            lm.history[-1]["kwargs"].get("response_format")
+        )
+        rows.append(
+            ReproRow(
+                part="capability",
+                adapter=adapter_id,
+                adapter_config=cell.config_repr,
+                response_format_sent=response_format_sent,
+                outcome=Outcome.OK,
+                error_class="",
+                lm_calls=len(lm.history),
+                note="",
+            )
+        )
+
+    for adapter_id in REPRO_1871_ADAPTER_IDS:
+        cell = REPRO_1871_ADAPTERS[adapter_id]
+        adapter = cell.factory()
+        lm = Issue1871LM([dict(_REPRO_1871_ANSWER)], adapter=adapter)
+        trial_row = run_one_trial(adapter, adapter_id, cell.config_repr, "flat", 1, lm)
+        rows.append(
+            ReproRow(
+                part="error",
+                adapter=adapter_id,
+                adapter_config=cell.config_repr,
+                response_format_sent=trial_row.response_format_sent,
+                outcome=trial_row.outcome,
+                error_class=trial_row.error_class,
+                lm_calls=trial_row.lm_calls,
+                note="",
+            )
+        )
+
+    return rows
+
+
+def probe_1871_live(lm: BaseLM) -> ReproRow:
+    """Send a trivial 1-field payload twice through a real endpoint and record one row.
+
+    First with `response_format={"type": "json_object"}`, then with a
+    `{"type": "json_schema", ...}`-shaped payload. Called only by `cli.py`, only when the
+    live environment is configured; not re-exported from `__init__.py`.
+
+    When both succeed, `note` is exactly
+    `not_reproducible: endpoint accepted both {"type":"json_object"} and
+    {"type":"json_schema"}` and `outcome=Outcome.OK`. When one is rejected, `note` carries
+    the `LMError`'s class and message and `outcome`/`error_class` come from `classify`.
+    """
+    adapter_config = "probe_1871_live"
+    lm_calls_start = len(lm.history)
+
+    try:
+        lm(
+            messages=[{"role": "user", "content": "Reply with a JSON object."}],
+            response_format=JSON_OBJECT_RESPONSE_FORMAT,
+        )
+        lm(
+            messages=[{"role": "user", "content": "Reply with a JSON object."}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "probe",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                    },
+                },
+            },
+        )
+    except BaseException as exc:
+        lm_calls = len(lm.history) - lm_calls_start
+        outcome, error_class = classify(exc, lm_calls)
+        note = f"{type(exc).__name__}: {exc}"
+        return ReproRow(
+            part="live_probe",
+            adapter="probe_1871_live",
+            adapter_config=adapter_config,
+            response_format_sent="json_object",
+            outcome=outcome,
+            error_class=error_class,
+            lm_calls=lm_calls,
+            note=note,
+        )
+
+    lm_calls = len(lm.history) - lm_calls_start
+    note = (
+        'not_reproducible: endpoint accepted both {"type":"json_object"} and {"type":"json_schema"}'
+    )
+    return ReproRow(
+        part="live_probe",
+        adapter="probe_1871_live",
+        adapter_config=adapter_config,
+        response_format_sent="json_schema",
+        outcome=Outcome.OK,
+        error_class="",
+        lm_calls=lm_calls,
+        note=note,
+    )
