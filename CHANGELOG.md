@@ -371,6 +371,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The committed offline results (`results/prompt-cost-2026-09-05.*`) were regenerated. Eight
   rows change: six YAML-mode rows from `ba5d7af` and two JSONish `recursive` rows from
   `52d59c9`, not from these fixes. (`00d07ad`)
+- **Pre-commit runs the test suite once per commit, under the project venv.** The `pytest`
+  hook is now staged at `pre-commit` only (it also ran at `commit-msg`), runs with `--no-cov`
+  so `htmlcov/` and `coverage.xml` are no longer written into the tree, and is invoked through
+  `uv run --no-sync`, so the DSPy integration tests are no longer silently skipped by a
+  pyenv interpreter without dspy. ruff is pinned to the same 0.14.x in pre-commit and the dev
+  extra, so `make format` and the hook agree on formatting, and
+  `benchmarking/dspy_adapters` is now type-checked by `make lint` and CI.
+  (`lsl-2026-09-05-014`, `560cf64`)
 
 <!--
   Everything above this marker is hand-written. `make changelog` (git-changelog, in-place via

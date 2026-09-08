@@ -73,7 +73,7 @@ class OutputMode(enum.Enum):
     - JSON: LLM outputs JSON, schema uses full model_json_schema() (verbose)
     - JSONISH: LLM outputs JSON, schema uses simplified BAML-like format (token-efficient)
     - YAML: LLM outputs YAML, schema uses simplified YAML format (token-efficient).
-      EXPERIMENTAL - see lsl-2026-09-04-006 for known formatter defects.
+      The rendered schema is YAML-flavoured prompt text, not a serialization format.
     """
 
     JSON = "json"
@@ -142,8 +142,8 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         (compatible with OpenAI structured outputs)
     - JSONish mode: JSON output with simplified BAML-like
         schemas (60-85% token reduction from verbose JSON schemas)
-    - YAML mode (experimental): YAML output with simplified schemas. Known formatter
-      defects are tracked in lsl-2026-09-04-006.
+    - YAML mode: YAML output with simplified schemas. The rendered schema is
+      YAML-flavoured prompt text, not a serialization format.
     - Simplified schemas for complex input fields (Pydantic models)
     - Robust parsing with fallback mechanisms
 
