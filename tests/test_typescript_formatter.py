@@ -118,9 +118,9 @@ def test_typescript_formatter_with_nested_defs():
     formatter = TypeScriptFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
-    assert (
-        "interface Address {" not in result
-    ), "Address interface is dead output, must not be emitted"
+    assert "interface Address {" not in result, (
+        "Address interface is dead output, must not be emitted"
+    )
 
     # Main interface fields should match the root schema.
     main_fields = parse_typescript_interface_fields(result, interface_name="Schema")
@@ -166,9 +166,9 @@ def test_typescript_formatter_with_constraints():
     # Constraints appear inline in the type when include_metadata=True
     assert "name*: string (1-100 chars)" in result
     assert "age*: number (0 to 150)" in result
-    assert re.search(
-        r"score\*:\s*number\s*\(0(\.0)? to 100(\.0)?\)", result
-    ), f"Expected score range constraint in output. Snippet: {result[:350]!r}"
+    assert re.search(r"score\*:\s*number\s*\(0(\.0)? to 100(\.0)?\)", result), (
+        f"Expected score range constraint in output. Snippet: {result[:350]!r}"
+    )
 
 
 def test_typescript_formatter_with_optional_union():
@@ -1285,9 +1285,9 @@ def test_no_empty_comment_marker_across_all_models_typescript(all_pydantic_model
             assert "// ;" not in line, f"{_name}: empty `// ;` marker in line: {line!r}"
             assert not line.endswith("// "), f"{_name}: trailing bare `// ` in line: {line!r}"
             assert not line.endswith("//"), f"{_name}: trailing bare `//` in line: {line!r}"
-            assert not re.search(
-                r"//.*;\s*$", line
-            ), f"{_name}: `//` comment before `;` terminator in line: {line!r}"
+            assert not re.search(r"//.*;\s*$", line), (
+                f"{_name}: `//` comment before `;` terminator in line: {line!r}"
+            )
 
 
 def test_typescript_single_interface_per_render_across_all_models(all_pydantic_models) -> None:
@@ -1637,9 +1637,9 @@ def test_typescript_multiline_description_emits_no_bare_document_line() -> None:
         stripped = line.strip()
         if not stripped or stripped.startswith("//") or stripped in {"{", "}"}:
             continue
-        assert ":" in stripped or stripped.startswith(
-            "interface"
-        ), f"bare document line in TypeScript render: {line!r}"
+        assert ":" in stripped or stripped.startswith("interface"), (
+            f"bare document line in TypeScript render: {line!r}"
+        )
 
 
 def test_typescript_multiline_description_nested_inline_literal_folds_to_block_comment() -> None:
@@ -1813,9 +1813,9 @@ def test_every_titled_root_is_decorated(
             continue
         exercised += 1
         result = simplify_schema(model, format_type="typescript").to_string()
-        assert result.startswith(
-            f"// Title: {title}"
-        ), f"{name}: expected render to start with '// Title: {title}', got {result[:80]!r}"
+        assert result.startswith(f"// Title: {title}"), (
+            f"{name}: expected render to start with '// Title: {title}', got {result[:80]!r}"
+        )
 
     assert exercised > 0, "guard exercised zero models -- fixture or filter is broken"
 

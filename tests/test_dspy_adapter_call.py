@@ -163,9 +163,9 @@ class TestAcallParity:
         adapter = make_adapter(mode)
         lm = SchemaCapableDummyLM([{"answer": "4"}, {"answer": "4"}], adapter=adapter)
         sync_result, async_result = call_sync_and_async(adapter, lm, QA, [], {"question": "3+3?"})
-        assert (
-            sync_result == async_result
-        ), f"call/acall diverged for {mode}: {sync_result!r} vs {async_result!r}"
+        assert sync_result == async_result, (
+            f"call/acall diverged for {mode}: {sync_result!r} vs {async_result!r}"
+        )
         assert len(lm.lm_kwargs_history) == 2
         projections = [
             response_format_projection(entry.get("response_format"))
@@ -228,7 +228,7 @@ class TestResponseFormat:
             else:
                 asyncio.run(adapter.acall(lm, {}, QA, [], {"question": "3+3?"}))
         assert len(lm.lm_kwargs_history) == 1, (
-            f"{mode}/{call_kind}: expected exactly one LM call, got " f"{len(lm.lm_kwargs_history)}"
+            f"{mode}/{call_kind}: expected exactly one LM call, got {len(lm.lm_kwargs_history)}"
         )
 
     def test_lm_error_propagates_without_response_format_support(self):
@@ -291,9 +291,9 @@ class TestResponseFormatMatrix:
         call_sync_and_async(adapter, lm, signature, [], _SIG_INPUTS[signature])
 
         calls = recorded_calls(lm)
-        assert (
-            len(calls) == 2
-        ), f"row {row}: expected one sync + one async LM call, got {len(calls)}"
+        assert len(calls) == 2, (
+            f"row {row}: expected one sync + one async LM call, got {len(calls)}"
+        )
         projections = [response_format_projection(entry.get("response_format")) for entry in calls]
         assert projections == [expected, expected], (
             f"row {row} ({mode}, {lm_class.__name__}, {signature.__name__}, "
@@ -382,9 +382,9 @@ class TestParallelToolCalls:
         if lm_class is DummyLM:
             assert "tools" not in kwargs, f"row {row}: tools injected for a non-FC LM"
         else:
-            assert (
-                len(kwargs["tools"]) == 1
-            ), f"row {row}: expected exactly one injected tool, got {kwargs.get('tools')!r}"
+            assert len(kwargs["tools"]) == 1, (
+                f"row {row}: expected exactly one injected tool, got {kwargs.get('tools')!r}"
+            )
 
 
 class TestNoPrivateDSPySymbol:
@@ -394,6 +394,5 @@ class TestNoPrivateDSPySymbol:
         """The adapter module no longer references JSONAdapter._json_adapter_call_common."""
         source = inspect.getsource(structured_output_adapter)
         assert "_json_adapter_call_common" not in source, (
-            "structured_output_adapter.py still references DSPy's private "
-            "_json_adapter_call_common"
+            "structured_output_adapter.py still references DSPy's private _json_adapter_call_common"
         )

@@ -124,9 +124,9 @@ class TestStreamingRegistration:
     def test_stream_listener_accepts_adapter(self) -> None:
         """A bare StreamListener("answer") already recognises StructuredOutputAdapter."""
         listener = dspy.streaming.StreamListener("answer")
-        assert (
-            "StructuredOutputAdapter" in listener.adapter_identifiers
-        ), f"Known adapters: {sorted(listener.adapter_identifiers)}"
+        assert "StructuredOutputAdapter" in listener.adapter_identifiers, (
+            f"Known adapters: {sorted(listener.adapter_identifiers)}"
+        )
 
     def test_registered_entry_matches_json_adapter(self) -> None:
         """The registered entry equals (==, not is) the live JSONAdapter entry."""
@@ -138,9 +138,9 @@ class TestStreamingRegistration:
     def test_subclass_is_registered(self) -> None:
         """_SubAdapter.__name__ is registered too, via the recursive subclass walk."""
         listener = dspy.streaming.StreamListener("answer")
-        assert (
-            _SubAdapter.__name__ in listener.adapter_identifiers
-        ), f"Known adapters: {sorted(listener.adapter_identifiers)}"
+        assert _SubAdapter.__name__ in listener.adapter_identifiers, (
+            f"Known adapters: {sorted(listener.adapter_identifiers)}"
+        )
 
     def test_upstream_entries_are_untouched(self) -> None:
         """ChatAdapter, JSONAdapter and XMLAdapter all remain present."""

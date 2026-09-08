@@ -83,7 +83,7 @@ jobs:
       - name: Run ruff
         run: uv run ruff check src tests
       - name: Run mypy
-        run: uv run mypy src
+        run: uv run mypy src benchmarking/dspy_adapters
       - name: Run bandit
         run: uv run bandit -c pyproject.toml -r src
 

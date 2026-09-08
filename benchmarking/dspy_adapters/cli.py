@@ -146,9 +146,9 @@ def _run_list() -> int:
     for adapter_id, cell in ADAPTERS.items():
         print(f"  {adapter_id}  {cell.config_repr}")
     print("signatures:")
-    for sig_id, cell in SIGNATURES.items():
-        input_keys = ", ".join(cell.inputs)
-        print(f"  {sig_id}  {cell.signature.__name__}(inputs={input_keys})")
+    for sig_id, sig_cell in SIGNATURES.items():
+        input_keys = ", ".join(sig_cell.inputs)
+        print(f"  {sig_id}  {sig_cell.signature.__name__}(inputs={input_keys})")
     return 0
 
 

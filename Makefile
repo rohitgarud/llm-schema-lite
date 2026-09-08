@@ -68,7 +68,7 @@ check:  ## Quick health check (fast lint + type check)
 
 lint:  ## Run all linters (ruff, mypy, bandit)
 	ruff check src tests
-	mypy src
+	mypy src benchmarking/dspy_adapters
 	bandit -c pyproject.toml -r src
 	pre-commit run --all-files
 

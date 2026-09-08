@@ -629,8 +629,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         def type_info(v: Any) -> str:
             if v.annotation == ToolCalls:
                 return (
-                    ' (must be a JSON object like {"tool_calls": '
-                    '[{"name": "...", "args": {...}}]})'
+                    ' (must be a JSON object like {"tool_calls": [{"name": "...", "args": {...}}]})'
                 )
             return (
                 f" (must be formatted as a valid Python {get_annotation_name(v.annotation)})"

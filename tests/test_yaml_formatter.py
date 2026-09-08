@@ -1222,8 +1222,7 @@ def test_yaml_formatter_root_fixture_default():
             "# Description: Kitchen-sink fixture for lsl-2026-09-04-015 "
             "(dict/tuple/set/Any container rendering).",
             "#",
-            "# Fields verbatim from the approved design "
-            "(2026-09-04-design-discussion-v2.md 5.1).",
+            "# Fields verbatim from the approved design (2026-09-04-design-discussion-v2.md 5.1).",
             "",
             "# Fields marked with * are required",
             "",
@@ -1490,10 +1489,7 @@ def test_yaml_tree_node_default_depth_block_shape():
     result = YAMLFormatter(TreeNode.model_json_schema(), include_metadata=False).transform_schema()
 
     assert result == (
-        "name*: string\n"
-        "children:\n"
-        "- name*: string\n"
-        "  children: list[object]  # recursive: TreeNode"
+        "name*: string\nchildren:\n- name*: string\n  children: list[object]  # recursive: TreeNode"
     )
 
 
@@ -1972,8 +1968,8 @@ def test_every_titled_root_is_decorated(
             continue
         exercised += 1
         result = simplify_schema(model, format_type="yaml").to_string()
-        assert result.startswith(
-            f"# Title: {title}"
-        ), f"{name}: expected render to start with '# Title: {title}', got {result[:80]!r}"
+        assert result.startswith(f"# Title: {title}"), (
+            f"{name}: expected render to start with '# Title: {title}', got {result[:80]!r}"
+        )
 
     assert exercised > 0, "guard exercised zero models -- fixture or filter is broken"

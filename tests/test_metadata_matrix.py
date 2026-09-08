@@ -274,9 +274,9 @@ def test_nested_positions_honour_include_constraints(fmt: str, position: str, co
     config = FormatterConfig(include_constraints=cons)
     rendered = simplify_schema(schema, config=config, format_type=fmt).to_string()
 
-    assert (
-        "1-5 chars" in rendered
-    ) is cons, f"position={position} fmt={fmt} cons={cons}. Output:\n{rendered}"
+    assert ("1-5 chars" in rendered) is cons, (
+        f"position={position} fmt={fmt} cons={cons}. Output:\n{rendered}"
+    )
 
 
 _BOTH_BOUNDS_SCHEMA: dict[str, Any] = {

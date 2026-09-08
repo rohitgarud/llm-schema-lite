@@ -357,9 +357,9 @@ def assert_mode_header(text: str, mode: OutputMode) -> None:
     expected = YAML_OUTPUT_HEADER if mode is OutputMode.YAML else JSON_OUTPUT_HEADER
     other = JSON_OUTPUT_HEADER if mode is OutputMode.YAML else YAML_OUTPUT_HEADER
     assert expected in text, f"Expected {mode} header {expected!r} missing. Snippet: {text[:200]!r}"
-    assert (
-        other not in text
-    ), f"Unexpected header {other!r} present for {mode}. Snippet: {text[:200]!r}"
+    assert other not in text, (
+        f"Unexpected header {other!r} present for {mode}. Snippet: {text[:200]!r}"
+    )
 
 
 def assert_has_field_marker(text: str, name: str) -> None:
@@ -383,9 +383,9 @@ def assert_note_clause(text: str, field: str) -> None:
 def assert_no_dspy_owned_text(text: str) -> None:
     """Assert `text` contains no DSPy-owned system-message boilerplate."""
     for owned in DSPY_OWNED_TEXT:
-        assert (
-            owned not in text
-        ), f"DSPy-owned text {owned!r} leaked into our output. Snippet: {text[:200]!r}"
+        assert owned not in text, (
+            f"DSPy-owned text {owned!r} leaked into our output. Snippet: {text[:200]!r}"
+        )
 
 
 def assert_message_roles(messages: list[dict[str, Any]], expected: list[str]) -> None:

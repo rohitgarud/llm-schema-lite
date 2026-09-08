@@ -300,11 +300,15 @@ def _render_offline_pivot(rows: list[PromptRow]) -> list[str]:
     for adapter in order:
         cells = [adapter]
         for sig in _PIVOT_SIGNATURE_ORDER:
-            row = by_adapter[adapter].get(sig)
-            if row is None or row.outcome is not Outcome.OK or row.prompt_tokens is None:
+            cell_row = by_adapter[adapter].get(sig)
+            if (
+                cell_row is None
+                or cell_row.outcome is not Outcome.OK
+                or cell_row.prompt_tokens is None
+            ):
                 cells.append("—")
             else:
-                cells.append(str(row.prompt_tokens))
+                cells.append(str(cell_row.prompt_tokens))
         lines.append("| " + " | ".join(cells) + " |")
     return lines
 

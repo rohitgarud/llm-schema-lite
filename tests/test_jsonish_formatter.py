@@ -142,14 +142,14 @@ def test_jsonish_formatter_with_constraints():
     assert_required_optional_consistent(result, schema)
 
     assert "name*:" in result
-    assert (
-        "(1-100 chars)" in result
-    ), f"Expected string length constraint '(1-100 chars)' in output. Snippet: {result[:300]!r}"
+    assert "(1-100 chars)" in result, (
+        f"Expected string length constraint '(1-100 chars)' in output. Snippet: {result[:300]!r}"
+    )
 
     assert "age*:" in result
-    assert (
-        "(0 to 150)" in result
-    ), f"Expected integer range constraint '(0 to 150)' in output. Snippet: {result[:300]!r}"
+    assert "(0 to 150)" in result, (
+        f"Expected integer range constraint '(0 to 150)' in output. Snippet: {result[:300]!r}"
+    )
 
     assert "score*:" in result
     assert re.search(r"\(0(\.0)? to 100(\.0)?\)", result), (
@@ -2084,9 +2084,9 @@ def test_no_empty_comment_marker_across_all_models_jsonish(all_pydantic_models) 
         result = formatter.transform_schema()
 
         for line in result.splitlines():
-            assert not bare_marker_pattern.search(
-                line
-            ), f"{_name}: bare comment marker in line: {line!r}"
+            assert not bare_marker_pattern.search(line), (
+                f"{_name}: bare comment marker in line: {line!r}"
+            )
 
 
 def test_no_dict_repr_across_all_models_jsonish(all_pydantic_models) -> None:
@@ -2120,9 +2120,9 @@ def test_jsonish_no_line_ends_with_trailing_whitespace(
         for line in rendered.split("\n"):
             if not line.strip():
                 continue
-            assert (
-                line == line.rstrip()
-            ), f"trailing whitespace in {name} (im={im} desc={desc} cons={cons}): {line!r}"
+            assert line == line.rstrip(), (
+                f"trailing whitespace in {name} (im={im} desc={desc} cons={cons}): {line!r}"
+            )
 
 
 def test_jsonish_transform_schema_idempotent() -> None:
@@ -2873,9 +2873,9 @@ def test_every_titled_root_is_decorated(
             continue
         exercised += 1
         result = simplify_schema(model, format_type="jsonish").to_string()
-        assert result.startswith(
-            f"//Title: {title}"
-        ), f"{name}: expected render to start with '//Title: {title}', got {result[:80]!r}"
+        assert result.startswith(f"//Title: {title}"), (
+            f"{name}: expected render to start with '//Title: {title}', got {result[:80]!r}"
+        )
 
     assert exercised > 0, "guard exercised zero models -- fixture or filter is broken"
 

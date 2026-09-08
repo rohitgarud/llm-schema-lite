@@ -14,7 +14,7 @@ repos:
       - id: detect-private-key
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+    rev: v0.14.14
     hooks:
       - id: ruff
         args: [ --fix ]
@@ -51,10 +51,11 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: pytest
+        entry: uv run --no-sync pytest
         language: system
         pass_filenames: false
-        args: ["-x"]
+        stages: [pre-commit]
+        args: ["-x", "--no-cov"]
 
   - repo: https://github.com/opensource-nepal/commitlint
     rev: v1.2.0
