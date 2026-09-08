@@ -46,8 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   27.8%, and `Order` goes from 727 tokens to 340, below JSONish's 414. A schema with more
   than ten distinct `$defs` may also render *wider* unions than before, because the dead
   interface pass no longer consumes the recursion-expansion budget that was collapsing them
-  into `anyOf: N options`. `FormatterConfig.hoist_classes` remains unread; a
-  named-interface rendering mode is owned by `lsl-2026-04-29-002`. (`lsl-2026-09-05-011`)
+  into `anyOf: N options`. Nothing hoists `$defs` into named interfaces, and no such mode is
+  planned — see the `hoist_enums`/`hoist_classes` removal below. (`lsl-2026-09-05-011`)
 - **A TypeScript interface member terminates before its comment, not after it.**
   `name*: string  // Full name;` now reads `name*: string;  // Full name`, and a multi-line
   description's continuation lines stay pure comments instead of collecting the `;`. The
@@ -75,6 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continuation line of a multi-line description is commented, so all 148 fixture renders
   round-trip through `yaml.safe_load`. Breaking for any consumer parsing the old hoisted
   shape. (`ba5d7af`)
+- **`FormatterConfig.hoist_enums` and `hoist_classes` are removed.** No formatter ever read
+  either field, so no rendered output changes — the options were accepted and silently
+  ignored. Code that passed `FormatterConfig(hoist_enums=...)` or
+  `FormatterConfig(hoist_classes=...)` now raises `TypeError` instead of quietly doing
+  nothing; delete the argument. Hoisting is not a supported rendering mode and none is
+  planned. (`lsl-2026-04-29-002`)
 
 ### Added
 

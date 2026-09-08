@@ -183,44 +183,6 @@ class TestFormatterConfig:
         assert "name!" in output
         assert "age!" in output
 
-    def test_hoist_enums_true(self):
-        """Test hoist_enums=True option."""
-        config = FormatterConfig(hoist_enums=True)
-        # This tests the config is accepted - actual hoisting behavior
-        # depends on the schema structure
-        result = simplify_schema(User, config=config)
-        assert result is not None
-
-    def test_hoist_enums_false(self):
-        """Test hoist_enums=False option."""
-        config = FormatterConfig(hoist_enums=False)
-        result = simplify_schema(User, config=config)
-        assert result is not None
-
-    def test_hoist_enums_auto(self):
-        """Test hoist_enums='auto' option."""
-        config = FormatterConfig(hoist_enums="auto")
-        result = simplify_schema(User, config=config)
-        assert result is not None
-
-    def test_hoist_classes_true(self):
-        """Test hoist_classes=True option."""
-        config = FormatterConfig(hoist_classes=True)
-        result = simplify_schema(User, config=config)
-        assert result is not None
-
-    def test_hoist_classes_false(self):
-        """Test hoist_classes=False option."""
-        config = FormatterConfig(hoist_classes=False)
-        result = simplify_schema(User, config=config)
-        assert result is not None
-
-    def test_hoist_classes_list(self):
-        """Test hoist_classes with a list of class names."""
-        config = FormatterConfig(hoist_classes=["SomeClass"])
-        result = simplify_schema(User, config=config)
-        assert result is not None
-
     def test_max_recursion_depth_defaults_to_two(self):
         """Test that max_recursion_depth defaults to 2."""
         config = FormatterConfig()
@@ -258,7 +220,7 @@ class TestFormatterConfigIntegration:
         class EnumModel(BaseModel):
             status: str
 
-        config = FormatterConfig(hoist_enums=True)
+        config = FormatterConfig()
         result = simplify_schema(EnumModel, config=config)
         assert result is not None
 

@@ -1,7 +1,6 @@
 """Configuration dataclass for formatters."""
 
 from dataclasses import dataclass, replace
-from typing import Literal
 
 DESCRIPTION_KEYWORDS: frozenset[str] = frozenset(
     {"title", "description", "id", "$comment", "x-enum-descriptions"}
@@ -44,7 +43,6 @@ class FormatterConfig:
 
     This class allows customization of formatter output including:
     - Instruction prefix
-    - Enum/class hoisting behavior
     - Union separators and markers
     - Indentation
     - Optional/required field markers
@@ -53,9 +51,6 @@ class FormatterConfig:
 
     Attributes:
         prefix: Instruction prefix to prepend to output (default: None)
-        hoist_enums: Enum hoisting behavior - True (always), False (never), or "auto" (default)
-        hoist_classes: Class/type hoisting behavior - True (always), False (never),
-            "auto" (default), or list of specific class names to hoist
         union_separator: Separator for union types (default: " | ")
         indent: Number of spaces for indentation (default: 2)
         optional_marker: Marker for optional fields (default: "" - none)
@@ -90,8 +85,6 @@ class FormatterConfig:
     """
 
     prefix: str | None = None
-    hoist_enums: bool | Literal["auto"] = "auto"
-    hoist_classes: bool | Literal["auto"] | list[str] = "auto"
     union_separator: str = DEFAULT_UNION_SEPARATOR
     indent: int = 2
     optional_marker: str = ""
