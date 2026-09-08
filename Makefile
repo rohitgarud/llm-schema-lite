@@ -116,4 +116,5 @@ update: clean sync install-pre-commit lint  ## Full project update
 	@echo "✓ Project updated successfully!"
 
 release_notes:  ## Generate release notes
-	sed -n '/## \[v0.2.1\]/,/## \[/p' CHANGELOG.md | head -n -1
+	@v=$$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/llm_schema_lite/__init__.py); \
+	sed -n "/## \[v$$v\]/,/## \[/p" CHANGELOG.md | head -n -1

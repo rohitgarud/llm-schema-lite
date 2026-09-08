@@ -16,6 +16,7 @@
   - `exceptions.py` — package-specific exceptions
 - **Tests**: `tests/` (pytest); **Benchmarks**: `benchmarking/` (optional `[benchmark]`)
 - **Examples**: `examples/` for basic usage
+- **Tickets & RPI artifacts**: `thoughts/tasks/<id>-<slug>/` — a local, gitignored git repo, not part of this repo's history
 
 ## Key Conventions
 

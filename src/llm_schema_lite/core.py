@@ -3,10 +3,7 @@
 import json
 from typing import Any, Literal, cast
 
-try:
-    from pydantic import BaseModel
-except ImportError:
-    BaseModel = None  # type: ignore[assignment, misc]
+from pydantic import BaseModel
 
 from .coercion import CoercionMetadata, ParseConfig, coerce_to_schema
 from .exceptions import ConversionError, UnsupportedModelError
@@ -230,7 +227,7 @@ def simplify_schema(
         age: int
     """
     # Handle BaseModel
-    if BaseModel is not None and isinstance(model, type) and issubclass(model, BaseModel):
+    if isinstance(model, type) and issubclass(model, BaseModel):
         try:
             original_schema = model.model_json_schema()
             enrich_schema_with_enum_metadata(model, original_schema)

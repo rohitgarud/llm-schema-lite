@@ -152,3 +152,10 @@ Thumbs.db
 .ruff_cache/
 
 .cursor/
+
+# RPI workflow artefacts — each is its own local git repo, not part of this history
+/thoughts/
+/.shared/
+
+# JSONSchemaBench dataset (~100 MB) — recreate with: uv run benchmarking/fetch_dataset.py
+/jsonschembench_dataset.json

@@ -289,8 +289,6 @@ class BaseFormatter(ABC):
             f"{DEFERRED_OPEN}{DEFERRED_TAG}{self._deferred_nonce}\\.(\\d+){DEFERRED_CLOSE}"
         )
 
-        # Pre-warm cache for common patterns
-
     def _resolve_root_ref(self) -> tuple[str, dict[str, Any]] | None:
         """Return ``(def_name, def_schema)`` when the root is a bare ``$ref`` to an object def.
 
@@ -458,20 +456,6 @@ class BaseFormatter(ABC):
         else:
             # Fallback for unknown schema types
             return {"schema": "object"}
-
-    #     # Pre-warm cache for common patterns
-    #     self._warm_cache()
-
-    # def _warm_cache(self) -> None:
-    #     """Pre-process common reference patterns."""
-    #     for ref_key, ref_def in self.defs.items():
-    #         # Only cache simple types that are NOT enums
-    #         if (
-    #             "type" in ref_def
-    #             and ref_def["type"] in ["string", "integer", "number", "boolean"]
-    #             and "enum" not in ref_def
-    #         ):
-    #             self._ref_cache[ref_key] = self.TYPE_MAP.get(ref_def["type"], ref_def["type"])
 
     def _is_problematic_schema(self, schema: dict[str, Any]) -> bool:
         """Detect schemas that are likely to cause issues."""

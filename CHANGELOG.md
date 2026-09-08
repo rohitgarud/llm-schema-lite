@@ -84,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `benchmarking/fetch_dataset.py` — downloads JSONSchemaBench into the repo-root
+  `jsonschembench_dataset.json` (~100 MB, now gitignored) in the shape
+  `format_jsonschembench_schema.py` reads. Idempotent: skips when the file already
+  exists. Requires the `benchmark` extra. (`lsl-2026-09-04-013`)
 - `StructuredOutputAdapter(prompt_layout=...)` and the `PromptLayout` enum
   (`PromptLayout.SECTIONS`, `PromptLayout.JSON_BLOCK`). (`c1fb265`)
 - `StructuredOutputAdapter(formatter_config=...)` — the single passthrough for schema
@@ -193,6 +197,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoding is still unavailable and records `encoding: cl100k_base (unavailable)` in the
   report provenance; the exit code is unchanged (`0`). Seven over-strong "no network"
   statements across the benchmark package were corrected. (`f1191eb`)
+- Bare `pytest`/`make test` no longer force `--cov-report=html` and `--cov-report=xml` by
+  default; `make test-cov`/`make test-cov-full` and CI already request those reports
+  explicitly and are unaffected. (`lsl-2026-09-04-013`)
+
+### Removed
+
+- Unreferenced, empty `src/llm_schema_lite/parsers/typescript_parser.py` and
+  `src/llm_schema_lite/validators/typescript_validators.py` (no imports, no tests).
+  (`lsl-2026-09-04-013`)
+- The unreachable `BaseModel = None` `ImportError` fallback in `core.py` — pydantic is a
+  hard dependency, so the except branch never ran. (`lsl-2026-09-04-013`)
+- The dead, already-commented-out `_warm_cache` method and its orphaned call-site comment
+  in `formatters/base.py`. (`lsl-2026-09-04-013`)
 
 ### Fixed
 

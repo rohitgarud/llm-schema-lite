@@ -36,8 +36,8 @@ jobs:
           PY
       - name: Run tests and generate coverage report
         run: uv run pytest --cov=src --cov-report=xml --cov-report=term-missing
-      # --no-cov is REQUIRED: pyproject addopts force --cov-report=xml, and a second
-      # instrumented run here would overwrite coverage.xml before the Codecov upload below.
+      # --no-cov: this second run needs no instrumentation. coverage.xml comes from the step
+      # above and is what the Codecov upload below consumes.
       - name: Run DSPy integration tests
         run: uv run pytest tests -k dspy -v --no-cov
       - name: Upload coverage reports to Codecov
