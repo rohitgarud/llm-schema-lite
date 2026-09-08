@@ -832,13 +832,6 @@ class YAMLFormatter(BaseFormatter):
         For object properties with complex additionalProperties and no fixed properties,
         emit a dict with <key> placeholder.
         """
-        # D7: this method is now RE-ENTERED recursively (via ``_properties_block``), so the
-        # reset below would clobber whatever the outer call had accumulated. Save the outer
-        # count and ADD it back at the end -- an accumulating save/restore, not a plain one,
-        # because the trailer has to explain every ``<...>`` placeholder in the whole document,
-        # including the ones that occur inside a nested block.
-        outer_placeholder_count = getattr(self, "_nested_placeholder_count", 0)
-        self._nested_placeholder_count = 0
         processed_properties: dict[str, Any] = {}
         for prop_name, value in properties.items():
             formatted_name = self.format_field_name(prop_name)
@@ -862,7 +855,6 @@ class YAMLFormatter(BaseFormatter):
                         processed_properties[formatted_name] = {
                             key: self._build_mapping_block(shape.value_schema)
                         }
-                        self._nested_placeholder_count += 1
                     else:
                         processed_properties[formatted_name] = self.render_mapping(shape)
                     continue
@@ -874,7 +866,6 @@ class YAMLFormatter(BaseFormatter):
                 else:
                     prop_str = f"{prop_str}  # {dep}"
             processed_properties[formatted_name] = prop_str
-        self._nested_placeholder_count += outer_placeholder_count
         return processed_properties
 
     def process_ref(self, ref: dict[str, Any]) -> str:
@@ -1213,8 +1204,6 @@ class YAMLFormatter(BaseFormatter):
 
         # Dump processed properties to YAML
         main_content = self._dump_yaml(processed_properties)
-        if getattr(self, "_nested_placeholder_count", 0) > 0:
-            main_content += "\n# any properties allowed"
         main_parts.append(main_content)
 
         # Add additionalProperties comment: for complex use short "any properties allowed"

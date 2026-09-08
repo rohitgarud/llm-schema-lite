@@ -68,9 +68,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sections; the DSPy integration README is corrected against the shipped adapter; and
   every runnable code block in both, plus `examples/basic_usage.py`, is now executed by
   `tests/test_docs_examples.py`.
+- **An enum-typed mapping key now renders its allowed values instead of just its type.**
+  `dict[Color, int]` with `Color` an enum of `red`/`green` renders `<red OR green>: int`
+  (JSONish), `dict[red OR green, int]` (YAML) and `Record<red | green, number>` (TypeScript)
+  — joined with each formatter's own `union_separator`, so YAML/JSONish read `OR` and
+  TypeScript reads `|`. The same applies through an `Optional[...]` wrapper and inside a
+  `list[...]`, and to non-string enums (`dict[IntEnum, int]` → `<1 OR 2>`). Values are
+  rendered bare, not quoted, matching the existing bare `<string>` / `<int>` key convention;
+  note this differs from the quoted spelling used in the value-position `one of: "red",
+  "green"` comment. The key set is **structural**: it survives `include_metadata=False`,
+  `include_constraints=False` and `metadata_inclusion`, exactly like an enum's value set in
+  the value position. Snapshot-visible for any schema with an enum-keyed mapping.
+  (`lsl-2026-09-05-010`)
 
 ### Fixed
 
+- **YAML no longer appends a document-level `# any properties allowed` for a nested mapping.**
+  A `dict[str, Model]` property used to increment a placeholder counter whose only effect was
+  a trailer comment after the last root field, which read as "the root object accepts
+  arbitrary keys" even when the root schema had no `additionalProperties` at all. YAML now
+  matches JSONish and TypeScript, which have been silent for mappings since
+  `lsl-2026-09-04-015`. This also removes a double emission: a root with both a nested
+  structural mapping and a complex root `additionalProperties` used to print the comment
+  twice. The root `additionalProperties` channel itself is unchanged and still describes an
+  open or typed root exactly once. (`lsl-2026-09-05-010`)
+- **A `propertyNames` schema no longer leaks a raw Python dict repr into a comment.** An
+  object-shaped property carrying `propertyNames` used to render
+  `# propertyNames: {'pattern': '^[a-z]+$'}` in YAML and TypeScript; `propertyNames` is now
+  suppressed from the metadata channel for every node kind, not just mappings, where the key
+  token already states it. (`lsl-2026-09-05-010`)
 - **Constraint metadata at nested positions (tuple element, mapping value, array item) now
   honours `include_constraints` and `metadata_inclusion` in every formatter.** Only the
   JSONish tuple element leaked at HEAD; the fix is in the shared base method every nested

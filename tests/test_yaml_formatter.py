@@ -804,6 +804,40 @@ def test_yaml_formatter_additional_props_with_object_schema():
     assert "value" in result and "string" in result
 
 
+def test_yaml_root_additional_properties_survives_trailer_removal():
+    """AC-2: deleting the document-tail trailer must not silence the ROOT channel.
+
+    This schema has both a nested structural mapping (which used to bump the deleted
+    placeholder counter) and a complex root ``additionalProperties``. At HEAD it printed
+    ``any properties allowed`` TWICE -- once from the trailer, once from
+    ``process_additional_properties``. Exactly one must survive: the root one.
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "m": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {"a": {"type": "integer"}},
+                    "required": ["a"],
+                },
+            }
+        },
+        "required": ["m"],
+        "additionalProperties": {
+            "type": "object",
+            "properties": {"v": {"type": "string"}},
+            "required": ["v"],
+        },
+    }
+    result = YAMLFormatter(schema, include_metadata=False).transform_schema()
+
+    assert result.count("any properties allowed") == 1, result
+    # The surviving one is the ROOT channel's trailing comment, not a document tail.
+    assert result.rstrip().endswith("# any properties allowed"), result
+
+
 def test_yaml_formatter_simple_additional_props_still_work():
     """Test that simple additionalProperties still render as comments."""
     schema = {
@@ -1181,10 +1215,10 @@ def test_yaml_formatter_root_fixture_default():
             #   3. `strict*` carries `# no additional properties`. The closed-world marker is
             #      structural, so it survives on the nested block (R1) instead of being lost
             #      with the deleted `Strict` section.
-            #   4. `# any properties allowed` newly appears. `Root` did NOT have this trailer
-            #      before; the D7 re-entrancy fix lets `dict_of_models*`'s placeholder count
-            #      propagate out of the nested block it is now counted in. Escalating that
-            #      trailer's frequency is a known consequence, tracked as FU-2.
+            #   4. `# any properties allowed` is GONE. lsl-2026-09-05-010 deleted the
+            #      document-tail trailer and its placeholder counter outright; only the root
+            #      `additionalProperties` channel may describe an open root now, and `Root`
+            #      has no root `additionalProperties`.
             "# Description: Kitchen-sink fixture for lsl-2026-09-04-015 "
             "(dict/tuple/set/Any container rendering).",
             "#",
@@ -1198,7 +1232,7 @@ def test_yaml_formatter_root_fixture_default():
             "  <string>:",
             "    a*: int",
             "    b*: string",
-            "by_color*: dict[string, int]",
+            "by_color*: dict[red OR green, int]",
             "pair*: tuple[int, string]",
             "var_tuple*: list[int]",
             "tags*: list[string] (unique)",
@@ -1212,7 +1246,6 @@ def test_yaml_formatter_root_fixture_default():
             "  t*: tuple[int, string]",
             "strict*:  # no additional properties",
             "  s*: string",
-            "# any properties allowed",
         ]
     )
 
@@ -1529,7 +1562,7 @@ def test_yaml_formatter_root_fixture_metadata_off_golden():
             "  <string>:",
             "    a*: int",
             "    b*: string",
-            "by_color*: dict[string, int]",
+            "by_color*: dict[red OR green, int]",
             "pair*: tuple[int, string]",
             "var_tuple*: list[int]",
             "tags*: list[string]",
@@ -1543,7 +1576,6 @@ def test_yaml_formatter_root_fixture_metadata_off_golden():
             "  t*: tuple[int, string]",
             "strict*:  # no additional properties",
             "  s*: string",
-            "# any properties allowed",
         ]
     )
 

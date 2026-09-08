@@ -1436,7 +1436,7 @@ def test_typescript_formatter_root_fixture_default():
             "interface Schema {",
             "  extra*: Record<string, number>;",
             "  dict_of_models*: Record<string, { a*: number, b*: string }>;",
-            "  by_color*: Record<string, number>;",
+            "  by_color*: Record<red | green, number>;",
             "  pair*: [number, string];",
             "  var_tuple*: Array<number>;",
             "  tags*: Array<string> (unique);",

@@ -2199,7 +2199,7 @@ ROOT_JSONISH_DEFAULT = "\n".join(
         "    }",
         "  },",
         "  by_color*: {",
-        "    <string>: int",
+        "    <red OR green>: int",
         "  },",
         "  pair*: [int, string],",
         "  var_tuple*: int [],",

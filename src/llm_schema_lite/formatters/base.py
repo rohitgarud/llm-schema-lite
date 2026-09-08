@@ -618,8 +618,10 @@ class BaseFormatter(ABC):
             ):
                 # Skip these for arrays as they're integrated into the type description
                 continue
-            elif k == "propertyNames" and classify_container(value).kind == "mapping":
-                # Skip: the mapping renderer already turned this into the key token.
+            elif k == "propertyNames":
+                # Skip: the key token owns propertyNames for a mapping, and no formatter
+                # has any rendering for it on a non-mapping node either -- suppressing it
+                # here for every node kind avoids leaking the raw Python dict repr.
                 continue
             elif k in ["minLength", "maxLength"] and "type" in value and value["type"] == "string":
                 # Skip these for strings as they're integrated into the type description
@@ -1330,24 +1332,36 @@ class BaseFormatter(ABC):
     def key_token(self, shape: ContainerShape) -> str:
         """Rendered key *type* of a MAPPING (bare word, e.g. ``"string"``). No angle brackets.
 
-        Pure query: reads ``self.defs`` / ``self.TYPE_MAP`` and mutates nothing.
+        An enum-typed key (inline ``enum`` or a ``$ref`` resolving to a def carrying
+        ``enum``) renders its allowed values joined by ``self.config.union_separator`` --
+        bare for a ``str`` value, through ``format_literal_value`` for everything else.
+        This is unconditional: ``key_token`` consults no metadata gate, so the value set
+        is structural and survives ``include_metadata=False`` / ``include_constraints=False``
+        / any ``metadata_inclusion`` override, matching an enum's value-position semantics.
+
+        Pure query: reads ``self.defs`` / ``self.TYPE_MAP`` / ``self.config`` and mutates
+        nothing.
         """
         key_schema = shape.key_schema
         if key_schema is None:
             return "string"
 
+        node = key_schema
         ref = key_schema.get("$ref")
         if isinstance(ref, str):
             ref_match = self.REF_PATTERN.search(ref)
-            if ref_match:
-                ref_def = self.defs.get(ref_match.group(1))
-                if isinstance(ref_def, dict):
-                    ref_type = ref_def.get("type")
-                    if isinstance(ref_type, str):
-                        return str(self.TYPE_MAP.get(ref_type, ref_type))
-            return "string"
+            ref_def = self.defs.get(ref_match.group(1)) if ref_match else None
+            if not isinstance(ref_def, dict):
+                return "string"
+            node = ref_def
 
-        key_type = key_schema.get("type")
+        enum_values = node.get("enum")
+        if isinstance(enum_values, list) and enum_values:
+            return self.config.union_separator.join(
+                v if isinstance(v, str) else format_literal_value(v) for v in enum_values
+            )
+
+        key_type = node.get("type")
         if isinstance(key_type, str):
             return str(self.TYPE_MAP.get(key_type, key_type))
 

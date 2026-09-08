@@ -12,12 +12,14 @@ These cover the pure, non-emitting primitives added to
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from llm_schema_lite.formatters.base import BaseFormatter, classify_container
 from llm_schema_lite.formatters.config import FormatterConfig
 from llm_schema_lite.formatters.jsonish_formatter import JSONishFormatter
 from llm_schema_lite.formatters.typescript_formatter import TypeScriptFormatter
 from llm_schema_lite.formatters.yaml_formatter import YAMLFormatter
+from tests.conftest import Color
 
 EMPTY_OBJECT_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
 
@@ -25,6 +27,18 @@ EMPTY_OBJECT_SCHEMA: dict[str, Any] = {"type": "object", "properties": {}}
 def _host(config: FormatterConfig | None = None) -> JSONishFormatter:
     """A concrete formatter instance used purely as a host for base-class methods."""
     return JSONishFormatter(EMPTY_OBJECT_SCHEMA, config=config)
+
+
+class EnumKeyWrappers(BaseModel):
+    """Enum-keyed mappings behind an ``Optional[...]`` and a ``list[...]`` wrapper.
+
+    conftest's ``Root.by_color`` covers the bare ``dict[Color, int]``; no existing fixture
+    wraps one, and the wrapper paths (``anyOf`` branch, array ``items``) are the ones that
+    could bypass ``key_token``. Defined here because this is the only module that needs it.
+    """
+
+    opt_map: dict[Color, int] | None = None
+    map_list: list[dict[Color, int]]
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +332,11 @@ def test_key_token_defaults_to_string() -> None:
 
 @pytest.mark.parametrize(
     ("key_schema", "expected"),
-    [({"type": "string"}, "string"), ({"pattern": "^a"}, "string")],
+    [
+        ({"type": "string"}, "string"),
+        ({"pattern": "^a"}, "string"),
+        ({"enum": ["x", "y"]}, "x OR y"),
+    ],
 )
 def test_key_token_direct_schema(key_schema: dict[str, Any], expected: str) -> None:
     formatter = _host()
@@ -347,7 +365,80 @@ def test_key_token_resolves_ref_through_defs() -> None:
             "propertyNames": {"$ref": "#/$defs/Color"},
         }
     )
-    assert formatter.key_token(shape) == "string"
+    assert formatter.key_token(shape) == "red"
+
+
+@pytest.mark.parametrize(
+    ("defs", "ref_name", "expected"),
+    [
+        # dict[IntEnum, V]: non-string values route through ``format_literal_value``.
+        ({"Num": {"enum": [1, 2], "type": "integer"}}, "Num", "1 OR 2"),
+        # A def carrying ``enum`` but no ``type`` still yields the union, not "string".
+        ({"Bare": {"enum": ["x"]}}, "Bare", "x"),
+        # An unresolvable $ref returns "string" WITHOUT ever reading the wrapper's own type.
+        ({}, "Nope", "string"),
+    ],
+)
+def test_key_token_ref_enum_variants(defs: dict[str, Any], ref_name: str, expected: str) -> None:
+    formatter = JSONishFormatter({"type": "object", "properties": {}, "$defs": defs})
+    shape = classify_container(
+        {
+            "type": "object",
+            "additionalProperties": {"type": "integer"},
+            "propertyNames": {"$ref": f"#/$defs/{ref_name}"},
+        }
+    )
+    assert formatter.key_token(shape) == expected
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        None,
+        FormatterConfig(include_metadata=False),
+        FormatterConfig(include_constraints=False),
+        FormatterConfig(metadata_inclusion={"propertyNames": False}),
+    ],
+    ids=["default", "no-metadata", "no-constraints", "propertyNames-off"],
+)
+def test_key_token_enum_ignores_metadata_gates(config: FormatterConfig | None) -> None:
+    """AC-1b: the key's value set is STRUCTURAL -- no metadata gate can suppress it."""
+    formatter = JSONishFormatter(
+        {
+            "type": "object",
+            "properties": {},
+            "$defs": {"Color": {"enum": ["red", "green"], "type": "string"}},
+        },
+        config=config,
+    )
+    shape = classify_container(
+        {
+            "type": "object",
+            "additionalProperties": {"type": "integer"},
+            "propertyNames": {"$ref": "#/$defs/Color"},
+        }
+    )
+    assert formatter.key_token(shape) == "red OR green"
+
+
+@pytest.mark.parametrize(
+    ("formatter_cls", "union", "null_marker"),
+    [
+        (JSONishFormatter, "red OR green", "OR null"),
+        (YAMLFormatter, "red OR green", "OR null"),
+        (TypeScriptFormatter, "red | green", "| null"),
+    ],
+)
+def test_enum_key_survives_container_wrappers(
+    formatter_cls: type[BaseFormatter], union: str, null_marker: str
+) -> None:
+    """The enum key set survives an ``Optional[...]`` wrapper and a ``list[...]`` wrapper."""
+    result = formatter_cls(EnumKeyWrappers.model_json_schema()).transform_schema()
+
+    # Once for ``opt_map``, once for ``map_list``.
+    assert result.count(union) == 2, result
+    assert "string" not in result.replace("map_list", ""), result
+    assert null_marker in result, result
 
 
 # ===========================================================================
@@ -406,6 +497,18 @@ def test_property_names_metadata_suppressed_for_mapping() -> None:
             "type": "object",
             "additionalProperties": {"type": "integer"},
             "propertyNames": {"$ref": "#/$defs/Color"},
+        }
+    )
+    assert not any("propertyNames" in part for part in parts), parts
+
+
+def test_property_names_never_leaks_on_object_node() -> None:
+    """The old ``kind == "mapping"`` guard let an OBJECT-kind node leak a raw dict repr."""
+    parts = _host().format_metadata_parts(
+        {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "propertyNames": {"pattern": "^[a-z]+$"},
         }
     )
     assert not any("propertyNames" in part for part in parts), parts
