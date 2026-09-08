@@ -107,6 +107,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the value position. Snapshot-visible for any schema with an enum-keyed mapping.
   (`lsl-2026-09-05-010`)
 
+- **Five behaviours copied per formatter now have one owner each; no output changes.** The
+  recursion-truncation predicate (4 copies) becomes `BaseFormatter._reentry_truncated`; the
+  tuple length-suffix suppression (3 copies) becomes `BaseFormatter.render_tuple_token`;
+  `BaseFormatter.format_field_name` finally reads the `_nested_required_stack` it owns, so the
+  YAML and TypeScript overrides that re-added that read are deleted; `YAMLFormatter`'s
+  `add_metadata` and `_metadata_parts` share one part-collector behind a `deferred` flag, and
+  the `get_available_metadata` pre-check that was dead in both (`format_metadata_parts` already
+  applies a strictly stronger filter) is gone, matching TypeScript; and
+  `YAMLFormatter._mapping_value_pairs` routes its required/optional marker through
+  `format_field_name` like `_properties_block` already did. `JSONishFormatter`'s
+  `deferred_comment_gap` override, an exact copy of the base property, is deleted. Net -144
+  lines in `src/llm_schema_lite/formatters/`, with a byte-identical 39,133-line corpus render
+  across 14 configs x 103 schemas x 3 formatters. Deliberately **not** unified, each because it
+  would change first-render output or cost more than it saves: `$ref`→`$defs` resolution (8
+  sites, three return shapes, five guards); merging `_mapping_value_pairs` into
+  `_properties_block` (would make mapping values render as nested blocks); giving
+  `_mapping_value_pairs` the global expansion budget (would make mapping expansions visible to
+  the anyOf/oneOf member-cap tiers); JSONish's two parallel dispatch chains; the adapter's
+  `__call__`/`acall` pair (the async exception surfaces at `await`, not at coroutine creation);
+  and YAML's `str(item["const"])`, which is not a duplicate of `process_const` at all —
+  routing through it turns `x: US OR null` into `x: string  # one of: "US" OR null`.
+  (`lsl-2026-09-05-013`)
+
 ### Fixed
 
 - **YAML no longer appends a document-level `# any properties allowed` for a nested mapping.**
@@ -228,6 +251,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of a bare `str()`, so YAML gets its `# one of: ...` idiom where it previously
   leaked the raw value; JSONish and YAML output is byte-identical for every fixture model.
   (`lsl-2026-09-05-011`)
+
+- **Rendering the same schema twice on one formatter instance now returns the same string.**
+  A second `YAMLFormatter.transform_schema()` on an instance built with
+  `FormatterConfig(prefix=...)` silently dropped the prefix — `"# P\n# Title: Outer\n..."` on
+  the first call, `"# Title: Outer\n..."` on the second — because the cached `_processed_data`
+  branch returned before the prefix line the main flow ends on. Measured at 80/80 conftest
+  models under every prefix-carrying config. Both formatters' cached branches are gone, so
+  there is exactly one render path and the second call reproduces the first by construction;
+  a second, latent asymmetry went with them (the cached YAML branch inferred "did we inject a
+  placeholder key?" by scanning rendered keys for `<...>`, which a property literally named
+  `<x>` would have fooled). **First-render output is unchanged** for all 4,326 corpus
+  renderings — this is a repeat-render fix only. Reachable only by calling `transform_schema()`
+  twice on one instance; `simplify_schema(...).to_string()` memoizes the string and was never
+  affected. Covered by the new `tests/test_repeat_render.py`. (`lsl-2026-09-05-013`)
 
 <!-- insertion marker -->
 ## [v0.6.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27

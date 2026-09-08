@@ -143,26 +143,24 @@ class YAMLFormatter(BaseFormatter):
         back to ``process_property``, which emits the recursion placeholder.
         """
         ref_key = self._mapping_ref_key(value_schema)
-        if ref_key is not None:
-            reentries = self._ref_expansion_path.count(ref_key)
-            if reentries >= 1 and reentries >= self.config.max_recursion_depth:
-                self._truncation_epoch += 1
-                return None
+        if ref_key is not None and self._reentry_truncated(ref_key):
+            return None
 
         resolved = self._resolve_mapping_value(value_schema)
         properties = resolved.get("properties")
         if not isinstance(properties, dict) or not properties:
             return None
 
-        required = set(resolved.get("required", []) or [])
         pairs: dict[str, str] = {}
         with self._expanding(ref_key):
-            for prop_name, prop_def in properties.items():
-                if prop_name in required:
-                    marked = f"{prop_name}{self.config.required_marker}"
-                else:
-                    marked = f"{prop_name}{self.config.optional_marker}"
-                pairs[marked] = self.process_property(prop_def)
+            # Same stack discipline as ``_properties_block``: the resolved def owns its own
+            # ``required``, and ``format_field_name`` is the single reader of that decision.
+            self._nested_required_stack.append(set(resolved.get("required", []) or []))
+            try:
+                for prop_name, prop_def in properties.items():
+                    pairs[self.format_field_name(prop_name)] = self.process_property(prop_def)
+            finally:
+                self._nested_required_stack.pop()
         return pairs
 
     def _build_mapping_block(self, value_schema: dict[str, Any]) -> dict[str, Any] | str:
@@ -376,14 +374,7 @@ class YAMLFormatter(BaseFormatter):
         if shape.kind == "mapping":
             return self.render_mapping(shape)
         if shape.kind == "tuple":
-            tuple_str = self.render_tuple(shape)
-            if not (
-                type_value.get("minItems")
-                == type_value.get("maxItems")
-                == len(shape.prefix_schemas)
-            ):
-                tuple_str += self.format_array_constraints(type_value)
-            return tuple_str
+            return self.render_tuple_token(shape, type_value)
 
         if type_name == "string":
             extra = self._format_string_constraints_jsonish(type_value)
@@ -530,9 +521,7 @@ class YAMLFormatter(BaseFormatter):
             # re-entry never consumes a budget slot.
             if self._global_expansion_count >= self._global_expansion_budget:
                 return None
-            reentries = self._ref_expansion_path.count(ref_key)
-            if reentries >= 1 and reentries >= self.config.max_recursion_depth:
-                self._truncation_epoch += 1
+            if self._reentry_truncated(ref_key):
                 return None
             self._global_expansion_count += 1
         with self._expanding(ref_key):
@@ -658,13 +647,16 @@ class YAMLFormatter(BaseFormatter):
         """
         return ("pattern", "format") if value.get("type") == "string" else ()
 
-    def _metadata_parts(self, value: dict[str, Any]) -> list[str]:
-        """The comment fragments ``add_metadata`` would append for ``value``, in its order.
+    def _metadata_parts(self, value: dict[str, Any], *, deferred: bool = False) -> list[str]:
+        """The comment fragments for ``value``, in ``add_metadata``'s order. One owner.
 
-        The block-branch analogue of ``add_metadata``'s part-collection body, minus the
-        ``representation``-specific bits (a block's "representation" is the ``dict``/``list``
-        itself, which cannot carry an inline comment). Reuses the same single gate so the two
-        can never drift apart.
+        Called by ``_compose_key_note`` (block branch, ``deferred=False``: a block's
+        "representation" is the ``dict``/``list`` itself and cannot carry an inline comment)
+        and by ``add_metadata`` (``deferred`` = whether the representation already carries a
+        deferred-comment marker). The flag is the whole difference between the two: a
+        marker-bearing representation drops ``title`` (D4: never emit the enum's Pydantic
+        class name beside a hoisted comment) and excludes ``const`` as well, whose slot body
+        already renders that value as ``one of: ...``.
         """
         if not self.include_metadata:
             return []
@@ -673,7 +665,7 @@ class YAMLFormatter(BaseFormatter):
             value
         )
         parts = []
-        if title:
+        if title and not deferred:
             parts.append(title.strip())
         if description:
             parts.append(description.strip())
@@ -684,13 +676,13 @@ class YAMLFormatter(BaseFormatter):
 
         # ``title``/``description``/``default`` are already supplied above; METADATA_MAP must
         # never re-supply them (D5: that is what restated ``(defaults to X)`` next to
-        # ``(default=X)``).
-        exclude = ("title", "description", "default") + self._token_owned_metadata_keys(value)
-        available_metadata = self.get_available_metadata(value)
-        if available_metadata:
-            filtered_metadata = [m for m in available_metadata if m not in exclude]
-            if filtered_metadata:
-                parts.extend(self.format_metadata_parts(value, exclude=exclude))
+        # ``(default=X)``). ``default`` is excluded in BOTH arms.
+        exclude = (
+            ("title", "description", "default", "const")
+            if deferred
+            else ("title", "description", "default")
+        ) + self._token_owned_metadata_keys(value)
+        parts.extend(self.format_metadata_parts(value, exclude=exclude))
         return parts
 
     def _compose_key_note(
@@ -720,20 +712,6 @@ class YAMLFormatter(BaseFormatter):
             return formatted_name
         return formatted_name + self.defer_comment("; ".join(fragments))
 
-    def format_field_name(self, field_name: str) -> str:
-        """Mark requiredness against the innermost ``$defs`` ``required``, not the ROOT one.
-
-        The stack is pushed by ``_properties_block`` and by ``base.process_ref``; YAML simply
-        never read it before, so a nested field inherited the root model's required set (D3).
-        An empty stack means we are at the root, where ``super()`` is already correct.
-        """
-        if self._nested_required_stack:
-            required = self._nested_required_stack[-1]
-            if field_name in required:
-                return f"{field_name}{self.config.required_marker}"
-            return f"{field_name}{self.config.optional_marker}"
-        return super().format_field_name(field_name)
-
     def recursion_placeholder(self, type_name: str) -> str:
         """Defer the ``recursive: X`` note so a later ``OR null``/metadata joins the same slot.
 
@@ -762,39 +740,7 @@ class YAMLFormatter(BaseFormatter):
         # for a ``$ref``'d enum (the ``enum`` key lives in the ``$defs`` node, not in the
         # property schema) and so restated the default several times on one line.
         deferred = self.carries_deferred_comment(representation)
-
-        title, description, default_value, example = self._get_title_description_default_value(
-            value
-        )
-        parts = []
-        if title and not deferred:
-            # D4: never emit the enum's Pydantic class name alongside a hoisted comment.
-            parts.append(title.strip())
-        if description:
-            parts.append(description.strip())
-        if default_value:
-            parts.append(default_value.strip())
-        if example:
-            parts.append(example.strip())
-
-        # Base METADATA_MAP-style parts for pattern, format, etc. (when not in type).
-        # ``title``/``description`` are already supplied above by
-        # ``_get_title_description_default_value``; METADATA_MAP must never re-supply them.
-        # ``const`` is excluded as well for a marker-bearing representation, whose slot body
-        # already renders that value as ``one of: ...``.
-        # ``default`` is excluded in BOTH arms (D5): ``default_value`` was already appended to
-        # ``parts`` above, and METADATA_MAP would otherwise restate it as ``(defaults to X)``
-        # right beside the ``(default=X)`` that is already there. ``(default=X)`` survives.
-        exclude = (
-            ("title", "description", "default", "const")
-            if deferred
-            else ("title", "description", "default")
-        ) + self._token_owned_metadata_keys(value)
-        available_metadata = self.get_available_metadata(value)
-        if available_metadata:
-            filtered_metadata = [m for m in available_metadata if m not in exclude]
-            if filtered_metadata:
-                parts.extend(self.format_metadata_parts(value, exclude=exclude))
+        parts = self._metadata_parts(value, deferred=deferred)
 
         if not parts:
             return representation
@@ -1013,46 +959,7 @@ class YAMLFormatter(BaseFormatter):
         root_ref_key = self._adopt_root_ref()
         if root_ref_key is not None:
             self._root_ref_key = root_ref_key
-        # First branch: if _processed_data is set, build from cache
-        if hasattr(self, "_processed_data") and self._processed_data:
-            # No $defs section loop: every def with ``properties`` is now rendered INLINE, as
-            # a real nested block on the property that references it. The hoisted
-            # ``Class.field`` sections this used to emit were a duplicate of that data.
-            main_parts = []
-
-            # Add schema info comment if present
-            info, legend = self.root_decorations()
-            if info:
-                main_parts.append(info)
-
-            # Add required fields comment if there are required fields
-            if legend:
-                main_parts.append(legend)
-
-            # Use cached processed data for main content
-            main_parts.append(self._dump_yaml(self._processed_data))
-
-            # Add additionalProperties comment (short if structure already in cached data).
-            # The placeholder key is now the rendered key *type* (e.g. "<string>"), not the
-            # literal "<key>", so match its shape rather than the old sentinel.
-            has_placeholder_key = any(
-                isinstance(k, str) and k.startswith("<") and k.endswith(">")
-                for k in self._processed_data
-            )
-            if has_placeholder_key:
-                additional_props_comment = self.process_additional_properties(
-                    self.schema, show_structure=False
-                )
-            elif self.include_metadata or self.emits_closed_world_marker(self.schema):
-                additional_props_comment = self.process_additional_properties(self.schema)
-            else:
-                additional_props_comment = ""
-            if additional_props_comment:
-                main_parts.append(additional_props_comment)
-
-            return "\n".join(main_parts)
-
-        # Second branch: no properties - handle schema-level-only cases
+        # First branch: no properties - handle schema-level-only cases
         if not self.properties:
             rendered = self._root_structural_render()
             if rendered is not None:
@@ -1149,8 +1056,8 @@ class YAMLFormatter(BaseFormatter):
             else:
                 return self._add_prefix("{}")
 
-        # Third branch: main flow with properties.
-        # No $defs section loop here either -- see the cached branch above.
+        # Main flow with properties. No $defs section loop: every def with ``properties``
+        # is rendered INLINE, as a real nested block on the property that references it.
         main_parts = []
 
         # Add schema info comment if present
@@ -1218,7 +1125,7 @@ class YAMLFormatter(BaseFormatter):
         if additional_props_comment:
             main_parts.append(additional_props_comment)
 
-        # Set _processed_data for future calls (caching)
+        # Written for introspection only; there is exactly one render path.
         self._processed_data = processed_properties
 
         result = "\n".join(main_parts)

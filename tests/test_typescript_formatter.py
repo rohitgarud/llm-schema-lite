@@ -1590,7 +1590,7 @@ def test_typescript_root_ref_model_renders_interface_body() -> None:
 
 
 def test_typescript_recursive_render_is_idempotent() -> None:
-    """C3: the cached ``_processed_data`` branch must seed ``$defs`` like the main flow."""
+    """C3: two renders on one instance agree -- there is exactly one render path."""
     formatter = TypeScriptFormatter(_list_node_schema())
 
     first = formatter.transform_schema()
@@ -1667,8 +1667,7 @@ def test_typescript_multiline_description_whole_render_is_stable() -> None:
     ).transform_schema()
     expected = "\n".join(
         [
-            "// Description: Per-field descriptions containing real newlines "
-            "(lsl-2026-09-05-006).",
+            "// Description: Per-field descriptions containing real newlines (lsl-2026-09-05-006).",
             "// Fields marked with * are required",
             "interface Schema {",
             "  summary*: string;  // line one",

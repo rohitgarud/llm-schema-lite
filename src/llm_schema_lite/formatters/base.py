@@ -642,13 +642,20 @@ class BaseFormatter(ABC):
         """
         Format field name with required/optional indicator if applicable.
 
+        Marks against the innermost ``$defs`` ``required`` when one is on the stack this
+        class owns (pushed by ``process_ref`` and by ``YAMLFormatter._properties_block``),
+        else against the ROOT ``required``. An empty stack means we are at the root (D3).
+
         Args:
             field_name: The name of the field.
 
         Returns:
             Field name with marker if required/optional.
         """
-        if field_name in self.required_fields:
+        required = (
+            self._nested_required_stack[-1] if self._nested_required_stack else self.required_fields
+        )
+        if field_name in required:
             return f"{field_name}{self.config.required_marker}"
         return f"{field_name}{self.config.optional_marker}"
 
@@ -753,6 +760,19 @@ class BaseFormatter(ABC):
         """Comment prefix for the formatter (e.g., '//' for JSONish/TypeScript, '#' for YAML)."""
         pass
 
+    def _reentry_truncated(self, ref_key: str) -> bool:
+        """The one truncation contract: same-key re-entries on the active expansion path.
+
+        **Bumps ``_truncation_epoch`` when it returns True** -- the taint marker that keeps a
+        truncated subtree out of ``_ref_cache``, which every call site set by hand before.
+        Query only: the global-budget guard and increment stay at the two sites that own them.
+        """
+        reentries = self._ref_expansion_path.count(ref_key)
+        if reentries >= 1 and reentries >= self.config.max_recursion_depth:
+            self._truncation_epoch += 1
+            return True
+        return False
+
     def process_ref(self, ref: dict[str, Any]) -> str:
         """
         Process a $ref reference to a definition.
@@ -778,11 +798,7 @@ class BaseFormatter(ABC):
         if self._global_expansion_count >= self._global_expansion_budget:
             return "object"  # Hit global budget limit
 
-        # The one truncation contract: same-type re-entries on the active path.
-        # Consulted only on re-entry, so the first expansion of any $ref is unconditional.
-        reentries = self._ref_expansion_path.count(ref_key)
-        if reentries >= 1 and reentries >= self.config.max_recursion_depth:
-            self._truncation_epoch += 1
+        if self._reentry_truncated(ref_key):
             return self.recursion_placeholder(ref_key)
 
         # Check cache first (only untruncated renderings are ever cached)
@@ -881,7 +897,8 @@ class BaseFormatter(ABC):
         """Whitespace between a rendered token and its hoisted comment marker.
 
         Returns:
-            A single space. ``YAMLFormatter`` overrides this to two spaces to match its
+            A single space -- which is also what JSONish's ``.replace("  ", " ")`` pass
+            leaves behind. ``YAMLFormatter`` overrides this to two spaces to match its
             existing ``"  # ..."`` convention.
         """
         return " "
@@ -1988,6 +2005,21 @@ class BaseFormatter(ABC):
             tokens.append(f"<= {schema['maxItems']} items")
 
         return tokens
+
+    def render_tuple_token(self, shape: ContainerShape, type_value: dict[str, Any]) -> str:
+        """``render_tuple`` plus array constraints, unless the length token is redundant.
+
+        Design 4.2 length-suffix suppression: when
+        ``minItems == maxItems == len(prefix_schemas)`` the range restates the positional
+        list, so it must not be appended. ``process_type_value``'s own tuple arm deliberately
+        appends nothing at all and is **not** a caller -- changing it would move output.
+        """
+        tuple_str = self.render_tuple(shape)
+        if not (
+            type_value.get("minItems") == type_value.get("maxItems") == len(shape.prefix_schemas)
+        ):
+            tuple_str += self.format_array_constraints(type_value)
+        return tuple_str
 
     def format_array_constraints(self, schema: dict[str, Any]) -> str:
         """``" (a, b)"`` for a non-empty token list, ``""`` otherwise. Never a comment."""

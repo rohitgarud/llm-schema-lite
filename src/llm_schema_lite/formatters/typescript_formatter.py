@@ -262,14 +262,7 @@ class TypeScriptFormatter(BaseFormatter):
         if shape.kind == "mapping":
             return self.render_mapping(shape)
         if shape.kind == "tuple":
-            tuple_str = self.render_tuple(shape)
-            if not (
-                type_value.get("minItems")
-                == type_value.get("maxItems")
-                == len(shape.prefix_schemas)
-            ):
-                tuple_str += self.format_array_constraints(type_value)
-            return tuple_str
+            return self.render_tuple_token(shape, type_value)
 
         # Validation constraints below are already gated by the producers themselves
         # (each bound is resolved independently — no `or` over the pair); this method
@@ -331,17 +324,6 @@ class TypeScriptFormatter(BaseFormatter):
             return array_type
 
         return str(type_str)
-
-    def format_field_name(self, field_name: str) -> str:
-        """Format a field name, honouring the innermost ``$defs`` required list if any."""
-        if self._nested_required_stack:
-            marker = (
-                self.config.required_marker
-                if field_name in self._nested_required_stack[-1]
-                else self.config.optional_marker
-            )
-            return f"{field_name}{marker}"
-        return super().format_field_name(field_name)
 
     def recursion_placeholder(self, type_name: str) -> str:
         """Block-comment form: a `//` inside an inline object literal swallows the line."""
@@ -436,10 +418,9 @@ class TypeScriptFormatter(BaseFormatter):
         """
         Transform schema into TypeScript interface syntax.
 
-        This method implements a three-branch structure:
-        1. If _processed_data is cached, build output from cache
-        2. If no properties, handle schema-level-only cases
-        3. Main flow: process properties, cache result, and return
+        This method implements a two-branch structure:
+        1. If no properties, handle schema-level-only cases
+        2. Main flow: process properties and return
 
         Returns:
             TypeScript interface definition as a string.
@@ -451,51 +432,7 @@ class TypeScriptFormatter(BaseFormatter):
         root_ref_key = self._adopt_root_ref()
         if root_ref_key is not None:
             self._root_ref_key = root_ref_key
-        # First branch: if _processed_data is set, build from cache
-        if hasattr(self, "_processed_data") and self._processed_data:
-            # Build main content from cached processed data
-            main_output = StringIO()
-
-            # Add schema info comment if present
-            schema_info_comment = self.get_schema_info_comment()
-            if schema_info_comment:
-                main_output.write(f"{schema_info_comment}\n")
-
-            # Add required fields comment if there are required fields
-            required_comment = self.get_required_fields_comment()
-            if required_comment:
-                main_output.write(f"{required_comment}\n")
-
-            main_output.write("interface Schema {\n")
-
-            # Use cached processed data
-            for name, prop_type in self._processed_data.items():
-                main_output.write(self._member_line(name, prop_type))
-
-            # Add placeholder for complex additionalProperties
-            if self._is_complex_additional_props(self.schema):
-                shape = classify_container(self.schema)
-                value_token = (
-                    self.render_type_token(shape.value_schema)
-                    if shape.value_schema is not None
-                    else "any"
-                )
-                main_output.write(self._member_line("[key: string]", value_token))
-
-            main_output.write("}")
-
-            # Add additionalProperties comment if present and metadata is enabled
-            if self.include_metadata or self.emits_closed_world_marker(self.schema):
-                show_structure = not self._is_complex_additional_props(self.schema)
-                additional_props_comment = self.process_additional_properties(
-                    self.schema, show_structure=show_structure
-                )
-                if additional_props_comment:
-                    main_output.write(f"\n{additional_props_comment}")
-
-            return main_output.getvalue()
-
-        # Second branch: no properties - handle schema-level-only cases
+        # First branch: no properties - handle schema-level-only cases
         if not self.properties:
             # Handle schema-level features even when there are no properties
             schema_level_features = ""
@@ -639,7 +576,7 @@ class TypeScriptFormatter(BaseFormatter):
             if additional_props_comment:
                 main_output.write(f"\n{additional_props_comment}")
 
-        # Set _processed_data for future calls (caching)
+        # Written for introspection only; there is exactly one render path.
         self._processed_data = processed_properties
 
         return main_output.getvalue()

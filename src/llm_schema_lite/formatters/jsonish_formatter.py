@@ -72,15 +72,6 @@ class JSONishFormatter(BaseFormatter):
         """Comment prefix for JSONish format."""
         return "//"
 
-    @property
-    def deferred_comment_gap(self) -> str:
-        """One space before a hoisted ``//`` comment.
-
-        Matches ``_extract_description``'s ``f" {self.comment_prefix} ..."`` and is immune
-        to ``transform_schema``'s trailing ``.replace("  ", " ")``.
-        """
-        return " "
-
     def sanitize_comment_text(self, text: str) -> str:
         """Collapse ``text`` to a single line for JSONish's end-of-line ``//`` comments.
 
@@ -240,10 +231,7 @@ class JSONishFormatter(BaseFormatter):
         else:
             return "object"
 
-        # Same rule as BaseFormatter.process_ref: same-type re-entries on the active path.
-        reentries = self._ref_expansion_path.count(_ref)
-        if reentries >= 1 and reentries >= self.config.max_recursion_depth:
-            self._truncation_epoch += 1
+        if self._reentry_truncated(_ref):
             if key is not None:
                 self.pending_recursion[key] = f"recursive: {_ref}"
                 return "object"
@@ -651,14 +639,7 @@ class JSONishFormatter(BaseFormatter):
             elif value["type"] == "array":
                 shape = classify_container(value)
                 if shape.kind == "tuple":
-                    tuple_str = self.render_tuple(shape)
-                    # Length-suffix suppression (design 4.2): when
-                    # minItems == maxItems == len(prefix_schemas), the length token is
-                    # redundant with the positional list and must not be appended.
-                    if not (
-                        value.get("minItems") == value.get("maxItems") == len(shape.prefix_schemas)
-                    ):
-                        tuple_str += self.format_array_constraints(value)
+                    tuple_str = self.render_tuple_token(shape, value)
                     if title or description or default_value or example:
                         comment = f" {self.comment_prefix}"
                         if key is not None:
@@ -740,8 +721,7 @@ class JSONishFormatter(BaseFormatter):
                             comment = f" {self.comment_prefix}"
                             if key is not None:
                                 fragment = (
-                                    f"or null {comment}{title}"
-                                    f"{description}{default_value}{example}"
+                                    f"or null {comment}{title}{description}{default_value}{example}"
                                 )
                                 self.pending_postfix[key] = fragment.rstrip()
                         if "items" in value and value["items"]:
