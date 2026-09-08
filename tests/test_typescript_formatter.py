@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel, Field, TypeAdapter
@@ -44,7 +44,6 @@ from tests.conftest import (
     OrderedFieldsModel,
     PatternConstraints,
     PersonWithAddress,
-    Product,
     RequiredOptionalModel,
     Role,
     Root,
@@ -110,19 +109,18 @@ def test_typescript_formatter_without_metadata():
 
 
 def test_typescript_formatter_with_nested_defs():
-    """Test TypeScript formatter with nested $defs."""
+    """Test TypeScript formatter with nested $defs.
+
+    D3 (lsl-2026-09-05-011): TypeScript no longer emits a per-`$defs` `interface` block --
+    `Address`'s body is inlined at its one use site inside `interface Schema` instead.
+    """
     schema = PersonWithAddress.model_json_schema()
     formatter = TypeScriptFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
-    assert "interface Address {" in result, "Expected nested Address interface to be emitted"
-
-    # Address interface fields should match the nested $defs schema.
-    defs = schema.get("$defs", schema.get("definitions", {})) or {}
-    address_schema = defs.get("Address")
-    assert isinstance(address_schema, dict), "Expected $defs.Address schema"
-    address_fields = parse_typescript_interface_fields(result, interface_name="Address")
-    assert_required_optional_fields_match_schema(address_fields, address_schema)
+    assert (
+        "interface Address {" not in result
+    ), "Address interface is dead output, must not be emitted"
 
     # Main interface fields should match the root schema.
     main_fields = parse_typescript_interface_fields(result, interface_name="Schema")
@@ -543,6 +541,41 @@ def test_typescript_issue_classification():
     assert "1 | 2 | 3 | 4 | 5" in result
 
 
+def test_typescript_quoted_literal_fixture_escapes_correctly() -> None:
+    """A `Literal` carrying a quote, backslash, newline, non-ASCII char or apostrophe is
+    rendered as valid, correctly escaped TypeScript -- not the old hand-rolled `f'"{val}"'`.
+
+    Also pins D1b: a `const` field's value is not restated as a tautological
+    `// const: X` comment (`add_metadata`'s new `exclude=("const",)`).
+    """
+    from llm_schema_lite import simplify_schema
+
+    class QuoteLiteral(BaseModel):
+        q: Literal['say "hi"', "plain"]
+        back: Literal["a\\b"]
+        nl: Literal["line1\nline2"]
+        uni: Literal["café ünïcode ✓"]
+        tick: Literal["it's"]
+
+    expected = "\n".join(
+        [
+            "// Title: QuoteLiteral",
+            "// Fields marked with * are required",
+            "interface Schema {",
+            '  q*: "say \\"hi\\"" | "plain";',
+            '  back*: "a\\\\b";',
+            '  nl*: "line1\\nline2";',
+            '  uni*: "café ünïcode ✓";',
+            '  tick*: "it\'s";',
+            "}",
+        ]
+    )
+
+    result = simplify_schema(QuoteLiteral, format_type="typescript").to_string()
+    assert result == expected
+    assert "// const:" not in result
+
+
 # ============================================================================
 # Array Types
 # ============================================================================
@@ -615,18 +648,13 @@ def test_typescript_nested_optional_ref_renders_as_inline_object() -> None:
 
     expected = "\n".join(
         [
-            "interface Addr {",
-            "  street*: string  // Street;",
-            "  city*: string  // City;",
-            "}",
-            "",
             "// Title: P1",
             "// Fields marked with * are required",
             "interface Schema {",
-            "  name*: string  // Patient name;",
+            "  name*: string;  // Patient name",
             (
                 "  address: { street*: string /* Street */, "
-                "city*: string /* City */ } | null  // Home address;"
+                "city*: string /* City */ } | null;  // Home address"
             ),
             "}",
         ]
@@ -649,18 +677,13 @@ def test_typescript_nested_list_ref_renders_as_array_of_object() -> None:
 
     expected = "\n".join(
         [
-            "interface Addr {",
-            "  street*: string  // Street;",
-            "  city*: string  // City;",
-            "}",
-            "",
             "// Title: P2",
             "// Fields marked with * are required",
             "interface Schema {",
-            "  name*: string  // Patient name;",
+            "  name*: string;  // Patient name",
             (
                 "  addresses*: Array<{ street*: string /* Street */, "
-                "city*: string /* City */ }>  // Addresses;"
+                "city*: string /* City */ }>;  // Addresses"
             ),
             "}",
         ]
@@ -683,18 +706,13 @@ def test_typescript_nested_optional_list_ref_renders_as_array_of_object() -> Non
 
     expected = "\n".join(
         [
-            "interface Addr {",
-            "  street*: string  // Street;",
-            "  city*: string  // City;",
-            "}",
-            "",
             "// Title: P3",
             "// Fields marked with * are required",
             "interface Schema {",
-            "  name*: string  // Patient name;",
+            "  name*: string;  // Patient name",
             (
                 "  addresses: Array<{ street*: string /* Street */, "
-                "city*: string /* City */ }> | null  // Addresses;"
+                "city*: string /* City */ }> | null;  // Addresses"
             ),
             "}",
         ]
@@ -717,18 +735,13 @@ def test_typescript_nested_required_ref_renders_as_inline_object() -> None:
 
     expected = "\n".join(
         [
-            "interface Addr {",
-            "  street*: string  // Street;",
-            "  city*: string  // City;",
-            "}",
-            "",
             "// Title: P4",
             "// Fields marked with * are required",
             "interface Schema {",
-            "  name*: string  // Patient name;",
+            "  name*: string;  // Patient name",
             (
                 "  address*: { street*: string /* Street */, "
-                "city*: string /* City */ }  // Home address;"
+                "city*: string /* City */ };  // Home address"
             ),
             "}",
         ]
@@ -763,22 +776,16 @@ def test_typescript_nested_ref_two_sibling_fields_both_inline() -> None:
 
     expected = "\n".join(
         [
-            "interface Address {",
-            "  street*: string  // Street;",
-            "  city*: string  // City;",
-            '  country*: "US" | "CA"  // Country code;',
-            "}",
-            "",
             "// Title: TwoSiblings",
             "// Fields marked with * are required",
             "interface Schema {",
             (
                 "  home*: { street*: string /* Street */, city*: string /* City */, "
-                'country*: "US" | "CA" /* Country code */ }  // Home;'
+                'country*: "US" | "CA" /* Country code */ };  // Home'
             ),
             (
                 "  work*: { street*: string /* Street */, city*: string /* City */, "
-                'country*: "US" | "CA" /* Country code */ }  // Work;'
+                'country*: "US" | "CA" /* Country code */ };  // Work'
             ),
             "}",
         ]
@@ -1261,7 +1268,8 @@ def test_typescript_formatter_array_of_objects_not_duplicated():
 
 
 def test_no_empty_comment_marker_across_all_models_typescript(all_pydantic_models) -> None:
-    """No rendered TypeScript line should carry an empty `// ;` / bare `//` marker.
+    """No rendered TypeScript line should carry an empty `// ;` / bare `//` marker, and no
+    line comment ever precedes the statement terminator (`;`).
 
     ``add_metadata`` used to emit a `// <parts>` comment whenever
     ``filtered_metadata`` was non-empty, even if every entry in ``format_metadata_parts``
@@ -1277,25 +1285,44 @@ def test_no_empty_comment_marker_across_all_models_typescript(all_pydantic_model
             assert "// ;" not in line, f"{_name}: empty `// ;` marker in line: {line!r}"
             assert not line.endswith("// "), f"{_name}: trailing bare `// ` in line: {line!r}"
             assert not line.endswith("//"), f"{_name}: trailing bare `//` in line: {line!r}"
+            assert not re.search(
+                r"//.*;\s*$", line
+            ), f"{_name}: `//` comment before `;` terminator in line: {line!r}"
 
 
-def test_product_typescript_token_count_decreases() -> None:
-    """Dropping auto-generated titles shrinks the TypeScript token count for ``Product``.
+def test_typescript_single_interface_per_render_across_all_models(all_pydantic_models) -> None:
+    """Every render has at most one `interface` block, and it is `interface Schema`.
 
-    Anchored on ``Product``, not ``Order``: ``Order``'s TypeScript token count *rises*
-    790 -> 792 because ``tests/conftest.py``'s ``User.name`` carries a user-supplied
-    ``title="Full Name"`` that TypeScript now correctly renders (this is AC-2's new
-    capability, not a regression -- TypeScript previously had no ``"title"`` entry in
-    its ``METADATA_MAP`` at all). ``Product`` is a submodel of the same ``Order`` gist
-    with no user-supplied field titles, so its TS token count genuinely falls, HEAD
-    109 -> expected 105. The assertion is strict-lower-than-HEAD rather than pinned to
-    the exact number so unrelated future formatting tweaks do not spuriously fail this
-    test.
+    D3 (lsl-2026-09-05-011): the per-`$defs` `interface` loops are deleted -- no render may
+    emit a second, unreferenced `interface <Def>` block beside `interface Schema`.
+    """
+    for name, model in all_pydantic_models:
+        result = TypeScriptFormatter(
+            model.model_json_schema(), include_metadata=True
+        ).transform_schema()
+
+        headers = re.findall(r"^interface .*$", result, re.M)
+        assert len(headers) <= 1, f"{name}: more than one interface header: {headers!r}"
+        if headers:
+            assert headers[0] == "interface Schema {", f"{name}: unexpected header: {headers[0]!r}"
+
+
+def test_order_typescript_token_count_decreases() -> None:
+    """D3 (lsl-2026-09-05-011): deleting the dead per-`$defs` interface blocks shrinks
+    `Order`'s TypeScript token count from 727 (HEAD) to 340.
+
+    Retargeted from `Product`: `Product` has no `$defs`, so D2 alone (the `;`/`//` swap)
+    costs it ~1 token per commented member with none of D3's saving -- its count *rises*
+    105 -> 109, the corpus worst case. `Order` is what the ticket's AC actually names and
+    is where D3's saving dominates: 727 -> 340, below JSONish's 414. The assertion is
+    strict-lower-than-HEAD rather than pinned to the exact number so unrelated future
+    formatting tweaks do not spuriously fail this test.
     """
     pytest.importorskip("tiktoken")
     from llm_schema_lite import simplify_schema
+    from tests.conftest import Order
 
-    assert simplify_schema(Product, format_type="typescript").token_count() < 109
+    assert simplify_schema(Order, format_type="typescript").token_count() < 727
 
 
 def test_typescript_inline_comment_splits_on_add_metadata_separator() -> None:
@@ -1413,21 +1440,6 @@ def test_typescript_formatter_root_fixture_default():
 
     expected = "\n".join(
         [
-            "interface Inner {",
-            "  d*: Record<string, number>;",
-            "  t*: [number, string];",
-            "}",
-            "",
-            "interface Strict {",
-            "  s*: string;",
-            "}",
-            " // no additional properties",
-            "",
-            "interface SubModel {",
-            "  a*: number;",
-            "  b*: string;",
-            "}",
-            "",
             "// Description: Kitchen-sink fixture for lsl-2026-09-04-015 "
             "(dict/tuple/set/Any container rendering).",
             "",
@@ -1441,7 +1453,7 @@ def test_typescript_formatter_root_fixture_default():
             "  var_tuple*: Array<number>;",
             "  tags*: Array<string> (unique);",
             "  anything*: any;",
-            "  described*: any  // free form;",
+            "  described*: any;  // free form",
             "  opt_any: any | null;",
             "  any_list*: Array<any>;",
             "  opt_extra: Record<string, number> | null;",
@@ -1603,13 +1615,17 @@ def test_typescript_recursive_placeholder_preserves_array_of_object_invariant() 
 
 
 def test_typescript_multiline_description_interface_member_continuation() -> None:
-    """First line inline, rest as ``// `` comments at the fixed 2-space member indent."""
+    """First line inline, rest as ``// `` comments at the fixed 2-space member indent.
+
+    D2 (lsl-2026-09-05-011): the `;` binds to the type on the first physical line; a
+    continuation comment line stays a pure comment and never collects the `;`.
+    """
     result = TypeScriptFormatter(
         MultiLineDescriptionModel.model_json_schema(), include_metadata=True
     ).transform_schema()
     lines = result.split("\n")
-    assert "  summary*: string  // line one" in lines
-    assert "  // line two;" in lines
+    assert "  summary*: string;  // line one" in lines
+    assert "  // line two" in lines
 
 
 def test_typescript_multiline_description_emits_no_bare_document_line() -> None:
@@ -1641,13 +1657,28 @@ def test_typescript_multiline_description_nested_inline_literal_folds_to_block_c
 
 
 def test_typescript_multiline_description_whole_render_is_stable() -> None:
-    """Whole-string golden for the interface-member and inline-literal shapes."""
+    """Whole-string golden for the interface-member and inline-literal shapes.
+
+    D3 (lsl-2026-09-05-011): `MultiLineDescriptionInner`'s dead interface block is gone;
+    its body only ever appeared inline. D2: `;` binds to the type, not after the comment.
+    """
     result = TypeScriptFormatter(
         MultiLineDescriptionModel.model_json_schema(), include_metadata=True
     ).transform_schema()
-    assert "interface MultiLineDescriptionInner {" in result
-    assert "  step*: string  // first step" in result
-    assert "  // second step;" in result
+    expected = "\n".join(
+        [
+            "// Description: Per-field descriptions containing real newlines "
+            "(lsl-2026-09-05-006).",
+            "// Fields marked with * are required",
+            "interface Schema {",
+            "  summary*: string;  // line one",
+            "  // line two",
+            "  nested*: { step*: string /* first step second step */ };",
+            "  items*: Array<{ step*: string /* first step second step */ }>;",
+            "}",
+        ]
+    )
+    assert result == expected
 
 
 def test_typescript_inline_comment_folds_continuation_lines() -> None:
@@ -1713,10 +1744,10 @@ Node.model_rebuild()
             "// Title: Node, Description: A tree node.\n"
             "// Fields marked with * are required\n"
             "interface Schema {\n"
-            "  value*: string  // Node value;\n"
+            "  value*: string;  // Node value\n"
             "  children: Array<{ value*: string /* Node value */,"
-            " children: Array<object /* recursive: Node */> /* Child nodes */ }>"
-            "  // Child nodes;\n"
+            " children: Array<object /* recursive: Node */> /* Child nodes */ }>;"
+            "  // Child nodes\n"
             "}",
         ),
         (list[list[int]], "type Schema = Array<Array<number>>;"),

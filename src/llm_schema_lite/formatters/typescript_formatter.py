@@ -4,7 +4,7 @@ import re
 from io import StringIO
 from typing import Any, Final
 
-from .base import BaseFormatter, ContainerShape, classify_container
+from .base import BaseFormatter, ContainerShape, classify_container, format_literal_value
 
 
 class TypeScriptFormatter(BaseFormatter):
@@ -61,7 +61,11 @@ class TypeScriptFormatter(BaseFormatter):
         if not self.include_metadata:
             return representation
 
-        metadata_parts = [p for p in self.format_metadata_parts(value) if p]
+        # The const value is already the rendered type token (process_const); METADATA_MAP
+        # would otherwise restate it as "const: X" right beside it. Mirrors
+        # YAMLFormatter.add_metadata's exclude for the same key. "(defaults to X)" is NOT
+        # excluded -- a default beside a const is real information.
+        metadata_parts = [p for p in self.format_metadata_parts(value, exclude=("const",)) if p]
         if not metadata_parts:
             return representation
 
@@ -146,7 +150,7 @@ class TypeScriptFormatter(BaseFormatter):
             elif "enum" in item:
                 item_types.append(self.process_enum(item))
             elif "const" in item:
-                item_types.append(str(item["const"]))
+                item_types.append(self.process_const(item))
             elif "$ref" in item:
                 item_types.append(self.process_ref(item))
             elif "type" in item:
@@ -183,15 +187,9 @@ class TypeScriptFormatter(BaseFormatter):
         if not enum_list:
             return "string"
 
-        # Format based on value type: don't quote numbers/bools
-        enum_literals = []
-        for val in enum_list:
-            if isinstance(val, bool):
-                enum_literals.append("true" if val else "false")
-            elif isinstance(val, str):
-                enum_literals.append(f'"{val}"')
-            else:
-                enum_literals.append(str(val))
+        # Rendered through format_literal_value: bool before int (bool is an int
+        # subclass), numbers/bools bare, strings JSON-quoted and escaped, None -> null.
+        enum_literals = [format_literal_value(val) for val in enum_list]
         type_str = self.config.union_separator.join(enum_literals)
         descs, alias_map = self._extract_enum_metadata(enum_value)
         if not self._should_include_metadata("x-enum-descriptions"):
@@ -225,15 +223,11 @@ class TypeScriptFormatter(BaseFormatter):
             const_value: Dictionary containing const definition.
 
         Returns:
-            Formatted const representation as TypeScript literal.
+            Formatted const representation as a TypeScript literal, rendered through
+            ``format_literal_value`` -- JSON-quoted and escaped for a ``str``, bare for
+            numbers/bools, ``"null"`` for ``None``.
         """
-        const = const_value.get("const")
-        if isinstance(const, bool):
-            return "true" if const else "false"
-        elif isinstance(const, int | float):
-            return str(const)
-        else:
-            return str(const)
+        return format_literal_value(const_value.get("const"))
 
     def process_type_value(self, type_value: dict[str, Any]) -> str:
         """
@@ -353,6 +347,25 @@ class TypeScriptFormatter(BaseFormatter):
         """Block-comment form: a `//` inside an inline object literal swallows the line."""
         return f"object /* recursive: {type_name} */"
 
+    @staticmethod
+    def _member_line(label: str, token: str) -> str:
+        """One interface member line, with ``;`` bound to the type, never after a ``//``.
+
+        ``label`` is the fully-formed left side -- ``name*``/``name`` from
+        ``format_field_name`` or the ``$defs`` loops, or the literal ``"[key: string]"``.
+        ``token`` is whatever ``process_property``/``render_type_token`` produced, which
+        ``add_metadata`` may already have suffixed with ``"  // ..."`` plus continuation
+        comment lines. The ``;`` lands immediately after the type; the comment block is
+        copied through verbatim, so continuation lines stay pure comments.
+        """
+        # ponytail: textual split on the "  // " add_metadata inserts, same convention as
+        # _inline_comment. A string literal containing "  // " mis-splits; carry the comment
+        # out of band (base's defer_comment machinery) if that ever appears in a fixture.
+        type_part, sep, comment = token.partition("  // ")
+        if not sep:
+            return f"  {label}: {token};\n"
+        return f"  {label}: {type_part};{sep}{comment}\n"
+
     _EMBEDDED_COMMENT_BREAK: Final[re.Pattern[str]] = re.compile(r"\s*\n\s*//\s*")
 
     @staticmethod
@@ -440,38 +453,6 @@ class TypeScriptFormatter(BaseFormatter):
             self._root_ref_key = root_ref_key
         # First branch: if _processed_data is set, build from cache
         if hasattr(self, "_processed_data") and self._processed_data:
-            all_interfaces = []
-
-            # Process nested definitions first (from $defs) - same as main flow
-            for def_name, def_schema in self.defs.items():
-                if def_name == self._root_ref_key:
-                    continue  # already emitted as `interface Schema` by the adopted root
-                if "properties" in def_schema:
-                    nested_output = StringIO()
-                    nested_output.write(f"interface {def_name} {{\n")
-
-                    nested_props = def_schema["properties"]
-                    nested_required = set(def_schema.get("required", []))
-
-                    for prop_name, prop_def in nested_props.items():
-                        with self._expanding(def_name):
-                            prop_type = self.process_property(prop_def)
-                        # Format field name with required indicator for nested definitions
-                        formatted_prop_name = (
-                            f"{prop_name}*" if prop_name in nested_required else prop_name
-                        )
-                        nested_output.write(f"  {formatted_prop_name}: {prop_type};\n")
-
-                    nested_output.write("}")
-
-                    # Add additionalProperties comment if present and metadata is enabled
-                    if self.include_metadata or self.emits_closed_world_marker(def_schema):
-                        additional_props_comment = self.process_additional_properties(def_schema)
-                        if additional_props_comment:
-                            nested_output.write(f"\n{additional_props_comment}")
-
-                    all_interfaces.append(nested_output.getvalue())
-
             # Build main content from cached processed data
             main_output = StringIO()
 
@@ -489,7 +470,7 @@ class TypeScriptFormatter(BaseFormatter):
 
             # Use cached processed data
             for name, prop_type in self._processed_data.items():
-                main_output.write(f"  {name}: {prop_type};\n")
+                main_output.write(self._member_line(name, prop_type))
 
             # Add placeholder for complex additionalProperties
             if self._is_complex_additional_props(self.schema):
@@ -499,7 +480,7 @@ class TypeScriptFormatter(BaseFormatter):
                     if shape.value_schema is not None
                     else "any"
                 )
-                main_output.write(f"  [key: string]: {value_token};\n")
+                main_output.write(self._member_line("[key: string]", value_token))
 
             main_output.write("}")
 
@@ -512,9 +493,7 @@ class TypeScriptFormatter(BaseFormatter):
                 if additional_props_comment:
                     main_output.write(f"\n{additional_props_comment}")
 
-            all_interfaces.append(main_output.getvalue())
-
-            return "\n\n".join(all_interfaces)
+            return main_output.getvalue()
 
         # Second branch: no properties - handle schema-level-only cases
         if not self.properties:
@@ -554,7 +533,7 @@ class TypeScriptFormatter(BaseFormatter):
                             if shape.value_schema is not None
                             else "any"
                         )
-                        result += f"  [key: string]: {value_token};\n"
+                        result += self._member_line("[key: string]", value_token)
                         result += "}"
 
                         # Add comment
@@ -617,39 +596,6 @@ class TypeScriptFormatter(BaseFormatter):
                     )
                 return "interface Schema {}"
 
-        # Collect all interface definitions
-        all_interfaces = []
-
-        # Process nested definitions first (from $defs)
-        for def_name, def_schema in self.defs.items():
-            if def_name == self._root_ref_key:
-                continue  # already emitted as `interface Schema` by the adopted root
-            if "properties" in def_schema:
-                nested_output = StringIO()
-                nested_output.write(f"interface {def_name} {{\n")
-
-                nested_props = def_schema["properties"]
-                nested_required = set(def_schema.get("required", []))
-
-                for prop_name, prop_def in nested_props.items():
-                    with self._expanding(def_name):
-                        prop_type = self.process_property(prop_def)
-                    # Format field name with required indicator for nested definitions
-                    formatted_prop_name = (
-                        f"{prop_name}*" if prop_name in nested_required else prop_name
-                    )
-                    nested_output.write(f"  {formatted_prop_name}: {prop_type};\n")
-
-                nested_output.write("}")
-
-                # Add additionalProperties comment if present and metadata is enabled
-                if self.include_metadata or self.emits_closed_world_marker(def_schema):
-                    additional_props_comment = self.process_additional_properties(def_schema)
-                    if additional_props_comment:
-                        nested_output.write(f"\n{additional_props_comment}")
-
-                all_interfaces.append(nested_output.getvalue())
-
         # Process main interface
         main_output = StringIO()
 
@@ -670,7 +616,7 @@ class TypeScriptFormatter(BaseFormatter):
         for name, prop_type in processed_properties.items():
             # process_properties() already includes metadata via process_property()
             # so we don't need to add it again
-            main_output.write(f"  {name}: {prop_type};\n")
+            main_output.write(self._member_line(name, prop_type))
 
         # Add placeholder for complex additionalProperties
         if self._is_complex_additional_props(self.schema):
@@ -680,7 +626,7 @@ class TypeScriptFormatter(BaseFormatter):
                 if shape.value_schema is not None
                 else "any"
             )
-            main_output.write(f"  [key: string]: {value_token};\n")
+            main_output.write(self._member_line("[key: string]", value_token))
 
         main_output.write("}")
 
@@ -693,9 +639,7 @@ class TypeScriptFormatter(BaseFormatter):
             if additional_props_comment:
                 main_output.write(f"\n{additional_props_comment}")
 
-        all_interfaces.append(main_output.getvalue())
-
         # Set _processed_data for future calls (caching)
         self._processed_data = processed_properties
 
-        return "\n\n".join(all_interfaces)
+        return main_output.getvalue()

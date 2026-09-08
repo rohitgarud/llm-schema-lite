@@ -37,6 +37,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The `dspy` extra and dependency-group floor rises from `>=3.0.3` to `>=3.3.1`.** The
   integration adapter targets DSPy 3.3.1 APIs and no 3.0.x compatibility path is
   maintained. (`f31ac3e`)
+- **TypeScript no longer emits a per-`$defs` `interface` block.** Every nested model's body
+  is rendered inline at each use site and nowhere else; the only `interface` in a render is
+  `interface Schema`. The removed blocks were unreachable output — no render anywhere
+  referenced a non-`Schema` interface by name, because `process_ref` always inlines — so
+  they were pure token cost. Snapshot-visible for any TypeScript output over a model with
+  `$defs`: 35 blocks across the fixture corpus drop to 0, the corpus token total falls
+  27.8%, and `Order` goes from 727 tokens to 340, below JSONish's 414. A schema with more
+  than ten distinct `$defs` may also render *wider* unions than before, because the dead
+  interface pass no longer consumes the recursion-expansion budget that was collapsing them
+  into `anyOf: N options`. `FormatterConfig.hoist_classes` remains unread; a
+  named-interface rendering mode is owned by `lsl-2026-04-29-002`. (`lsl-2026-09-05-011`)
+- **A TypeScript interface member terminates before its comment, not after it.**
+  `name*: string  // Full name;` now reads `name*: string;  // Full name`, and a multi-line
+  description's continuation lines stay pure comments instead of collecting the `;`. The
+  same applies to `[key: string]` index-signature members. Snapshot-visible for any
+  TypeScript output carrying a description or a metadata comment: 170 offending lines across
+  the fixture corpus drop to 0. Per-model token counts can rise slightly for models with no
+  `$defs` (`Product`: 105 to 109), because the `;` re-tokenises away from the type.
+  (`lsl-2026-09-05-011`)
+- **TypeScript string literals and `const` values are JSON-quoted and escaped.**
+  `api_version*: v1` now reads `api_version*: "v1"`, and enum unions escape embedded quotes:
+  `q*: "say "hi"" | "plain"` becomes `q*: "say \"hi\"" | "plain"`. Numbers, booleans and
+  `null` stay bare (`version*: 1`, `true | false`), so the rendering *decision* is unchanged
+  — only the escaping and the quoting of strings. Enum mapping keys are unaffected and
+  remain bare (`Record<red | green, number>`, `lsl-2026-09-05-010`). Snapshot-visible for any
+  TypeScript output containing a `Literal` or `const` string. (`lsl-2026-09-05-011`)
 
 ### Added
 
@@ -189,6 +215,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailing metadata comment restated both. The comment now omits them for exactly that node
   shape; a `pattern` on a node that is not a typed string is still reported, and TypeScript
   and JSONish are unaffected. (`4da3d1b`)
+- **A TypeScript `Literal` containing a quote, a backslash or a newline no longer emits
+  unparseable output.** `Literal["line1\nline2"]` previously wrote a raw newline that split
+  the interface across three physical lines and left a bare, uncommented document line;
+  `Literal['say "hi"']` previously emitted unbalanced quotes. Both now route through the
+  same `format_literal_value` helper JSONish and YAML already used.
+  (`lsl-2026-09-05-011`)
+- **A `const` field no longer restates its own value as a comment.** `version: v1  //
+  (defaults to v1), const: v1` now reads `version: "v1";  // (defaults to v1)` — the default
+  survives, the tautology is gone. Separately, a `$ref` to a const-only `$def` and a `const`
+  member of an `anyOf`/`oneOf` now render through each formatter's own const renderer
+  instead of a bare `str()`, so YAML gets its `# one of: ...` idiom where it previously
+  leaked the raw value; JSONish and YAML output is byte-identical for every fixture model.
+  (`lsl-2026-09-05-011`)
 
 <!-- insertion marker -->
 ## [v0.6.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27

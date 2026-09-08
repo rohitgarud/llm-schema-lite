@@ -848,7 +848,7 @@ class BaseFormatter(ABC):
                 ref_str = self.process_ref(ref_def)
             elif "const" in ref_def:
                 # Handle const definitions
-                ref_str = str(ref_def["const"])
+                ref_str = self.process_const(ref_def)
             elif "pattern" in ref_def:
                 # Handle pattern-only definitions (like regex patterns)
                 ref_str = f"string (pattern: {ref_def['pattern']})"
@@ -1513,7 +1513,7 @@ class BaseFormatter(ABC):
             if "enum" in item:
                 item_types.append(self.process_enum(item))
             elif "const" in item:
-                item_types.append(str(item["const"]))
+                item_types.append(self.process_const(item))
             elif "$ref" in item:
                 item_types.append(self.process_ref(item))
             elif "type" in item:
@@ -1580,7 +1580,7 @@ class BaseFormatter(ABC):
                 items_structure = self.dict_to_string(processed_props, indent=2)
                 item_types.append(f"{{\n{items_structure}\n}}")
             elif "const" in item:
-                item_types.append(str(item["const"]))
+                item_types.append(self.process_const(item))
 
         # Preserve oneOf structure but limit to reasonable number of options
         # Be very aggressive to prevent recursive oneOf explosion
