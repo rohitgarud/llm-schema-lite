@@ -63,6 +63,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — only the escaping and the quoting of strings. Enum mapping keys are unaffected and
   remain bare (`Record<red | green, number>`, `lsl-2026-09-05-010`). Snapshot-visible for any
   TypeScript output containing a `Literal` or `const` string. (`lsl-2026-09-05-011`)
+- **YAML output no longer hoists nested models into a `Class.field` `$defs` section.** A
+  nested `$ref`, a `Model | None` and a `list[Model]` now render as real YAML mappings and
+  sequences inline on the property that references them; both hard-coded `$defs` loops that
+  emitted `Class.field` keys are deleted, along with the duplication they caused and the
+  non-idempotent cached-branch rendering path. `OR null` and closed-world ("no additional
+  properties") notes now attach to the block's key through the deferred-comment slot so
+  PyYAML never re-quotes the line; defaults are emitted once instead of twice; nested
+  required-field markers are resolved against the nested `$def` rather than the root; and
+  `YAMLFormatter.__init__` no longer mutates the caller's `FormatterConfig`. Every
+  continuation line of a multi-line description is commented, so all 148 fixture renders
+  round-trip through `yaml.safe_load`. Breaking for any consumer parsing the old hoisted
+  shape. (`ba5d7af`)
 
 ### Added
 
@@ -77,8 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type; and `StructuredOutputAdapter(parallel_tool_calls=...)`, default `None`.
   (`447b7eb`)
 - `StructuredOutputAdapter(parse_config=...)` and `ParseConfig.strip_required_marker`
-  (default `"*"`), the reply-side counterpart of `FormatterConfig.required_marker`.
-  (`7a29f2d`)
+  (default `"*"`), the reply-side counterpart of `FormatterConfig.required_marker`. The same
+  marker value later grew to strip at every nested object level — see the `Fixed` entries for
+  `lsl-2026-09-05-003`. (`7a29f2d`)
 - DSPy per-field streaming support for `StructuredOutputAdapter` in JSON and JSONish
   modes: `register_streaming_support()` runs on `llm_schema_lite.dspy_integration` import,
   and the new public `StreamingNotSupportedError` is raised — before any LM request — when
@@ -87,13 +100,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chat-format record instead of raising `NotImplementedError`. (`8bcf58b`)
 - `FormatterConfig.max_recursion_depth`, default `2`. (`2a68581`)
 - A DSPy-latest CI canary job. (`f31ac3e`)
+- **A DSPy adapter benchmark harness**, `benchmarking/dspy_adapters/`, run with
+  `make bench-dspy` (`BENCH_ARGS=--offline` for the no-network arm, `BENCH_ARGS=--live`
+  against a real endpoint, no `BENCH_ARGS` for both). It measures prompt cost and parse /
+  validation outcomes per adapter x signature and writes markdown and CSV reports.
+  Development-only: `pyproject.toml` ships `src/llm_schema_lite` alone, so the harness is in
+  the repository but not in the installed wheel. (`2db8c3d`)
+- **Newly public helpers on already-exported classes and modules.**
+  `FormatterConfig.includes(key)`; `BaseFormatter.effective_root_schema()` and
+  `BaseFormatter.root_decorations()`; `BaseFormatter.sanitize_comment_text()` (overridden in
+  `JSONishFormatter`); the previously undocumented `exclude` tuple of
+  `BaseFormatter.format_metadata_parts(value, exclude=())`;
+  `formatters.config.with_format_default_separator()`; `parsers.normalize_marker_keys()`; and
+  `formatters.base.IDENTITY_TAG`. The module `llm_schema_lite.schema_normalization` is also
+  new — reachable by full path (`normalize_schema_titles()`), deliberately not re-exported
+  from the package `__all__`; every `BaseFormatter.__init__` routes its incoming schema
+  through it, so a schema dict passed to two formatters is deep-copied and never mutated by
+  the first. (`lsl-2026-09-05-001`, `lsl-2026-09-05-002`, `lsl-2026-09-05-003`,
+  `lsl-2026-09-05-004`, `lsl-2026-09-05-005`)
+- The DSPy adapter benchmark's live aggregate table now reports `parse rate` and `validation
+  rate` per adapter x signature. Both are computed over *attempted* cells only — a cell that
+  failed in `format()` or whose request was rejected is excluded from the denominator rather
+  than scored — and an undefined rate renders as `—`, like every other undefined numeric in
+  the report. The CSV files are unchanged. (`e9e8204`)
 
 ### Changed
 
 - Documentation: the top-level README gains Installation, Quick Start and DSPy Integration
   sections; the DSPy integration README is corrected against the shipped adapter; and
   every runnable code block in both, plus `examples/basic_usage.py`, is now executed by
-  `tests/test_docs_examples.py`.
+  `tests/test_docs_examples.py`. The DSPy integration README's parsing pipeline and
+  `parse_config` bullet now describe shipped behaviour. Both READMEs drop the YAML
+  "experimental" label — the two formatter defects it named, hoisted `Class.field` keys and
+  quoted multi-line strings, are fixed — in favour of a note that the YAML output is a
+  YAML-flavoured schema sketch optimised for prompts rather than a serialization format. The
+  README's make-target list gains `bench-dspy`. (`lsl-2026-09-05-003`, `lsl-2026-09-05-012`)
 - **An enum-typed mapping key now renders its allowed values instead of just its type.**
   `dict[Color, int]` with `Color` an enum of `red`/`green` renders `<red OR green>: int`
   (JSONish), `dict[red OR green, int]` (YAML) and `Record<red | green, number>` (TypeScript)
@@ -129,6 +170,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and YAML's `str(item["const"])`, which is not a duplicate of `process_const` at all —
   routing through it turns `x: US OR null` into `x: string  # one of: "US" OR null`.
   (`lsl-2026-09-05-013`)
+- The non-partial `loads(text, schema=Model)` route now builds its result with
+  `model_validate` instead of `model_construct`, so nested data becomes real sub-model
+  instances, enums become enum members and lax numerics are narrowed. Pydantic-only
+  validation failures are raised as `ConversionError("Validation failed: ...")`, never as a
+  leaked `pydantic.ValidationError`. The partial route is unchanged and still uses
+  `model_construct`. (`944b193`)
+- **The benchmark harness degrades instead of raising when `tiktoken` has no encoding.**
+  `runner._get_encoding()` now returns `tiktoken.Encoding | None` and catches `OSError` (the
+  base class of `requests.exceptions.RequestException`) rather than propagating; both
+  outcomes are memoised and `runner.encoding_available()` exposes the result. The new
+  stdlib-only `benchmarking/dspy_adapters/encoding.py` locates a bundled `cl100k_base` blob
+  inside an installed dependency via `importlib.util.find_spec` (never importing it) and
+  seeds `TIKTOKEN_CACHE_DIR` / `CUSTOM_TIKTOKEN_CACHE_DIR`, never overriding a cache
+  directory that already works. `--offline` prints a one-line stderr warning when the
+  encoding is still unavailable and records `encoding: cl100k_base (unavailable)` in the
+  report provenance; the exit code is unchanged (`0`). Seven over-strong "no network"
+  statements across the benchmark package were corrected. (`f1191eb`)
 
 ### Fixed
 
@@ -199,9 +257,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FormatterConfig.max_recursion_depth` and leaves a `recursive: <TypeName>` marker, in
   all three formatters. (`d35090b`, `7430cb2`, `caa8122`, `3d6e8b2`, `4548d98`)
 - `include_metadata`, `include_descriptions` and `include_constraints` are now live rather
-  than dead: every keyword passes one category gate, and `FormatterConfig` is copied rather
-  than mutated in place. Structural output (required markers, container tokens) is
-  correctly classified as non-metadata and always emitted. (`99b6aa7`)
+  than dead: every keyword passes one category gate. Structural output (required markers,
+  container tokens) is correctly classified as non-metadata and always emitted. (`99b6aa7`)
 - A DSPy reply that omits an optional output field now yields that field's default via
   `apply_output_field_defaults`, instead of failing the completeness check with
   `AdapterParseError`. The YAML→JSON rescue is narrowed to a `ConversionError` around
@@ -265,7 +322,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renderings — this is a repeat-render fix only. Reachable only by calling `transform_schema()`
   twice on one instance; `simplify_schema(...).to_string()` memoizes the string and was never
   affected. Covered by the new `tests/test_repeat_render.py`. (`lsl-2026-09-05-013`)
+- `StructuredOutputAdapter.parse` now strips the required marker its own prompt renders
+  (`FormatterConfig.required_marker`) from reply keys, in JSON, JSONish and YAML modes, with
+  and without a `ParseConfig`. A key matching an output field verbatim always wins.
+  (`944b193`)
+- `StructuredOutputAdapter.parse` now accepts a top-level JSON array wrapping the reply
+  object, matching upstream `dspy.JSONAdapter` (including nested arrays, fenced and indented
+  forms, and arrays whose leading elements are not objects). (`944b193`)
+- `loads(text, schema=Model)` now strips required markers at every nested object level,
+  resolving `$ref`, `anyOf`/`oneOf`/`allOf`, `items`, `prefixItems` and
+  `additionalProperties` values, depth-capped at 8. Keys of an open-ended `dict[str, X]`
+  field are never rewritten. (`944b193`)
+- **`dspy.ToolCalls` output fields now render schema guidance in the system prompt** instead
+  of a bare placeholder. In `OutputMode.JSON` the note stem and the JSON schema object match
+  upstream `dspy.JSONAdapter`; in JSONish and YAML the equivalent simplified schema is
+  emitted by the project's own formatters. (`lsl-2026-09-05-007`)
+- `user_message_output_requirements` now emits upstream's concrete hint for a `ToolCalls`
+  output — `(must be a JSON object like {"tool_calls": [{"name": "...", "args": {...}}]})` —
+  in all three output modes, replacing the unhelpful "must be formatted as a valid Python
+  ToolCalls". (`lsl-2026-09-05-007`)
+- The `dspy.Type` / `dspy.History` carve-out is now element-aware: parameterised annotations
+  such as `list[dspy.Tool]`, `list[dspy.Image]`, `Optional[dspy.Image]` and
+  `dict[str, dspy.Image]` no longer receive a misleading schema note, where previously only
+  bare class annotations were carved out. A `list[dspy.ToolCalls]` output is deliberately
+  silent — DSPy only recognises an exact `ToolCalls` annotation. (`lsl-2026-09-05-007`)
+- `FormatterConfig(required_marker="")` no longer emits the nonsense legend line
+  `Fields marked with  are required`. (`lsl-2026-09-05-007`)
+- **The offline benchmark arm, the doc-example tests and `examples/basic_usage.py` no longer
+  require network access.** `tiktoken` downloads the `cl100k_base` BPE table on a cold cache;
+  every one of these surfaces crashed on a machine with no cache and no network, and a
+  full-suite run passed only because importing `litellm` silently repointed
+  `TIKTOKEN_CACHE_DIR`. The benchmark runner now reports `prompt_tokens` as unavailable (`—`
+  in markdown, an empty CSV cell) instead of raising, `pytest` seeds the cache deliberately
+  before collection, and the example script prints an honest "unavailable" line. (`f1191eb`)
+- **The benchmark's `response_format_sent` column no longer reports `none` for requests the
+  endpoint rejected.** The value is now observed from the LM call itself through a scoped
+  `dspy.BaseCallback`, so a call that raises before DSPy records its history still reports
+  what was sent. The DSPy issue #1871 reproduction table now correctly shows `json_object`
+  for the four adapters whose `json_object` request is refused; `none` now means "no LM call
+  was attempted". (`e9e8204`)
+- **Benchmark results can no longer record an absolute machine path or a credential.** The
+  provenance `command:` line is reconstructed as the documented
+  `python -m benchmarking.dspy_adapters …` form with shell-quoted arguments instead of
+  `" ".join(sys.argv)`, and credential-shaped keys in `LSL_BENCH_LM_KWARGS` (plus
+  `user:pass@` in `LSL_BENCH_API_BASE`) are redacted to `<redacted>`, including inside nested
+  objects. Matching is by whole key segment, so `max_tokens` and the other measurement kwargs
+  are untouched. (`00d07ad`)
+- The committed offline results (`results/prompt-cost-2026-09-05.*`) were regenerated. Eight
+  rows change: six YAML-mode rows from `ba5d7af` and two JSONish `recursive` rows from
+  `52d59c9`, not from these fixes. (`00d07ad`)
 
+<!--
+  Everything above this marker is hand-written. `make changelog` (git-changelog, in-place via
+  [tool.git-changelog] in pyproject.toml) preserves it byte-for-byte and replaces only the
+  marker line below: it appends an auto-generated section for a `v0.7.0` tag that does not
+  exist, with links built from a local SSH host alias. Treat the target as manual-only —
+  review and discard that generated section before committing.
+-->
 <!-- insertion marker -->
 ## [v0.6.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.6.1) - 2025-10-27
 

@@ -204,9 +204,11 @@ docstring and the title is replaced by the docstring text.
 
 ### YAML Mode
 
-> **Experimental.** YAML rendering has known defects tracked in lsl-2026-09-04-006:
-> the YAML formatter hoists nested models to `Class.field` keys and quotes multi-line
-> strings. Prefer JSONish mode for production use.
+> **Note.** YAML mode renders a schema sketch, not an example document: keys carry the `*`
+> required marker, values are type tokens (`string`, `int OR null`), and constraints ride in
+> comments. The output is YAML-flavoured and optimised for LLM prompts — it currently
+> round-trips through `yaml.safe_load` and the test suite guards that, but it is not a
+> serialization format.
 
 YAML output with simplified schemas.
 

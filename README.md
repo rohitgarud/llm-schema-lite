@@ -128,7 +128,13 @@ print(adapter.parse(QA, '{"answer": {"answer": "42", "confidence": 0.9}}'))
 |---|---|---|
 | `OutputMode.JSON` | a JSON object described by the full JSON Schema — verbose, compatible with OpenAI structured outputs | supported |
 | `OutputMode.JSONISH` *(default)* | a JSON object described by the compact schema above | supported |
-| `OutputMode.YAML` *(experimental)* | YAML described by the compact schema | **not supported** — raises `StreamingNotSupportedError` before any request |
+| `OutputMode.YAML` | YAML described by the compact schema | **not supported** — raises `StreamingNotSupportedError` before any request |
+
+YAML mode renders a *schema sketch*, not an example document: keys carry the `*` required
+marker, values are type tokens (`string`, `int OR null`), and constraints ride in comments.
+The output is YAML-flavoured and optimised for LLM prompts — it currently round-trips
+through `yaml.safe_load` and the test suite guards that, but it is not a serialization
+format, so do not build a consumer on its shape.
 
 Every other constructor option — `formatter_config` / `parse_config` forwarding,
 `prompt_layout`, the `json_object` response-format flag and its tool-call interaction,
@@ -187,6 +193,7 @@ make test-cov-full        # Run tests with full coverage (includes DSPy)
 make test-dspy            # Run only DSPy integration tests
 make test-parallel        # Run tests in parallel (faster)
 make test-fast            # Run tests excluding slow ones
+make bench-dspy           # Run the DSPy adapter benchmark (see benchmarking/dspy_adapters)
 
 # Code Quality
 make lint                 # Run all linters (ruff, mypy, bandit)
