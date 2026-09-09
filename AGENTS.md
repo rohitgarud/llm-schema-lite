@@ -79,6 +79,7 @@
 🚫 **Never**: Commit secrets, disable security or lint checks, break documented public API without a plan
 
 ### When in the Planning Mode
+- Create plans as markdown files in plans/ directory with names having number incremented from previous plan
 - Ask clarifying questions if not clear and then make the plan
 - Read any directly mentioned files first
 - Analyze and decompose the planning goal provided by user
@@ -88,6 +89,7 @@
 - Add exact paths in the plan to files the implementation of the plan will be touching, including line numbers/ranges
 - If User provides some corrections, update the same plan accordingly
 - Plan should be self-contained with all the research and necessary context, so that implementation agent should not have to open any files other than mentioned in the plan
+- Plan must always follow Test Driven Design (TDD) and start with checking if test for particular change is available, if not available, plan must include adding the test first
 - Explicitly list out-of-scope items to prevent scope creep
 - Add verification step at the end which can include writing temporary or persistent tests, running relevant make commands
 

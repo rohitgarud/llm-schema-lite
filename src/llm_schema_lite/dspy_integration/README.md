@@ -277,9 +277,17 @@ adapter = StructuredOutputAdapter(
 - **parse_config**: `ParseConfig | None`
   - `None` reproduces upstream `JSONAdapter`: a field that fails `parse_value` leaks its
     `ValidationError`
-  - When given, a rejected field is offered to the coercion rescue first; if
+  - When given, a rejected field is offered to two rescues in order — the coercion
+    rescue, then the all-null-list-item prune (`allow_coercion`, on by default); if
     `parse_config.partial` is `True` the field is then dropped and refilled by
     `apply_output_field_defaults`
+  - The prune matters most on small models, which routinely answer an empty list with
+    a placeholder instead of `[]` — `{"contacts": [{"email": null, "phone": null}]}`
+    fails a required `email: str` and costs the whole record. Coercion cannot repair
+    that without inventing a value; dropping an item whose every field is `null`
+    removes nothing the model actually extracted. Measured on `qwen3.5:0.8b` over 30
+    labeled extraction cases (JSONISH): field accuracy 0.745 → 0.929, 24/30 → 30/30
+    parsed. Inert on models that do not make the mistake
   - Marker stripping does **not** depend on this config. The adapter always strips the
     marker its own formatter renders (`FormatterConfig.required_marker`, default `"*"`).
     Supplying `ParseConfig.strip_required_marker` adds a second marker that is also
@@ -407,7 +415,8 @@ adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
    output field verbatim always wins over a marked one
 5. Cast each value to its expected Pydantic type via `parse_value`
 6. *(only when `parse_config` is given)* a rejected field is offered to the coercion
-   rescue; with `parse_config.partial=True` a still-failing field is dropped
+   rescue, then to the all-null-list-item prune; with `parse_config.partial=True` a
+   still-failing field is dropped
 7. `apply_output_field_defaults` fills any output field the reply omitted
 8. Check that every required output field is now present
 

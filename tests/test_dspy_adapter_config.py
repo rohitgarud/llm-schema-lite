@@ -155,12 +155,17 @@ class TestIncludeInputSchemas:
 
         assert input_marker in on_out
         assert output_marker in on_out
-        assert input_marker in off_out
         assert output_marker in off_out
 
+        # With every input note suppressed the header introduces nothing, so it goes too.
+        assert input_marker not in off_out
+
         on_input_section = on_out[on_out.index(input_marker) : on_out.index(output_marker)]
-        off_input_section = off_out[off_out.index(input_marker) : off_out.index(output_marker)]
+        off_input_section = off_out[: off_out.index(output_marker)]
 
         assert "# note: this value adheres to the JSON schema:" in on_input_section
         assert "the value you produce" not in on_input_section
         assert "# note:" not in off_input_section
+        # The field markers themselves must survive - DSPy's protocol depends on them.
+        assert "[[ ## text ## ]]" in off_input_section
+        assert "[[ ## meta ## ]]" in off_input_section

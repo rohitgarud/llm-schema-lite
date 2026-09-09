@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .accuracy import AccuracyRow, aggregate_accuracy, worst_fields
 from .outcomes import Outcome, PromptRow, TrialRow, parse_success_rate, validation_success_rate
 from .provenance import redact_lm_kwargs, redact_url_userinfo
 
@@ -146,6 +147,42 @@ LIVE_CSV_HEADER: tuple[str, ...] = (
     "total_tokens",
     "prompt_tokens_reported",
     "completion_tokens_reported",
+)
+
+ACCURACY_CSV_HEADER: tuple[str, ...] = (
+    "adapter",
+    "adapter_config",
+    "case_id",
+    "outcome",
+    "error_class",
+    "wall_s",
+    "lm_calls",
+    "response_format_sent",
+    "matched",
+    "total",
+    "ratio",
+    "exact",
+    "wrong",
+    "missing",
+    "spurious",
+    "total_tokens",
+)
+
+ACCURACY_AGGREGATE_COLUMNS = (
+    "| adapter | cases | field accuracy | exact records | ok | parse | validation | empty "
+    "| transport | format | median wall_s | median total_tokens | response_format |"
+)
+
+ACCURACY_FIELDS_COLUMNS = "| field | wrong | missing |"
+
+# Accuracy-arm-only addendum to the "## Metric integrity" section.
+ACCURACY_EXTRA_CAVEAT = (
+    "field accuracy is micro-averaged over the **expected** fields of every case: a cell "
+    "that raised scores 0 against its full denominator rather than being excluded, and "
+    "emitting fewer fields can never raise the score. Fields the model invents are "
+    "reported under `spurious` and break `exact`, but do not enter the denominator. "
+    "Ground truth is the generated record the prose was rendered from, so the corpus "
+    "measures schema-following under paraphrase — not real-world extraction."
 )
 
 OFFLINE_PIVOT_COLUMNS = "| adapter | flat | nested | list_of_model | enum | optional | recursive |"
@@ -585,4 +622,118 @@ def write_live_report(
     ]
     _write_csv_file(csv_path, LIVE_CSV_HEADER, csv_rows)
     md_path.write_text(_render_live_markdown(rows, meta), encoding="utf-8")
+    return md_path, csv_path
+
+
+def _render_accuracy_aggregate(rows: list[AccuracyRow]) -> list[str]:
+    sep = "|" + "|".join(["---"] * len(ACCURACY_AGGREGATE_COLUMNS.strip("|").split("|"))) + "|"
+    lines = [ACCURACY_AGGREGATE_COLUMNS, sep]
+    for record in aggregate_accuracy(rows):
+        accuracy = record["field_accuracy"]
+        median_tokens = record["median_total_tokens"]
+        cells = [
+            record["adapter"],
+            str(record["cases"]),
+            "—" if accuracy is None else f"{accuracy:.3f}",
+            f"{record['exact_records']}/{record['cases']} ({record['exact_rate']:.2f})",
+            str(record["ok"]),
+            str(record["parse"]),
+            str(record["validation"]),
+            str(record["empty"]),
+            str(record["transport"]),
+            str(record["format"]),
+            f"{record['median_wall_s']:.3f}",
+            "—" if median_tokens is None else str(median_tokens),
+            record["response_format"],
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return lines
+
+
+def _render_accuracy_fields(rows: list[AccuracyRow]) -> list[str]:
+    """Per-adapter "which fields did it get wrong" tables — the arm's diagnostic half.
+
+    An aggregate accuracy number says an adapter lost; only this says where. Rendered per
+    adapter because the interesting comparison is which *different* fields each one drops.
+    """
+    lines: list[str] = []
+    by_adapter: dict[str, list[AccuracyRow]] = {}
+    for row in rows:
+        by_adapter.setdefault(row.adapter, []).append(row)
+    sep = "|---|---|---|"
+    for adapter, group in by_adapter.items():
+        ranked = worst_fields(group)
+        if not ranked:
+            continue
+        lines.extend(["", f"**{adapter}**", "", ACCURACY_FIELDS_COLUMNS, sep])
+        lines.extend(f"| `{path}` | {wrong} | {missing} |" for path, wrong, missing in ranked)
+    return lines
+
+
+def _render_accuracy_markdown(rows: list[AccuracyRow], meta: RunMeta) -> str:
+    lines: list[str] = []
+    lines.extend(_render_provenance_block(meta))
+    lines.extend(_metric_integrity_section(ACCURACY_EXTRA_CAVEAT))
+    lines.append("")
+    lines.append("## Extraction accuracy — aggregate")
+    lines.append("")
+    lines.extend(_render_accuracy_aggregate(rows))
+    lines.append("")
+    lines.append("## Most-missed fields")
+    lines.extend(_render_accuracy_fields(rows))
+    lines.append("")
+    lines.append("Per-case detail is in the companion `.csv`; it is not duplicated here.")
+    lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def write_accuracy_report(
+    rows: list[AccuracyRow],
+    out_dir: Path,
+    meta: RunMeta | None = None,
+    today: dt.date | None = None,
+) -> tuple[Path, Path]:
+    """Write `results/accuracy-<model-slug>-<YYYY-MM-DD>.{md,csv}` and return both paths.
+
+    A third file stem, never merged into `live-*`: this arm scores against ground truth
+    while the outcomes arm scores against the schema, and one file would invite exactly
+    the join `outcomes.py` forbids.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if meta is None:
+        meta = RunMeta.minimal("accuracy")
+    if today is None:
+        today = dt.date.today()
+
+    model_slug = "unknown" if meta.model is None else slugify_model(meta.model)
+    stem = f"accuracy-{model_slug}-{today.isoformat()}"
+    md_path = resolve_output_path(out_dir, stem, ".md")
+    csv_path = resolve_output_path(out_dir, stem, ".csv")
+
+    csv_rows = [
+        _csv_row(
+            [
+                row.adapter,
+                row.adapter_config,
+                row.case_id,
+                row.outcome.value,
+                row.error_class,
+                row.wall_s,
+                row.lm_calls,
+                row.response_format_sent,
+                row.matched,
+                row.total,
+                round(row.ratio, 4),
+                row.exact,
+                ";".join(row.wrong),
+                ";".join(row.missing),
+                ";".join(row.spurious),
+                row.total_tokens,
+            ]
+        )
+        for row in rows
+    ]
+    _write_csv_file(csv_path, ACCURACY_CSV_HEADER, csv_rows)
+    md_path.write_text(_render_accuracy_markdown(rows, meta), encoding="utf-8")
     return md_path, csv_path

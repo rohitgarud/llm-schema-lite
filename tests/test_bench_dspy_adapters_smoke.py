@@ -174,7 +174,7 @@ def cold_encoding_memo() -> Iterator[None]:
 
 def test_benchmarking_package_imports() -> None:
     """The `benchmarking.dspy_adapters` import mechanism works under pytest."""
-    assert len(ADAPTERS) == 9
+    assert len(ADAPTERS) == 10
     assert len(SIGNATURES) == 6
 
 
@@ -195,11 +195,11 @@ def test_every_signature_cell_builds() -> None:
 
 
 def test_offline_arm_covers_full_matrix() -> None:
-    """run_offline_arm() returns exactly 54 unique PromptRows (9 adapters x 6 sigs)."""
+    """run_offline_arm() returns exactly 60 unique PromptRows (10 adapters x 6 sigs)."""
     rows = run_offline_arm()
-    assert len(rows) == 54
+    assert len(rows) == 60
     assert all(isinstance(row, PromptRow) for row in rows)
-    assert len({(row.adapter, row.signature) for row in rows}) == 54
+    assert len({(row.adapter, row.signature) for row in rows}) == 60
 
 
 def test_offline_arm_reports_positive_tokens() -> None:
@@ -702,3 +702,45 @@ def test_committed_results_are_provenance_clean() -> None:
         assert "/home/" not in text, path
         assert not re.search(r"^command: /", text, re.MULTILINE), path
         assert not re.search(r"(?i)\b(api_key|secret|authorization)\b\s*[:=]", text), path
+
+
+def test_trials_get_independent_seeds() -> None:
+    """Each trial of a cell must be an independent sample, not the same request N times.
+
+    The live arm shares one dspy.LM across every cell, so a fixed `seed` would make all N
+    trials of a cell byte-identical - the cell then reads 0/N or N/N with stddev 0.000,
+    which looks like confidence but is an artefact of replaying one call. The seed must
+    advance per trial and must not compound across cells.
+    """
+    from benchmarking.dspy_adapters import runner as runner_module
+
+    class _SeededLM:
+        def __init__(self) -> None:
+            self.kwargs = {"seed": 7}
+
+    lm = _SeededLM()
+    seen: list[tuple[str, str, int, int]] = []
+
+    def _spy(adapter, adapter_id, adapter_config, sig_id, trial, lm):  # noqa: ANN001
+        seen.append((adapter_id, sig_id, trial, lm.kwargs["seed"]))
+        return None
+
+    original = runner_module.run_one_trial
+    runner_module.run_one_trial = _spy
+    try:
+        runner_module.run_live_arm(
+            lambda _adapter: lm,
+            adapter_ids=["json", "baml"],
+            signature_ids=["flat", "nested"],
+            trials=3,
+            disable_cache=False,
+        )
+    finally:
+        runner_module.run_one_trial = original
+
+    per_cell: dict[tuple[str, str], list[int]] = {}
+    for adapter_id, sig_id, _trial, seed in seen:
+        per_cell.setdefault((adapter_id, sig_id), []).append(seed)
+    assert per_cell, "run_live_arm produced no cells"
+    for cell, seeds in per_cell.items():
+        assert seeds == [7, 8, 9], (cell, seeds)

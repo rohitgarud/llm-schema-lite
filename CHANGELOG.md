@@ -84,6 +84,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Extraction-accuracy benchmark arm.** `benchmarking/dspy_adapters/{cases,accuracy}.py`
+  generate labeled extraction cases and score a reply field-by-field against ground truth,
+  with `--accuracy --cases N --cases-seed S` on the benchmark CLI and a third results file
+  stem (`accuracy-<model>-<date>.{md,csv}`). This measures *correctness*, which the existing
+  outcomes arm cannot: a reply can parse, satisfy the schema, and be entirely wrong. Ground
+  truth is the record the prose was rendered from, so labels are exact and need no dataset.
+  A failed cell scores 0 against its full denominator rather than being excluded, and the
+  denominator is the expected fields, never the produced ones. The arm is opt-in and never
+  runs by default — it costs `adapters x cases` live calls.
+- **`sola-jsonish-rescue` benchmark cell** — `sola-jsonish-sections` with
+  `parse_config=ParseConfig()` and nothing else changed, so the pair isolates what
+  parse-time repair is worth. A test asserts the two render byte-identical prompts for all
+  six signatures; the offline arm makes the same claim checkable in the token counts.
+
 - `benchmarking/fetch_dataset.py` — downloads JSONSchemaBench into the repo-root
   `jsonschembench_dataset.json` (~100 MB, now gitignored) in the shape
   `format_jsonschembench_schema.py` reads. Idempotent: skips when the file already
@@ -212,6 +226,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `formatters/base.py`. (`lsl-2026-09-04-013`)
 
 ### Fixed
+
+- **Output-field envelope: a schema is now bound to the key it must be emitted under.**
+  In SECTIONS layout an output schema opened a brace at column 0 on its own line, so a
+  small model read it as the response *envelope* and emitted the record bare —
+  `{"name": "Ada", ...}` instead of `{"record": {"name": "Ada", ...}}`. Valid JSON, every
+  value correct, no output field for DSPy to find: `AdapterParseError`, and a perfect
+  extraction scored zero. The schema is now prefixed `"<field>": `. Measured on
+  `qwen3.5:0.8b` over 30 labeled extraction cases, JSONISH went 0/30 parsed to 30/30
+  (0.000 -> 0.745 field accuracy); JSON mode was unchanged. Costs 2-3 prompt tokens on the
+  8 of 53 matrix cells that carry an output schema, and nothing elsewhere. YAML is excluded
+  deliberately — the same prefix measured as a *regression* there (0.849 -> 0.760), because
+  YAML has no brace envelope to disambiguate; its own failure mode is separate work.
+- **Parse-time rescue for all-null list items** (`ParseConfig` only, off when
+  `parse_config is None`). Small models answer an empty list with a placeholder rather than
+  `[]` — `{"contacts": [{"email": null, "phone": null}]}` — which fails a required
+  `email: str` and costs the whole record. Coercion cannot repair it without inventing a
+  value; dropping an item whose every field is `null` removes nothing the model extracted.
+  Rescue-only, so a reply that validates is never touched and a legitimately all-optional
+  item survives. Measured on `qwen3.5:0.8b`: 0.745 -> 0.929 field accuracy, 24/30 -> 30/30
+  parsed; inert on `granite3.1-moe:1b` and `llama3.2:1b`, which do not make the mistake.
+- **Benchmark trial isolation.** `run_live_arm` shared one `dspy.LM` across every cell, so
+  a fixed `seed` made all N trials of a cell one deterministic request replayed N times —
+  N trials carried one trial's information and every `stddev` column read `0.000` as if it
+  were confidence. The seed is now offset per trial.
+- **Input-structure header dropped for all-bare signatures.** When every input is a plain
+  `str` the "Inputs will have the following structure:" header introduced nothing but field
+  markers. Exactly -7 tokens on all 36 `sola-*` matrix cells, zero on `chat`/`json`/`baml`;
+  byte-identical whenever any input carries a note or a schema.
 
 - **YAML no longer appends a document-level `# any properties allowed` for a nested mapping.**
   A `dict[str, Model]` property used to increment a placeholder counter whose only effect was

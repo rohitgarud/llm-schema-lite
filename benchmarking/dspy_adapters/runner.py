@@ -50,12 +50,14 @@ from dspy.adapters.base import Adapter
 from dspy.clients.base_lm import BaseLM
 from dspy.utils.callback import BaseCallback
 
+from .accuracy import AccuracyRow, score
 from .adapters import (
     ADAPTERS,
     LIVE_DEFAULT_ADAPTER_IDS,
     REPRO_1871_ADAPTER_IDS,
     REPRO_1871_ADAPTERS,
 )
+from .cases import Case, ExtractPerson
 from .fakes import JSON_OBJECT_RESPONSE_FORMAT, Issue1871LM, JsonObjectOnlyLM
 from .outcomes import Outcome, PromptRow, ReproRow, TrialRow, classify
 from .signatures import SIGNATURE_IDS, SIGNATURES
@@ -251,14 +253,47 @@ def run_live_arm(
     sig_ids = list(SIGNATURE_IDS) if signature_ids is None else signature_ids
 
     rows: list[TrialRow] = []
+    # Trial isolation: the live path shares one dspy.LM across every cell, so a fixed
+    # `seed` makes all N trials of a cell the *same* deterministic request - N trials then
+    # carry one trial's worth of information, and a cell reads 0/N or N/N with a stddev of
+    # 0.000 that looks like confidence but is an artefact. Offset the seed per trial so a
+    # trial is an independent sample. Captured once: the shared LM is mutated in place, so
+    # re-reading its seed each cell would compound the offset.
+    base_seed: int | None = None
     for adapter_id in ids:
         cell = ADAPTERS[adapter_id]
         for sig_id in sig_ids:
             for trial in range(1, trials + 1):
                 adapter = cell.factory()
                 lm = lm_factory(adapter)
+                kwargs = getattr(lm, "kwargs", None)
+                if isinstance(kwargs, dict) and isinstance(kwargs.get("seed"), int):
+                    if base_seed is None:
+                        base_seed = kwargs["seed"]
+                    lm.kwargs = {**kwargs, "seed": base_seed + trial - 1}
                 rows.append(run_one_trial(adapter, adapter_id, cell.config_repr, sig_id, trial, lm))
     return rows
+
+
+def _reported_tokens(
+    lm: BaseLM, n0: int, lm_calls: int
+) -> tuple[int | None, int | None, int | None]:
+    """Sum the provider-reported usage of the calls this cell added to `lm.history`.
+
+    All three are `None` when no call was made, and when every recorded usage dict is
+    empty -- a cache hit reports nothing, and summing that to `0` would publish a
+    measured zero for a figure that was never measured.
+    """
+    if lm_calls == 0:
+        return None, None, None
+    usages = [entry["usage"] for entry in lm.history[n0:]]
+    if all(not usage for usage in usages):
+        return None, None, None
+    return (
+        sum(usage.get("total_tokens") or 0 for usage in usages),
+        sum(usage.get("prompt_tokens") or 0 for usage in usages),
+        sum(usage.get("completion_tokens") or 0 for usage in usages),
+    )
 
 
 def run_one_trial(
@@ -299,18 +334,9 @@ def run_one_trial(
 
     response_format_sent = recorder.last()
 
-    if lm_calls == 0:
-        total_tokens = prompt_tokens_reported = completion_tokens_reported = None
-    else:
-        usages = [entry["usage"] for entry in lm.history[n0:]]
-        if all(not usage for usage in usages):
-            total_tokens = prompt_tokens_reported = completion_tokens_reported = None
-        else:
-            total_tokens = sum(usage.get("total_tokens") or 0 for usage in usages)
-            prompt_tokens_reported = sum(usage.get("prompt_tokens") or 0 for usage in usages)
-            completion_tokens_reported = sum(
-                usage.get("completion_tokens") or 0 for usage in usages
-            )
+    total_tokens, prompt_tokens_reported, completion_tokens_reported = _reported_tokens(
+        lm, n0, lm_calls
+    )
 
     return TrialRow(
         adapter=adapter_id,
@@ -326,6 +352,88 @@ def run_one_trial(
         total_tokens=total_tokens,
         prompt_tokens_reported=prompt_tokens_reported,
         completion_tokens_reported=completion_tokens_reported,
+    )
+
+
+def run_accuracy_arm(
+    lm_factory: Callable[[Adapter], BaseLM],
+    cases: list[Case],
+    adapter_ids: list[str] | None = None,
+    disable_cache: bool = True,
+) -> list[AccuracyRow]:
+    """Score every (adapter, case) cell against ground truth via `ExtractPerson`.
+
+    Same Δ2 construction rule as `run_live_arm`: `lm_factory` receives the adapter under
+    test. No `trials` parameter and no seed offsetting - the outcomes arm needs those
+    because it re-sends one identical request N times, whereas here every case is a
+    different request, so variation comes from the corpus and a fixed `seed` is a feature
+    (it makes the run reproducible) rather than the collapse-to-one-sample defect it is
+    there.
+    """
+    if disable_cache:
+        dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)
+
+    ids = list(LIVE_DEFAULT_ADAPTER_IDS) if adapter_ids is None else adapter_ids
+
+    rows: list[AccuracyRow] = []
+    for adapter_id in ids:
+        cell = ADAPTERS[adapter_id]
+        for case in cases:
+            adapter = cell.factory()
+            rows.append(
+                run_one_case(adapter, adapter_id, cell.config_repr, case, lm_factory(adapter))
+            )
+    return rows
+
+
+def run_one_case(
+    adapter: Adapter,
+    adapter_id: str,
+    adapter_config: str,
+    case: Case,
+    lm: BaseLM,
+) -> AccuracyRow:
+    """Run one extraction and score the record it produced against the case's ground truth.
+
+    A cell that raised passes `produced=None` to `score`, which charges it 0 against the
+    full expected denominator rather than dropping it - excluding failures would let an
+    adapter that answers half the corpus outrank one that answers all of it imperfectly.
+    Isolation, callbacks and classification are the same contract as `run_one_trial`.
+    """
+    recorder = ResponseFormatRecorder()
+    n0 = len(lm.history)
+    t0 = time.perf_counter()
+    produced: Any = None
+    exc: BaseException | None = None
+    try:
+        with dspy.context(
+            lm=lm, adapter=adapter, track_usage=True, callbacks=_callbacks_with(recorder)
+        ):
+            produced = dspy.Predict(ExtractPerson)(text=case.text).record
+    except BaseException as caught:
+        exc = caught
+    wall_s = time.perf_counter() - t0
+
+    lm_calls = len(lm.history) - n0
+    outcome, error_class = classify(exc, lm_calls)
+    field_score = score(case.expected, produced)
+    total_tokens, _, _ = _reported_tokens(lm, n0, lm_calls)
+
+    return AccuracyRow(
+        adapter=adapter_id,
+        adapter_config=adapter_config,
+        case_id=case.case_id,
+        outcome=outcome,
+        error_class=error_class,
+        wall_s=wall_s,
+        lm_calls=lm_calls,
+        response_format_sent=recorder.last(),
+        matched=field_score.matched,
+        total=field_score.total,
+        wrong=field_score.wrong,
+        missing=field_score.missing,
+        spurious=field_score.spurious,
+        total_tokens=total_tokens,
     )
 
 

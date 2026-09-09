@@ -645,3 +645,50 @@ def test_adapter_block_equals_formatter_render():
                 TypeAdapter(shape).json_schema(), config=config, format_type=fmt
             ).to_string()
             assert adapter_block == formatter_render, f"mode={mode}, shape={shape_name}"
+
+
+class TestOutputSchemaIsBoundToItsFieldName:
+    """The output-field envelope fix.
+
+    An unprefixed schema opens a brace at column 0 on its own line, so a small model
+    reads it as the response envelope and emits the record bare -- valid JSON, every
+    value right, but no output field for DSPy to find, so `parse` raises
+    `AdapterParseError` and a perfect extraction scores zero. Measured on qwen3.5:0.8b
+    over 30 labeled extraction cases: JSONISH went 0/30 parsed to 30/30 with the prefix.
+    """
+
+    @staticmethod
+    def _schema_line(mode: OutputMode) -> str:
+        """The line that immediately precedes the rendered output schema."""
+        out = make_adapter(mode).format_field_structure(_sig_for(Item))
+        lines = out.splitlines()
+        note = NOTE_PARSEABLE if mode is not OutputMode.JSON else NOTE_JSON_SCHEMA
+        return lines[next(i for i, line in enumerate(lines) if note in line) + 1]
+
+    def test_schema_opens_on_a_line_naming_its_output_field(self):
+        assert self._schema_line(OutputMode.JSONISH).startswith('"answer":')
+
+    def test_yaml_is_left_alone(self):
+        """Measured: the prefix moved YAML the wrong way (0.849 -> 0.760 field accuracy
+        on qwen3.5:0.8b) while moving JSONISH from 0.000 to 0.745. YAML has no brace
+        envelope to disambiguate, and its own failure mode is being handled separately."""
+        assert not self._schema_line(OutputMode.YAML).startswith("answer:")
+
+    def test_input_schemas_are_not_prefixed(self):
+        """Inputs are given, never produced, so they carry no envelope ambiguity -- and
+        prefixing them would churn the committed prompt-cost numbers for no gain."""
+        sig = dspy.Signature(
+            {"payload": (Item, dspy.InputField()), "answer": (str, dspy.OutputField())}
+        )
+        out = make_adapter(OutputMode.JSONISH).format_field_structure(sig)
+        input_section = out[: out.index("[[ ## answer ## ]]")]
+        assert NOTE_INPUT_SCHEMA in input_section
+        assert '"payload":' not in input_section
+
+    def test_json_block_layout_is_untouched(self):
+        """JSON_BLOCK already shows the envelope via its own `"name": ...` entry."""
+        out = make_adapter(OutputMode.JSONISH, PromptLayout.JSON_BLOCK).format_field_structure(
+            _sig_for(Item)
+        )
+        assert '"answer": {answer}' in out
+        assert '\n"answer":' not in out

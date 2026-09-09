@@ -1,5 +1,5 @@
 .PHONY: help install sync install-dev install-dspy install-pre-commit pre-commit-run
-.PHONY: test test-cov test-cov-full test-parallel test-fast test-slow test-dspy bench-dspy
+.PHONY: test test-cov test-cov-full test-parallel test-fast test-slow test-dspy test-benchmarking bench-dspy
 .PHONY: lint check format clean build changelog release_notes
 .PHONY: publish-test publish update venv setup
 
@@ -43,6 +43,9 @@ test-cov-full:  ## Run tests with full coverage including DSPy integration
 test-dspy:  ## Run only DSPy integration tests
 	@uv pip install -e ".[dspy]" > /dev/null 2>&1 || echo "DSPy already installed"
 	.venv/bin/python -m pytest tests -k dspy -v --no-cov
+
+test-benchmarking:  ## Run benchmarking tests
+	pytest benchmarking/tests/ --cov=benchmarking --cov-report=term-missing
 
 test-parallel:  ## Run tests in parallel (alias for test)
 	pytest -rP -n auto

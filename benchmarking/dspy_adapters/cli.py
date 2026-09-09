@@ -75,6 +75,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the live outcomes arm only. Requires LSL_BENCH_MODEL/LSL_BENCH_API_BASE.",
     )
     parser.add_argument(
+        "--accuracy",
+        action="store_true",
+        help=(
+            "Run the live extraction-accuracy arm only: N synthetic labeled cases scored "
+            "field-by-field against ground truth. Requires the same live environment as "
+            "--live. Never combined with the other arms into one score."
+        ),
+    )
+    parser.add_argument(
+        "--cases",
+        type=int,
+        default=30,
+        help="Accuracy-arm case count. Default: 30. Ignored by every other arm.",
+    )
+    parser.add_argument(
+        "--cases-seed",
+        type=int,
+        default=0,
+        help="Accuracy-arm corpus seed; recorded in the report. Default: 0.",
+    )
+    parser.add_argument(
         "--adapters",
         type=str,
         default=None,
@@ -276,6 +297,56 @@ def _run_live(args: argparse.Namespace) -> int:
     return 1 if harness_failed else 0
 
 
+def _run_accuracy(args: argparse.Namespace) -> int:
+    """Run the live accuracy arm against one shared `dspy.LM`, then write its report."""
+    from . import config as config_module
+    from . import report as report_module
+    from .cases import generate
+    from .runner import run_accuracy_arm
+
+    adapter_ids = resolve_adapter_ids(args.adapters, LIVE_DEFAULT_ADAPTER_IDS)
+
+    cfg = config_module.load_config()  # exits 2 itself when not configured
+    lm = config_module.build_lm(cfg)
+
+    cases = generate(args.cases, seed=args.cases_seed)
+    rows = run_accuracy_arm(lambda _adapter: lm, cases, adapter_ids=adapter_ids)
+
+    harness_failed = bool(rows) and all(row.error_class == "LMTransportError" for row in rows)
+    if harness_failed:
+        print(
+            f"error: no accuracy cell reached the endpoint; is {cfg.api_base} up?", file=sys.stderr
+        )
+
+    meta = dataclasses.replace(
+        report_module.RunMeta.minimal("accuracy"),
+        command=invocation_command(),
+        git_head=report_module.git_head(),
+        model=cfg.model,
+        api_base=cfg.api_base,
+        lm_kwargs={
+            **config_module.BASELINE_LM_KWARGS,
+            **cfg.lm_kwargs,
+            # Corpus identity belongs in provenance: two accuracy runs are only comparable
+            # if they scored the same cases, and (n, seed) is what fixes that.
+            "cases": args.cases,
+            "cases_seed": args.cases_seed,
+        },
+        supports_response_schema=getattr(lm, "supports_response_schema", None),
+        supports_function_calling=getattr(lm, "supports_function_calling", None),
+        integrity_overridden=cfg.integrity_overridden,
+    )
+    try:
+        md_path, csv_path = report_module.write_accuracy_report(rows, args.out, meta=meta)
+    except OSError as exc:
+        print(f"error: could not write results to {args.out}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"wrote {md_path}")
+    print(f"wrote {csv_path}")
+    return 1 if harness_failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse argv, dispatch to the requested arm(s), and return the process exit code.
 
@@ -293,6 +364,11 @@ def main(argv: list[str] | None = None) -> int:
             return _run_list()
         if args.repro_1871:
             return _run_repro_1871()
+        # Explicit opt-in, and never part of the "neither flag runs both" default: the
+        # accuracy arm costs N_adapters x N_cases live calls, so it must never start
+        # because someone ran the benchmark with no flags at all.
+        if args.accuracy:
+            return _run_accuracy(args)
 
         do_offline = args.offline or not args.live
         do_live = args.live or not args.offline

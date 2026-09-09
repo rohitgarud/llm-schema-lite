@@ -133,6 +133,61 @@ class _ResponseFormatPlan(enum.Enum):
     SCHEMA = "schema"  # build the Pydantic model; fall back on failure
 
 
+def _prune_null_list_items(value: Any) -> Any:
+    """Drop list items in which EVERY field is ``None``, recursively.
+
+    Rescue-only, and reached only from the ``except`` branch of the ``parse_value`` loop
+    in ``_build_output_fields`` -- so it can only improve an outcome that already failed.
+
+    **Why this repair and not coercion.** Small models routinely answer an empty list
+    with a placeholder instead of ``[]``::
+
+        {"contacts": [{"email": null, "phone": null}]}   # what the model sent
+        {"contacts": []}                                 # what the text supports
+
+    ``email: str`` is required, so this fails validation and the whole record scores
+    zero. Coercion cannot help: satisfying ``str`` would mean *inventing* a value, which
+    turns a wrong answer into a passing one -- the one direction the parser must never
+    fail in. Dropping the item is information-preserving instead: an item whose every
+    field is ``None`` carries nothing, so removing it cannot destroy a value the model
+    actually extracted.
+
+    Measured on ``qwen3.5:0.8b`` over 30 labeled extraction cases (JSONISH): field
+    accuracy 0.745 -> 0.929, 24/30 -> 30/30 parsed, all 6 validation errors gone. On
+    ``granite3.1-moe:1b``, which does not make this mistake, the numbers are unchanged
+    (0.865, 29/30) -- the repair is inert where it is not needed.
+
+    **The narrowing that keeps it honest.** An empty dict is NOT pruned, and a list item
+    is pruned only when it has at least one field and all of them are ``None``. For a
+    model whose fields are *all* optional an all-null item can be legitimate, which is
+    exactly why this never runs on the success path: if the value validated, it is
+    returned untouched and this function is never called.
+
+    Returns ``value`` itself (identity-comparable) when nothing was dropped, so the
+    caller can skip a pointless re-parse.
+    """
+    if isinstance(value, dict):
+        pruned = {k: _prune_null_list_items(v) for k, v in value.items()}
+        return value if all(pruned[k] is value[k] for k in value) else pruned
+    if isinstance(value, list):
+        kept: list[Any] = []
+        dropped = False
+        for item in value:
+            item_pruned = _prune_null_list_items(item)
+            if (
+                isinstance(item_pruned, dict)
+                and item_pruned
+                and all(field is None for field in item_pruned.values())
+            ):
+                dropped = True
+                continue
+            if item_pruned is not item:
+                dropped = True
+            kept.append(item_pruned)
+        return kept if dropped else value
+    return value
+
+
 class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
     """
     Unified adapter for structured output with multiple format support.
@@ -381,7 +436,14 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         if any(block.legend_needed for block in (*input_blocks, *output_blocks)):
             parts.append(self._legend_line())
 
-        parts.append("Inputs will have the following structure:")
+        # The header only earns its tokens when some input block actually carries a note
+        # or a schema. For an all-bare signature (every input a plain str) it introduces
+        # nothing but `[[ ## name ## ]]` markers, so it is dropped - as it is when
+        # include_input_schemas=False has already emptied every block.
+        if any(
+            block.note_text is not None or block.schema_text is not None for block in input_blocks
+        ):
+            parts.append("Inputs will have the following structure:")
         parts.append(self._render_sections(input_blocks))
 
         if self.output_mode == OutputMode.YAML:
@@ -585,17 +647,50 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         """
         if self.prompt_layout == PromptLayout.JSON_BLOCK:
             return self._render_json_block(blocks)
-        return self._render_sections(blocks)
+        # YAML is excluded deliberately, not by oversight. Measured on qwen3.5:0.8b over
+        # the same 30 cases, the prefix moved YAML the WRONG way (0.849 -> 0.760 field
+        # accuracy, 27 -> 24 parsed) while moving JSONISH from 0.000 to 0.745. YAML's
+        # failure mode is a separate, larger problem -- its SECTIONS prompt demonstrates
+        # `[[ ## field ## ]]` markers while asking for YAML, and sends no `response_format`
+        # to override the demonstration -- and it is being addressed on its own. Applying
+        # a fix aimed at a brace-envelope to a format that has no braces bought a
+        # regression, so YAML stays byte-identical here until that work happens.
+        return self._render_sections(blocks, bind_field_name=self.output_mode != OutputMode.YAML)
 
-    def _render_sections(self, blocks: list[_FieldBlock]) -> str:
-        """Render ``blocks`` as ``[[ ## name ## ]]`` sections joined by a blank line."""
+    def _render_sections(self, blocks: list[_FieldBlock], bind_field_name: bool = False) -> str:
+        """Render ``blocks`` as ``[[ ## name ## ]]`` sections joined by a blank line.
+
+        ``bind_field_name`` prefixes a schema with the key it must be emitted under, and
+        is passed only by ``_render`` -- i.e. only for OUTPUT blocks. It exists because an
+        unprefixed schema block is the dominant failure mode on small models: the schema
+        opens a brace at column 0 on its own line, directly after the last thing in the
+        prompt, so the model reads it as the response *envelope* and emits the record
+        bare::
+
+            {"name": "Ada", "age": 36}          # what the model sent
+            {"record": {"name": "Ada", ...}}    # what DSPy needs to find the field
+
+        The reply is valid JSON with every value correct, but the output field is
+        missing, so ``parse`` raises ``AdapterParseError`` and a perfect extraction
+        scores zero. Measured on ``qwen3.5:0.8b`` over 30 labeled extraction cases:
+        JSONISH went 0/30 parsed -> 30/30 parsed (0.000 -> 0.745 field accuracy) with
+        this prefix, and JSON mode was unchanged (0.886 -> 0.880, same 30/30). ``_render``
+        withholds it for YAML, where the same prefix measured as a regression.
+
+        Input blocks are deliberately left alone: the model does not produce them, so
+        they never carry the envelope ambiguity, and prefixing them would churn the
+        committed prompt-cost numbers for no behavioural gain.
+        """
         rendered: list[str] = []
         for block in blocks:
             text = f"[[ ## {block.name} ## ]]\n{{{block.name}}}"
             if block.note_text is not None:
                 text += f"{' ' * 8}# note: {block.note_text}"
             if block.schema_text is not None:
-                text += f"\n{block.schema_text}"
+                if bind_field_name:
+                    text += f'\n"{block.name}": {block.schema_text.lstrip()}'
+                else:
+                    text += f"\n{block.schema_text}"
             rendered.append(text)
         return "\n\n".join(rendered).strip()
 
@@ -922,14 +1017,17 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
     ) -> dict[str, Any]:
         """The shared field pipeline: byte-identical semantics for JSON and YAML.
 
-        Mirrors upstream JSONAdapter.parse (DSPy 3.3.1) with the coercion rescue
-        (_coerce_field_value) as the only insertion. Both _parse_json and _parse_yaml
-        funnel through it after their mode-specific extraction.
+        Mirrors upstream JSONAdapter.parse (DSPy 3.3.1) with two rescues as the only
+        insertions -- _coerce_field_value, then _prune_null_list_items. Both _parse_json
+        and _parse_yaml funnel through it after their mode-specific extraction.
 
         Invariants that any change to this method must preserve:
           - self.parse_config is None => structurally upstream-equivalent. The first
             line of the except branch below re-raises before any new machinery is
             reachable; this must not depend on config values happening to be inert.
+            The prune rescue sits BELOW that re-raise and behind allow_coercion for the
+            same reason: it is a semantic repair, and a default-on repair would silently
+            change what every existing caller gets back.
           - Defaults from apply_output_field_defaults are inserted as already-typed
             Python values and are never fed back through parse_value.
           - Return type is dict[str, Any] keyed by output-field name; CoercionMetadata
@@ -986,6 +1084,16 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                     else:
                         logger.debug(f"Coercion rescued output field {k!r}: {metadata}")
                         continue
+                if self.parse_config.allow_coercion:
+                    pruned = _prune_null_list_items(v)
+                    if pruned is not v:
+                        try:
+                            out[k] = parse_value(pruned, annotation)
+                        except (pydantic.ValidationError, ValueError):
+                            pass
+                        else:
+                            logger.debug(f"Prune rescued output field {k!r}: dropped null items")
+                            continue
                 if self.parse_config.partial:
                     logger.debug(f"Dropping unparseable output field {k!r} (partial=True)")
                     continue

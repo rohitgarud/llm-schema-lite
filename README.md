@@ -85,6 +85,137 @@ print(user.name, user.age)
 Fields marked `*` are required. Constraints are folded into the type line rather than
 listed separately, which is where most of the token saving comes from.
 
+## 🎨 Output Formats
+
+`simplify_schema(model, format_type=...)` renders the same schema three ways. All three
+carry the `*` required marker and fold constraints into the type line.
+
+| `format_type` | Looks like | `User` above |
+|---|---|---|
+| `"jsonish"` *(default)* | a JSON object with `//` comments — closest to the JSON most models emit | 71 tokens |
+| `"typescript"` | a TypeScript `interface` with `;` separators and `\|` unions | 63 tokens |
+| `"yaml"` | indented keys with `#` comments, no braces | 61 tokens |
+
+<!-- Each block below is executed standalone by tests/test_docs_examples.py, so the
+     model is redefined rather than carried over from the Quick Start. -->
+
+```python
+from pydantic import BaseModel, Field
+
+from llm_schema_lite import simplify_schema
+
+
+class Address(BaseModel):
+    """A postal address."""
+
+    street: str
+    city: str
+
+
+class User(BaseModel):
+    """A user account."""
+
+    name: str = Field(min_length=2, description="Full name")
+    age: int = Field(ge=0, le=120)
+    email: str | None = None
+    address: Address
+
+
+print(simplify_schema(User, format_type="typescript").to_string())
+print(simplify_schema(User, format_type="yaml").to_string())
+```
+
+```
+// Description: A user account.
+// Fields marked with * are required
+interface Schema {
+  name*: string (>= 2 chars);  // Full name
+  age*: number (0 to 120);
+  email: string | null;
+  address*: { street*: string, city*: string };
+}
+# Description: A user account.
+
+# Fields marked with * are required
+
+name*: string (>= 2 chars)  # Full name
+age*: int (0 to 120)
+email: string OR null  # (default=null)
+address*:
+  street*: string
+  city*: string
+```
+
+All three are *schema sketches* for prompting, not serialization formats — the values are
+type tokens, not example data. Don't build a consumer on their shape.
+
+## ✅ Validation and Coercion
+
+`validate()` checks data against a schema and returns every error, with the constraint
+that failed:
+
+```python
+from pydantic import BaseModel, Field
+
+from llm_schema_lite import validate
+
+
+class Address(BaseModel):
+    street: str
+    city: str
+
+
+class User(BaseModel):
+    name: str = Field(min_length=2, description="Full name")
+    age: int = Field(ge=0, le=120)
+    email: str | None = None
+    address: Address
+
+
+ok, errors = validate(User, {"name": "Ada", "age": 36,
+                             "address": {"street": "1 Main St", "city": "Springfield"}})
+# (True, None)
+
+ok, errors = validate(User, {"name": "A", "age": 200,
+                             "address": {"street": "1 Main St", "city": "Springfield"}})
+# ok is False; errors is:
+# ["Validation error at '.name': 'A' is too short (got 'A') - Constraint: minLength = 2",
+#  "Validation error at '.age': 200 is greater than the maximum of 120 (got 200) - Constraint: maximum = 120"]
+```
+
+`coerce()` repairs the type mistakes models routinely make — a number sent as a string, a
+scalar sent where a list belongs — and reports every change it made:
+
+```python
+from pydantic import BaseModel, Field
+
+from llm_schema_lite import coerce
+
+
+class Address(BaseModel):
+    street: str
+    city: str
+
+
+class User(BaseModel):
+    name: str = Field(min_length=2, description="Full name")
+    age: int = Field(ge=0, le=120)
+    email: str | None = None
+    address: Address
+
+
+data, metadata = coerce({"name": "Ada", "age": "36",
+                         "address": {"street": "1 Main St", "city": "Springfield"}}, User)
+
+print(data["age"])  # 36 — an int, not "36"
+for m in metadata:
+    print(m.field_path, m.coercion_type, m.original_value, "->", m.coerced_value)
+# age to_int 36 -> 36
+```
+
+`loads(reply, schema=User)` already runs coercion and returns `(instance, metadata)`; call
+`coerce()` directly when you have a dict rather than raw model text.
+
 ## 🤖 DSPy Integration
 
 `pip install "llm-schema-lite[dspy]"` (DSPy `>=3.3.1`) adds `StructuredOutputAdapter`, a
@@ -182,33 +313,40 @@ Run `make help` to see all available commands:
 ```bash
 # Installation
 make install              # Install package
-make install-dev          # Install with dev dependencies
-make install-dspy         # Install with DSPy support
-make sync                 # Sync all dependencies
+make install-dev          # Install with development dependencies
+make install-dspy         # Install with DSPy integration
+make install-pre-commit   # Install pre-commit hooks
+make sync                 # Sync dependencies using uv
 
 # Testing
-make test                 # Run tests
-make test-cov             # Run tests with coverage (core only)
-make test-cov-full        # Run tests with full coverage (includes DSPy)
+make test                 # Run tests with pytest
+make test-cov             # Run tests with coverage report (core only, no DSPy)
+make test-cov-full        # Run tests with full coverage including DSPy
 make test-dspy            # Run only DSPy integration tests
-make test-parallel        # Run tests in parallel (faster)
+make test-benchmarking    # Run benchmarking tests
+make test-parallel        # Run tests in parallel (alias for test)
 make test-fast            # Run tests excluding slow ones
+make test-slow            # Run only slow tests
 make bench-dspy           # Run the DSPy adapter benchmark (see benchmarking/dspy_adapters)
 
 # Code Quality
 make lint                 # Run all linters (ruff, mypy, bandit)
 make format               # Format code with ruff
-make check                # Quick health check
+make check                # Quick health check (fast lint + type check)
 make pre-commit-run       # Run pre-commit on all files
 
 # Build & Release
-make build                # Build package
+make build                # Build package distribution
 make changelog            # Generate changelog
-make clean                # Clean build artifacts
+make release_notes        # Generate release notes
+make publish-test         # Publish to Test PyPI
+make publish              # Publish to PyPI
+make clean                # Clean build artifacts and cache files
 
 # Setup
 make venv                 # Create virtual environment
-make setup                # Complete development setup
+make setup                # Complete setup for development
+make update               # Full project update (clean, sync, hooks, lint)
 ```
 
 ### Running Tests

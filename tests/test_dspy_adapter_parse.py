@@ -11,7 +11,10 @@ import dspy  # noqa: E402
 from dspy.utils.exceptions import AdapterParseError  # noqa: E402
 
 from llm_schema_lite import FormatterConfig, ParseConfig  # noqa: E402
-from llm_schema_lite.dspy_integration import OutputMode  # noqa: E402
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
+from llm_schema_lite.dspy_integration.adapters.structured_output_adapter import (
+    _prune_null_list_items,
+)  # noqa: E402
 from tests.dspy_helpers import QA, QAOptional, Typed, make_adapter  # noqa: E402
 
 
@@ -320,3 +323,78 @@ class TestParseMarkerKeys:
         """The array unwrap and the marker strip compose (design v2 section 7, row 12)."""
         adapter = make_adapter(OutputMode.JSONISH)
         assert adapter.parse(QA, '[{"answer*": "x"}]') == {"answer": "x"}
+
+
+class _PruneContact(pydantic.BaseModel):
+    email: str
+    phone: str | None = None
+
+
+class _PruneRec(pydantic.BaseModel):
+    name: str
+    contacts: list[_PruneContact] = pydantic.Field(default_factory=list)
+
+
+class TestPruneNullListItemsRescue:
+    """The all-null-list-item rescue: opt-in, rescue-only, information-preserving.
+
+    Small models answer an empty list with a placeholder object of nulls rather than
+    `[]`. Coercion cannot repair that without inventing a value; dropping an item whose
+    every field is None can only remove information that was never there.
+    """
+
+    @staticmethod
+    def _sig():
+        return dspy.Signature(
+            {"text": (str, dspy.InputField()), "record": (_PruneRec, dspy.OutputField())}
+        )
+
+    PLACEHOLDER = '{"record": {"name": "Ada", "contacts": [{"email": null, "phone": null}]}}'
+
+    def test_rescue_recovers_the_record(self):
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig()
+        ).parse(self._sig(), self.PLACEHOLDER)
+        assert out["record"].name == "Ada"
+        assert out["record"].contacts == []
+
+    def test_is_off_when_parse_config_is_none(self):
+        """`parse_config is None` must stay upstream-equivalent -- a default-on semantic
+        repair would silently change what every existing caller gets back."""
+        with pytest.raises((pydantic.ValidationError, AdapterParseError, ValueError)):
+            StructuredOutputAdapter(output_mode=OutputMode.JSONISH).parse(
+                self._sig(), self.PLACEHOLDER
+            )
+
+    def test_a_valid_reply_is_never_touched(self):
+        """Rescue-only: a list that validates never reaches the pruner, so a legitimate
+        all-optional item survives."""
+        good = '{"record": {"name": "Ada", "contacts": [{"email": "a@b.c", "phone": null}]}}'
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig()
+        ).parse(self._sig(), good)
+        assert len(out["record"].contacts) == 1
+        assert out["record"].contacts[0].phone is None
+
+
+class TestPruneNullListItemsUnit:
+    """`_prune_null_list_items` in isolation -- the narrowings that keep it safe."""
+
+    def test_drops_only_all_null_items(self):
+        value = [{"a": None, "b": None}, {"a": 1, "b": None}]
+        assert _prune_null_list_items(value) == [{"a": 1, "b": None}]
+
+    def test_empty_dict_is_not_a_null_placeholder(self):
+        assert _prune_null_list_items([{}]) == [{}]
+
+    def test_returns_the_same_object_when_nothing_is_dropped(self):
+        """Identity signals 'no change' so the caller can skip a pointless re-parse."""
+        value = {"xs": [{"a": 1}]}
+        assert _prune_null_list_items(value) is value
+
+    def test_recurses_into_nesting(self):
+        value = {"outer": [{"inner": [{"a": None}], "keep": 1}]}
+        assert _prune_null_list_items(value) == {"outer": [{"inner": [], "keep": 1}]}
+
+    def test_scalars_and_plain_lists_pass_through(self):
+        assert _prune_null_list_items([1, None, "x"]) == [1, None, "x"]

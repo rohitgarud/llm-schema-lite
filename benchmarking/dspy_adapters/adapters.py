@@ -19,6 +19,7 @@ from dspy.adapters import ChatAdapter, JSONAdapter
 from dspy.adapters.baml_adapter import BAMLAdapter  # C1: the only working import path
 from dspy.adapters.base import Adapter
 
+from llm_schema_lite import ParseConfig
 from llm_schema_lite.dspy_integration import (
     OutputMode,
     PromptLayout,
@@ -91,6 +92,18 @@ ADAPTERS: dict[str, AdapterCell] = {
         ),
         config_repr="StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=JSON_BLOCK)",
     ),
+    "sola-jsonish-rescue": AdapterCell(
+        id="sola-jsonish-rescue",
+        factory=lambda: StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH,
+            prompt_layout=PromptLayout.SECTIONS,
+            parse_config=ParseConfig(),
+        ),
+        config_repr=(
+            "StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, "
+            "parse_config=ParseConfig())"
+        ),
+    ),
     "sola-yaml-block": AdapterCell(
         id="sola-yaml-block",
         factory=lambda: StructuredOutputAdapter(
@@ -109,8 +122,18 @@ LIVE_DEFAULT_ADAPTER_IDS: tuple[str, ...] = (
     "sola-json-sections",
     "sola-jsonish-sections",
     "sola-yaml-sections",
+    "sola-jsonish-rescue",
 )
-"""The live arm defaults to the six *-sections ids (cost split)."""
+"""The live arms default to the six *-sections ids plus the parse-time rescue cell.
+
+`sola-jsonish-rescue` differs from `sola-jsonish-sections` in exactly one thing --
+`parse_config=ParseConfig()`, which arms the coercion and all-null-list-item rescues --
+so the pair isolates what parse-time repair is worth on a given model. Its PROMPT is
+byte-identical to `sola-jsonish-sections`, which the offline arm makes visible: the two
+rows must agree on every token count, or the cell is measuring more than it claims.
+Measured on qwen3.5:0.8b, 30 accuracy cases: 0.745 -> 0.929 field accuracy, 24/30 ->
+30/30 parsed; inert on granite3.1-moe:1b and llama3.2:1b.
+"""
 
 REPRO_1871_ADAPTER_IDS: tuple[str, ...] = (
     "chat",
