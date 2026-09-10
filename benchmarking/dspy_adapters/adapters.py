@@ -153,7 +153,9 @@ LIVE_DEFAULT_ADAPTER_IDS: tuple[str, ...] = (
 
 `sola-jsonish-rescue` differs from `sola-jsonish-sections` in exactly one thing --
 `parse_config=ParseConfig()`, which arms the coercion rescue and the structural repair
-(list-wrapped objects unwrapped, all-null list items dropped) --
+(copied nested markers stripped, list-wrapped objects unwrapped, hoisted fields re-nested,
+all-null objects nulled, lone values wrapped in lists, all-null list items dropped, and a
+missing output key restored) --
 so the pair isolates what parse-time repair is worth on a given model. Its PROMPT is
 byte-identical to `sola-jsonish-sections`, which the offline arm makes visible: the two
 rows must agree on every token count, or the cell is measuring more than it claims.

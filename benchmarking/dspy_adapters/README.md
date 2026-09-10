@@ -499,6 +499,19 @@ tells YAML users to pass it. YAML's typed scalars (`postcode: 95014` loads as an
 *not* repaired by it — coercion only reaches scalar output fields, and `record` is a
 model. They surfaced once in development runs, not in this artefact.
 
+`ParseConfig()` has since gained more structural repairs, each found by counting failure
+signatures in captured completions and A/B'd by parsing those completions with and
+without it — offline numbers, not rows of the table above:
+- On `qwen3.5:0.8b`'s YAML synthetic replies, 3 of the 4 remaining validation errors are
+  an absent `employment` answered as `{company: null, role: null, years: null}`. Nulling
+  an all-null object in a nullable slot takes the cell from 0.831 to 0.926 (26/30 ->
+  29/30).
+- In JSON mode, 7 of 30 `pii` replies send the PII fields without the `pii` key. Moving
+  them under it takes the cell from 0.713 to 0.926 (23 -> 30 parsed).
+- `granite3.1-moe:1b` answers one-entity lists as the entity itself (`"Company":
+  "Apple"`). Wrapping it lifts financial-NER from 0 to 16 parsed in JSON mode, though the
+  score stays far below that corpus's floor.
+
 ### What the third-party corpora found
 
 The same six models and eight adapters, the first 30 cases of each corpus, field accuracy.
@@ -578,7 +591,13 @@ match the artefacts to within Ollama's noise, not exactly.
   `sola-jsonish-sections`'. `sola-json-sections` keeps the nesting — 29/30 validate — and
   scores 0.686, with YAML close behind at 0.670 with the rescue. This is the one corpus
   where JSON mode's full schema beats the compact ones. With a 0.018 floor, every
-  non-zero score here is real extraction.
+  non-zero score here is real extraction. The hoisting is repairable, and `ParseConfig()`
+  now repairs it: hoisted fields move back under `header`, and in the other shape seen —
+  `header`'s fields under `claim`, `claim`'s own fields beside it at the reply's top level
+  — those move into `claim` first. Parsing the same captured completions with and
+  without it, `qwen3.5:0.8b`'s JSONISH goes 0.233 -> 0.720 (9/30 -> 30/30 parsed), above
+  `sola-json-sections`, and YAML 0.670 -> 0.721 once a `*` copied into nested keys is
+  stripped too. Those are offline A/B numbers; the table above predates the repair.
 - **`patient-notes` defeats every model.** The best cell is 0.162 against a 0.356 floor.
   Of the 240 cells each model runs, all but `qwen3.5:0.8b`'s 16 JSONISH records are
   parse, validation or (for `baml`) format errors; *Third-party corpora* above gives the

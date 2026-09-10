@@ -102,6 +102,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes it from 9/30 to 26/30 parsed (field accuracy 0.209 -> 0.606); JSONISH and YAML
   replies were unchanged on every corpus measured. The benchmark gains an opt-in
   `sola-json-rescue` cell to reproduce it.
+- **Five more structural repairs in the DSPy adapter**, behind the same `parse_config`
+  gate. A field that failed validation is also offered these repairs:
+  - fields the model hoisted out of a nested object move back under it, including from the
+    reply's top level into the output field;
+  - the prompt's `*` marker is stripped from nested keys;
+  - an optional object whose every field is null becomes null;
+  - a lone value is wrapped in a list where the schema wants a list of values.
+
+  And before the missing-field error, an output field's contents sent without its key are
+  moved under it. Each repair only reshapes what the model sent, never adds a value.
+  Measured by parsing the same captured completions with and without them (30 cases per
+  corpus x mode):
+  - `qwen3.5:0.8b`:
+    - insurance-claims JSONISH 0.233 -> 0.720 (9/30 -> 30/30 parsed);
+    - insurance-claims YAML 0.670 -> 0.721;
+    - pii JSON 0.713 -> 0.926 (23 -> 30);
+    - synthetic YAML 0.831 -> 0.926.
+  - `granite3.1-moe:1b`:
+    - financial-NER parsed 0 -> 16 (JSON), 1 -> 13 (YAML) and 0 -> 8 (JSONISH);
+    - pii JSON 0.607 -> 0.738.
+  - `llama3.2:1b`:
+    - pii JSONISH 0.082 -> 0.339 (7/30 -> 30/30 parsed);
+    - synthetic JSONISH 0.215 -> 0.271 and YAML 0.311 -> 0.357.
+
+  No case scored lower on any model, across 1,350 captured completions.
 - **Third-party corpora for the accuracy arm**
   (`--corpus pii|financial-ner|insurance-claims|patient-notes`).
   `benchmarking/dspy_adapters/external.py` runs the four structured-output tasks of

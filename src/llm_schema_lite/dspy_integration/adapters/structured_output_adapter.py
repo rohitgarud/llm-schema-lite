@@ -41,6 +41,7 @@ from llm_schema_lite import (
     simplify_schema,
 )
 from llm_schema_lite.parsers import normalize_marker_keys
+from llm_schema_lite.parsers.schema_parser import normalize_marker_keys_recursive
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,201 @@ def _unwrap_single_item_lists(value: Any, annotation: Any) -> Any:
             items if any(new is not old for new, old in zip(items, value, strict=True)) else value
         )
     return value
+
+
+def _object_model(annotation: Any) -> type[pydantic.BaseModel] | None:
+    """The pydantic model an annotation admits as an object (through Optional/Annotated)."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _object_model(get_args(annotation)[0])
+    if origin is Union or origin is types.UnionType:
+        members = [arg for arg in get_args(annotation) if arg is not type(None)]
+        return next((m for m in map(_object_model, members) if m is not None), None)
+    if isinstance(annotation, type) and issubclass(annotation, pydantic.BaseModel):
+        return annotation
+    return None
+
+
+def _list_item_type(annotation: Any) -> Any:
+    """The item type of a list annotation (through Optional/Annotated), else None."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _list_item_type(get_args(annotation)[0])
+    if origin is Union or origin is types.UnionType:
+        members = [arg for arg in get_args(annotation) if arg is not type(None)]
+        return next((t for t in map(_list_item_type, members) if t is not None), None)
+    if _is_list_type(annotation) and get_args(annotation):
+        return get_args(annotation)[0]
+    return None
+
+
+def _move_strays(item: dict[str, Any], annotations: dict[str, Any]) -> dict[str, Any]:
+    """Move each key no annotation names into the one object field whose model has it.
+
+    A target qualifies when it is absent, null, or a dict that lacks the key. A key two
+    targets could take stays put. Returns ``item`` itself when nothing moved.
+    """
+    owners: dict[str, list[str]] = {}
+    for name, annotation in annotations.items():
+        target, current = _object_model(annotation), item.get(name)
+        if target is None or not (current is None or isinstance(current, dict)):
+            continue
+        for k in item:
+            if k in annotations or k not in target.model_fields:
+                continue
+            if isinstance(current, dict) and k in current:
+                continue
+            owners.setdefault(k, []).append(name)
+    moves = {k: names[0] for k, names in owners.items() if len(names) == 1}
+    if not moves:
+        return item
+    out = {k: v for k, v in item.items() if k not in moves}
+    for k, name in moves.items():
+        out[name] = {**(out.get(name) or {}), k: item[k]}
+    return out
+
+
+def _renest_hoisted_fields(value: Any, annotation: Any) -> Any:
+    """Move a nested object's fields back under it when the model hoisted them a level up.
+
+    Rescue-only, like the other structural repairs. Small models flatten a nested object
+    into its parent -- ``{"claim_id": ..., "channel": ..., "policy_details": {...}}`` where
+    the schema wants ``{"header": {"claim_id": ..., "channel": ...}, ...}`` -- so the
+    required ``header`` is reported missing and the hoisted values are dropped as unknown
+    keys. ``_build_output_fields`` applies the same move one level higher, to reply keys
+    that are not output fields.
+
+    **Why this repair is safe.** It only moves values the model sent; it never creates
+    one. A key moves only when the parent model has no field of that name, the target
+    object does not already hold it, and exactly one target could take it - an ambiguous
+    key stays where it is for validation to reject.
+
+    Returns ``value`` itself (identity-comparable) when nothing changed.
+    """
+    model = _object_model(annotation)
+    if model is not None:
+        if not isinstance(value, dict):
+            return value
+        fields = model.model_fields
+        moved = _move_strays(value, {k: f.annotation for k, f in fields.items()})
+        item = {
+            k: _renest_hoisted_fields(v, fields[k].annotation) if k in fields else v
+            for k, v in moved.items()
+        }
+        changed = moved is not value or any(item[k] is not moved[k] for k in moved)
+        return item if changed else value
+    item_type = _list_item_type(annotation)
+    if item_type is not None and isinstance(value, list):
+        items = [_renest_hoisted_fields(v, item_type) for v in value]
+        return (
+            items if any(new is not old for new, old in zip(items, value, strict=True)) else value
+        )
+    return value
+
+
+def _admits_none(annotation: Any) -> bool:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _admits_none(get_args(annotation)[0])
+    return (origin is Union or origin is types.UnionType) and type(None) in get_args(annotation)
+
+
+def _null_empty_objects(value: Any, annotation: Any) -> Any:
+    """Replace an object whose every field is null with null, where the schema allows null.
+
+    Rescue-only; the object-slot twin of :func:`_prune_null_list_items`. Small models answer
+    an absent optional object with its fields all null --
+    ``employment: {company: null, role: null, years: null}`` -- which fails a required
+    ``company: str``. The object carries nothing, so nulling it destroys nothing; a slot that
+    does not admit null is left for validation to reject.
+
+    Returns ``value`` itself (identity-comparable) when nothing changed.
+    """
+    model = _object_model(annotation)
+    if model is not None:
+        if not isinstance(value, dict):
+            return value
+        fields = model.model_fields
+        item = {
+            k: _null_empty_objects(v, fields[k].annotation) if k in fields else v
+            for k, v in value.items()
+        }
+        for k, v in item.items():
+            if (
+                k in fields
+                and isinstance(v, dict)
+                and v
+                and all(x is None for x in v.values())
+                and _object_model(fields[k].annotation) is not None
+                and _admits_none(fields[k].annotation)
+            ):
+                item[k] = None
+        return item if any(item[k] is not value[k] for k in value) else value
+    item_type = _list_item_type(annotation)
+    if item_type is not None and isinstance(value, list):
+        items = [_null_empty_objects(v, item_type) for v in value]
+        return (
+            items if any(new is not old for new, old in zip(items, value, strict=True)) else value
+        )
+    return value
+
+
+def _wrap_scalars_in_lists(value: Any, annotation: Any) -> Any:
+    """Wrap a lone scalar in a one-item list where the schema wants a list of scalars.
+
+    Rescue-only. ``granite3.1-moe:1b`` answers a one-entity list with the entity itself --
+    ``"Company": "Apple"`` for ``Company: list[str]`` -- on most financial-NER replies.
+
+    **Why this repair is safe.** A scalar where a list of that scalar is expected has one
+    reading: a list holding it. The value is kept whole (never split), and a list of
+    objects is never built from a scalar.
+
+    Returns ``value`` itself (identity-comparable) when nothing changed.
+    """
+    model = _object_model(annotation)
+    if model is not None:
+        if not isinstance(value, dict):
+            return value
+        fields = model.model_fields
+        item = {
+            k: _wrap_scalars_in_lists(v, fields[k].annotation) if k in fields else v
+            for k, v in value.items()
+        }
+        return item if any(item[k] is not value[k] for k in value) else value
+    item_type = _list_item_type(annotation)
+    if item_type is None:
+        return value
+    if isinstance(value, list):
+        items = [_wrap_scalars_in_lists(v, item_type) for v in value]
+        return (
+            items if any(new is not old for new, old in zip(items, value, strict=True)) else value
+        )
+    if isinstance(value, (str, int, float)) and _object_model(item_type) is None:
+        return [value]
+    return value
+
+
+def _strip_nested_markers(value: Any, annotation: Any, markers: list[str]) -> Any:
+    """Strip the prompt's required marker from keys BELOW an output field's top level.
+
+    The reply's own top-level keys are stripped on every parse by ``_normalize_reply_keys``;
+    nested ones were not, and ``qwen3.5:0.8b`` copies the marker into them in YAML mode
+    (``header*:`` / ``claim_id*:``), so the required ``header`` goes missing. Rescue-only,
+    and schema-guided by the same walk ``SchemaParser`` uses, so a key genuinely named
+    ``name*`` is protected by its verbatim-first rule.
+
+    Returns ``value`` itself when nothing was stripped.
+    """
+    if not markers or not isinstance(value, (dict, list)):
+        return value
+    try:
+        schema = TypeAdapter(annotation).json_schema()
+    except pydantic.PydanticUserError:
+        return value
+    stripped = value
+    for marker in markers:
+        stripped = normalize_marker_keys_recursive(stripped, schema, marker)
+    return value if stripped == value else stripped
 
 
 class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
@@ -1117,9 +1313,13 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         """The shared field pipeline: byte-identical semantics for JSON and YAML.
 
         Mirrors upstream JSONAdapter.parse (DSPy 3.3.1) with two rescues as the only
-        insertions -- _coerce_field_value, then the structural repair
-        (_unwrap_single_item_lists, then _prune_null_list_items). Both _parse_json and
-        _parse_yaml funnel through it after their mode-specific extraction.
+        insertions -- _coerce_field_value, then the structural repair: reply-level strays
+        moved into the field (_move_strays), nested markers stripped
+        (_strip_nested_markers), then _unwrap_single_item_lists, _renest_hoisted_fields,
+        _null_empty_objects, _wrap_scalars_in_lists and _prune_null_list_items -- plus one
+        fallback before the missing-field error: an output field sent without its key is
+        moved under it and the reply parsed once more. Both _parse_json and _parse_yaml
+        funnel through it after their mode-specific extraction.
 
         Invariants that any change to this method must preserve:
           - self.parse_config is None => structurally upstream-equivalent. The first
@@ -1164,6 +1364,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         raw = self._normalize_reply_keys(signature, raw)
 
         fields = {k: v for k, v in raw.items() if k in signature.output_fields}
+        output_annotations = {name: f.annotation for name, f in signature.output_fields.items()}
 
         out: dict[str, Any] = {}
         for k, v in fields.items():
@@ -1187,7 +1388,18 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                 if self.parse_config.allow_coercion:
                     # Unwrap first: pruning first would turn `[{"family": null}]` under an
                     # object-typed field into `[]`, which no longer has anything to unwrap.
-                    repaired = _prune_null_list_items(_unwrap_single_item_lists(v, annotation))
+                    # Reply keys that are not output fields may be this field's own,
+                    # hoisted out of it: `{"claim": {<header>}, "policy_details": ...}`.
+                    rooted = _strip_nested_markers(
+                        _move_strays(raw, output_annotations).get(k, v),
+                        annotation,
+                        self._marker_candidates(),
+                    )
+                    repaired = _unwrap_single_item_lists(rooted, annotation)
+                    repaired = _renest_hoisted_fields(repaired, annotation)
+                    repaired = _null_empty_objects(repaired, annotation)
+                    repaired = _wrap_scalars_in_lists(repaired, annotation)
+                    repaired = _prune_null_list_items(repaired)
                     if repaired is not v:
                         try:
                             out[k] = parse_value(repaired, annotation)
@@ -1204,6 +1416,18 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         out = apply_output_field_defaults(signature, out)
 
         if out.keys() != signature.output_fields.keys():
+            # A reply that sent a field's contents without its key -- the PII fields bare
+            # at the top instead of under `pii` -- fails here. Move them under it and parse
+            # once more; a second pass has nothing left to move, so this cannot loop. A
+            # retry that still fails raises THIS error: a rescue never changes how a reply
+            # fails.
+            if self.parse_config is not None and self.parse_config.allow_coercion:
+                moved = _move_strays(raw, output_annotations)
+                if moved is not raw:
+                    try:
+                        return self._build_output_fields(signature, completion, moved)
+                    except (AdapterParseError, pydantic.ValidationError, ValueError):
+                        pass
             raise AdapterParseError(
                 adapter_name="StructuredOutputAdapter",
                 signature=signature,

@@ -302,8 +302,13 @@ adapter = StructuredOutputAdapter(
   - `None` reproduces upstream `JSONAdapter`: a field that fails `parse_value` leaks its
     `ValidationError`
   - When given, a rejected field is offered to two rescues in order — the coercion
-    rescue, then a structural repair that unwraps one-item lists where the schema wants an
-    object and drops all-null list items (`allow_coercion`, on by default); if
+    rescue, then a structural repair (`allow_coercion`, on by default) that reshapes what
+    the model sent and never adds a value: it strips a copied `*` marker from nested keys,
+    unwraps one-item lists where the schema wants an object, moves fields the model
+    hoisted out of a nested object back under it, nulls an optional object whose every
+    field is null, wraps a lone value in a list where the schema wants a list of values,
+    and drops all-null list items. A reply that sends an output field's contents without
+    its key has them moved under it before the missing-field error; if
     `parse_config.partial` is `True` the field is then dropped and refilled by
     `apply_output_field_defaults`
   - The prune matters most on small models, which routinely answer an empty list with
@@ -440,8 +445,9 @@ adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
    output field verbatim always wins over a marked one
 5. Cast each value to its expected Pydantic type via `parse_value`
 6. *(only when `parse_config` is given)* a rejected field is offered to the coercion
-   rescue, then to the all-null-list-item prune; with `parse_config.partial=True` a
-   still-failing field is dropped
+   rescue, then to the structural repair (nested markers, one-item lists, hoisted fields,
+   all-null objects, lone values in list slots, all-null list items); with
+   `parse_config.partial=True` a still-failing field is dropped
 7. `apply_output_field_defaults` fills any output field the reply omitted
 8. Check that every required output field is now present
 

@@ -13,8 +13,11 @@ from dspy.utils.exceptions import AdapterParseError  # noqa: E402
 from llm_schema_lite import FormatterConfig, ParseConfig  # noqa: E402
 from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
 from llm_schema_lite.dspy_integration.adapters.structured_output_adapter import (
+    _null_empty_objects,
     _prune_null_list_items,
+    _renest_hoisted_fields,
     _unwrap_single_item_lists,
+    _wrap_scalars_in_lists,
 )  # noqa: E402
 from tests.dspy_helpers import QA, QAOptional, Typed, make_adapter  # noqa: E402
 
@@ -490,3 +493,242 @@ class TestUnwrapSingleItemListsUnit:
         """`name: ['Rudolf']` (seen in YAML mode) has no object to unwrap to."""
         value = {"name": ["Rudolf"]}
         assert _unwrap_single_item_lists(value, _UnwrapRec) is value
+
+
+class _RenestHeader(pydantic.BaseModel):
+    claim_id: str | None
+    channel: str | None
+
+
+class _RenestPolicy(pydantic.BaseModel):
+    policy_number: str | None = None
+    channel: str | None = None
+
+
+class _RenestClaim(pydantic.BaseModel):
+    header: _RenestHeader
+    notes: str | None = None
+
+
+class _RenestAmbiguous(pydantic.BaseModel):
+    header: _RenestHeader | None = None
+    policy: _RenestPolicy | None = None
+
+
+class TestRenestHoistedFieldsRescue:
+    """A nested object's fields hoisted into its parent (insurance-claims' `header`)."""
+
+    @staticmethod
+    def _sig():
+        return dspy.Signature(
+            {"text": (str, dspy.InputField()), "claim": (_RenestClaim, dspy.OutputField())}
+        )
+
+    FLAT = '{"claim": {"claim_id": "CLM-1", "channel": "Email", "notes": "n"}}'
+
+    def test_rescue_moves_the_fields_back(self):
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig()
+        ).parse(self._sig(), self.FLAT)
+        assert out["claim"].header.claim_id == "CLM-1"
+        assert out["claim"].notes == "n"
+
+    def test_reply_level_keys_move_into_the_output_field(self):
+        """qwen3.5:0.8b's JSONISH insurance shape: the header's fields under `claim`, and
+        `claim`'s own fields beside it at the reply root."""
+        reply = '{"claim": {"claim_id": "CLM-1", "channel": "Email"}, "notes": "n"}'
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig()
+        ).parse(self._sig(), reply)
+        assert out["claim"].header.channel == "Email"
+        assert out["claim"].notes == "n"
+
+    def test_is_off_when_parse_config_is_none(self):
+        with pytest.raises((pydantic.ValidationError, AdapterParseError, ValueError)):
+            StructuredOutputAdapter(output_mode=OutputMode.JSONISH).parse(self._sig(), self.FLAT)
+
+
+class TestRenestHoistedFieldsUnit:
+    """`_renest_hoisted_fields` in isolation -- when a key may move and when it must not."""
+
+    def test_a_key_the_target_already_holds_never_moves(self):
+        value = {"header": {"claim_id": "x", "channel": None}, "channel": "Email"}
+        assert _renest_hoisted_fields(value, _RenestClaim) is value
+
+    def test_a_missing_key_joins_a_present_target(self):
+        value = {"header": {"claim_id": "x"}, "channel": "Email"}
+        assert _renest_hoisted_fields(value, _RenestClaim) == {
+            "header": {"claim_id": "x", "channel": "Email"}
+        }
+
+    def test_a_key_the_parent_owns_never_moves(self):
+        value = {"claim_id": "x", "notes": "n"}
+        assert _renest_hoisted_fields(value, _RenestClaim) == {
+            "notes": "n",
+            "header": {"claim_id": "x"},
+        }
+
+    def test_a_key_two_targets_claim_stays_put(self):
+        """`channel` fits both `header` and `policy`: picking one would be a guess."""
+        value = {"claim_id": "x", "channel": "Email"}
+        assert _renest_hoisted_fields(value, _RenestAmbiguous) == {
+            "channel": "Email",
+            "header": {"claim_id": "x"},
+        }
+
+    def test_reaches_models_nested_in_a_list(self):
+        value = [{"claim_id": "x", "channel": None}]
+        assert _renest_hoisted_fields(value, list[_RenestClaim]) == [
+            {"header": {"claim_id": "x", "channel": None}}
+        ]
+
+
+class TestNestedMarkerRescue:
+    """The prompt's `*` required marker copied into nested keys (qwen3.5:0.8b, YAML)."""
+
+    # Fenced, as the model sent it.
+    MARKED = "```yaml\nclaim:\n  header*:\n    claim_id*: CLM-1\n    channel*: Email\n```"
+
+    @staticmethod
+    def _sig():
+        return dspy.Signature(
+            {"text": (str, dspy.InputField()), "claim": (_RenestClaim, dspy.OutputField())}
+        )
+
+    def test_rescue_strips_nested_markers(self):
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.YAML, parse_config=ParseConfig()
+        ).parse(self._sig(), self.MARKED)
+        assert out["claim"].header.claim_id == "CLM-1"
+
+    def test_is_off_when_parse_config_is_none(self):
+        with pytest.raises((pydantic.ValidationError, AdapterParseError, ValueError)):
+            StructuredOutputAdapter(output_mode=OutputMode.YAML).parse(self._sig(), self.MARKED)
+
+
+class _NullEmp(pydantic.BaseModel):
+    company: str
+    years: int | None = None
+
+
+class _NullRec(pydantic.BaseModel):
+    name: str
+    employment: _NullEmp | None = None
+
+
+class _NullReq(pydantic.BaseModel):
+    employment: _NullEmp
+
+
+class TestNullEmptyObjectsRescue:
+    """An absent optional object answered as an object of nulls (qwen3.5:0.8b, YAML)."""
+
+    ALL_NULL = '{"record": {"name": "Ada", "employment": {"company": null, "years": null}}}'
+
+    @staticmethod
+    def _sig():
+        return dspy.Signature(
+            {"text": (str, dspy.InputField()), "record": (_NullRec, dspy.OutputField())}
+        )
+
+    def test_rescue_nulls_the_object(self):
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig()
+        ).parse(self._sig(), self.ALL_NULL)
+        assert out["record"].employment is None
+
+    def test_is_off_when_parse_config_is_none(self):
+        with pytest.raises((pydantic.ValidationError, AdapterParseError, ValueError)):
+            StructuredOutputAdapter(output_mode=OutputMode.JSONISH).parse(
+                self._sig(), self.ALL_NULL
+            )
+
+    def test_a_slot_that_does_not_admit_null_is_left_alone(self):
+        value = {"employment": {"company": None}}
+        assert _null_empty_objects(value, _NullReq) is value
+
+    def test_an_empty_object_is_not_all_null(self):
+        value = {"name": "Ada", "employment": {}}
+        assert _null_empty_objects(value, _NullRec) is value
+
+
+class TestMissingEnvelopeRescue:
+    """The output field's contents sent without its key (qwen3.5:0.8b, pii, JSON mode)."""
+
+    BARE = '{"name": "Ada", "employment": null}'
+
+    @staticmethod
+    def _sig():
+        return dspy.Signature(
+            {"text": (str, dspy.InputField()), "record": (_NullRec, dspy.OutputField())}
+        )
+
+    def test_rescue_moves_the_contents_under_the_field(self):
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSON, parse_config=ParseConfig()
+        ).parse(self._sig(), self.BARE)
+        assert out["record"].name == "Ada"
+
+    def test_is_off_when_parse_config_is_none(self):
+        with pytest.raises(AdapterParseError):
+            StructuredOutputAdapter(output_mode=OutputMode.JSON).parse(self._sig(), self.BARE)
+
+    def test_a_failed_retry_keeps_the_original_error(self):
+        """`y` moves under `b`, which then fails validation (`x` is ambiguous and stays):
+        the caller must still see the missing-field AdapterParseError."""
+        sig = dspy.Signature(
+            {
+                "text": (str, dspy.InputField()),
+                "a": (_TwoA, dspy.OutputField()),
+                "b": (_TwoB, dspy.OutputField()),
+            }
+        )
+        with pytest.raises(AdapterParseError):
+            StructuredOutputAdapter(output_mode=OutputMode.JSON, parse_config=ParseConfig()).parse(
+                sig, '{"x": "v", "y": "w"}'
+            )
+
+
+class _TwoA(pydantic.BaseModel):
+    x: str
+
+
+class _TwoB(pydantic.BaseModel):
+    x: str
+    y: str | None = None
+
+
+class _WrapRec(pydantic.BaseModel):
+    Company: list[str] | None = None
+    contacts: list[_PruneContact] = pydantic.Field(default_factory=list)
+
+
+class TestWrapScalarsInListsRescue:
+    """A one-entity list answered as the entity itself (granite3.1-moe:1b, financial-NER)."""
+
+    LONE = '{"record": {"Company": "Apple"}}'
+
+    @staticmethod
+    def _sig():
+        return dspy.Signature(
+            {"text": (str, dspy.InputField()), "record": (_WrapRec, dspy.OutputField())}
+        )
+
+    def test_rescue_wraps_the_scalar(self):
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig()
+        ).parse(self._sig(), self.LONE)
+        assert out["record"].Company == ["Apple"]
+
+    def test_is_off_when_parse_config_is_none(self):
+        with pytest.raises((pydantic.ValidationError, AdapterParseError, ValueError)):
+            StructuredOutputAdapter(output_mode=OutputMode.JSONISH).parse(self._sig(), self.LONE)
+
+    def test_never_builds_a_list_of_objects_from_a_scalar(self):
+        value = {"contacts": "a@b.c"}
+        assert _wrap_scalars_in_lists(value, _WrapRec) is value
+
+    def test_keeps_the_value_whole(self):
+        assert _wrap_scalars_in_lists({"Company": "Apple Inc"}, _WrapRec) == {
+            "Company": ["Apple Inc"]
+        }
