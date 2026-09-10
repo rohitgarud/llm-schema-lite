@@ -1,13 +1,13 @@
 ```
 arm: accuracy
-generated: 2026-09-09T14:26:06.553193+00:00
+generated: 2026-09-10T07:13:02.955260+00:00
 command: python -m benchmarking.dspy_adapters --accuracy --cases 30
-git_head: 054da0a
+git_head: daf210b
 dspy_version: 3.3.1
 llm_schema_lite_version: 0.6.1
 model: ollama_chat/gemma3:270m
 api_base: http://localhost:11434
-lm_kwargs: {'temperature': 0.0, 'max_tokens': 900, 'cache': False, 'num_retries': 0, 'seed': 7, 'cases': 30, 'cases_seed': 0}
+lm_kwargs: {'temperature': 0.0, 'max_tokens': 900, 'cache': False, 'num_retries': 0, 'seed': 7, 'think': False, 'cases': 30, 'cases_seed': 0}
 supports_response_schema: False
 supports_function_calling: False
 ```
@@ -26,13 +26,14 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 
 | adapter | cases | field accuracy | exact records | ok | parse | validation | empty | transport | format | median wall_s | median total_tokens | response_format |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| chat | 30 | 0.000 | 0/30 (0.00) | 0 | 30 | 0 | 0 | 0 | 0 | 2.188 | 1353.5 | none |
-| json | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.690 | 1001.0 | json_object |
-| baml | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.583 | 533.0 | json_object |
-| sola-json-sections | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.547 | 880.0 | json_object |
-| sola-jsonish-sections | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.787 | 632.0 | json_object |
-| sola-yaml-sections | 30 | 0.000 | 0/30 (0.00) | 0 | 3 | 27 | 0 | 0 | 0 | 0.607 | 560.5 | none |
-| sola-jsonish-rescue | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.767 | 632.0 | json_object |
+| chat | 30 | 0.000 | 0/30 (0.00) | 0 | 30 | 0 | 0 | 0 | 0 | 2.131 | 1353.5 | none |
+| json | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.696 | 1001.0 | json_object |
+| baml | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.569 | 533.0 | json_object |
+| sola-json-sections | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.532 | 880.0 | json_object |
+| sola-jsonish-sections | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.743 | 632.0 | json_object |
+| sola-yaml-sections | 30 | 0.000 | 0/30 (0.00) | 0 | 11 | 19 | 0 | 0 | 0 | 0.692 | 611.5 | none |
+| sola-jsonish-rescue | 30 | 0.000 | 0/30 (0.00) | 0 | 0 | 30 | 0 | 0 | 0 | 0.799 | 632.0 | json_object |
+| sola-yaml-rescue | 30 | 0.000 | 0/30 (0.00) | 0 | 12 | 18 | 0 | 0 | 0 | 0.698 | 611.5 | none |
 
 ## Most-missed fields
 
@@ -115,6 +116,19 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 | `contacts[].phone` | 0 | 28 |
 
 **sola-jsonish-rescue**
+
+| field | wrong | missing |
+|---|---|---|
+| `tags[]` | 0 | 45 |
+| `address.city` | 0 | 30 |
+| `address.postcode` | 0 | 30 |
+| `address.street` | 0 | 30 |
+| `age` | 0 | 30 |
+| `name` | 0 | 30 |
+| `contacts[].email` | 0 | 28 |
+| `contacts[].phone` | 0 | 28 |
+
+**sola-yaml-rescue**
 
 | field | wrong | missing |
 |---|---|---|

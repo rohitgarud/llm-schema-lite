@@ -1,0 +1,145 @@
+adapter,adapter_config,signature,trial,outcome,error_class,wall_s,lm_calls,fallback_suspected,response_format_sent,total_tokens,prompt_tokens_reported,completion_tokens_reported
+chat,ChatAdapter(use_json_adapter_fallback=False),flat,1,ok,,9.352574718999989,1,False,none,225,195,30
+chat,ChatAdapter(use_json_adapter_fallback=False),flat,2,ok,,1.1984958700000448,1,False,none,225,195,30
+chat,ChatAdapter(use_json_adapter_fallback=False),flat,3,ok,,0.9287117029999763,1,False,none,225,195,30
+chat,ChatAdapter(use_json_adapter_fallback=False),nested,1,ok,,1.5046182640000438,1,False,none,372,326,46
+chat,ChatAdapter(use_json_adapter_fallback=False),nested,2,ok,,1.1931565200000023,1,False,none,372,326,46
+chat,ChatAdapter(use_json_adapter_fallback=False),nested,3,ok,,1.2102021750000063,1,False,none,372,326,46
+chat,ChatAdapter(use_json_adapter_fallback=False),list_of_model,1,ok,,1.3242192920000093,1,False,none,395,346,49
+chat,ChatAdapter(use_json_adapter_fallback=False),list_of_model,2,ok,,1.1341890059999855,1,False,none,395,346,49
+chat,ChatAdapter(use_json_adapter_fallback=False),list_of_model,3,ok,,1.1297172419999697,1,False,none,395,346,49
+chat,ChatAdapter(use_json_adapter_fallback=False),enum,1,ok,,0.5957008270000301,1,False,none,259,239,20
+chat,ChatAdapter(use_json_adapter_fallback=False),enum,2,ok,,0.481569396999987,1,False,none,259,239,20
+chat,ChatAdapter(use_json_adapter_fallback=False),enum,3,ok,,0.485016083000005,1,False,none,259,239,20
+chat,ChatAdapter(use_json_adapter_fallback=False),optional,1,ok,,0.5635422329999642,1,False,none,246,226,20
+chat,ChatAdapter(use_json_adapter_fallback=False),optional,2,ok,,0.4696363580000025,1,False,none,246,226,20
+chat,ChatAdapter(use_json_adapter_fallback=False),optional,3,ok,,0.4672712519999891,1,False,none,246,226,20
+chat,ChatAdapter(use_json_adapter_fallback=False),recursive,1,ok,,1.4626151550000372,1,False,none,312,253,59
+chat,ChatAdapter(use_json_adapter_fallback=False),recursive,2,ok,,1.3693652349999752,1,False,none,312,253,59
+chat,ChatAdapter(use_json_adapter_fallback=False),recursive,3,ok,,1.3694569500000284,1,False,none,312,253,59
+json,JSONAdapter(),flat,1,ok,,0.6720604180000009,1,False,json_object,211,187,24
+json,JSONAdapter(),flat,2,ok,,0.5615357739999922,1,False,json_object,211,187,24
+json,JSONAdapter(),flat,3,ok,,0.5657339939999702,1,False,json_object,211,187,24
+json,JSONAdapter(),nested,1,ok,,1.3426389790000144,1,False,json_object,396,344,52
+json,JSONAdapter(),nested,2,ok,,1.20318246100004,1,False,json_object,396,344,52
+json,JSONAdapter(),nested,3,ok,,1.2089680540000245,1,False,json_object,396,344,52
+json,JSONAdapter(),list_of_model,1,ok,,1.275432244000001,1,False,json_object,415,367,48
+json,JSONAdapter(),list_of_model,2,ok,,1.1094229869999594,1,False,json_object,415,367,48
+json,JSONAdapter(),list_of_model,3,ok,,1.1112433119999992,1,False,json_object,415,367,48
+json,JSONAdapter(),enum,1,ok,,0.5241534059999822,1,False,json_object,248,231,17
+json,JSONAdapter(),enum,2,ok,,0.40135582900001054,1,False,json_object,248,231,17
+json,JSONAdapter(),enum,3,ok,,0.4042707469999982,1,False,json_object,248,231,17
+json,JSONAdapter(),optional,1,ok,,1.3947525300000052,1,False,json_object,275,222,53
+json,JSONAdapter(),optional,2,ok,,1.2565159119999976,1,False,json_object,275,222,53
+json,JSONAdapter(),optional,3,ok,,1.2503119810000385,1,False,json_object,275,222,53
+json,JSONAdapter(),recursive,1,ok,,1.413136301999998,1,False,json_object,320,264,56
+json,JSONAdapter(),recursive,2,ok,,1.3158180369999855,1,False,json_object,320,264,56
+json,JSONAdapter(),recursive,3,ok,,1.2970129899999847,1,False,json_object,320,264,56
+baml,BAMLAdapter(),flat,1,ok,,0.711553772000002,1,False,json_object,204,177,27
+baml,BAMLAdapter(),flat,2,ok,,0.6273172940000222,1,False,json_object,204,177,27
+baml,BAMLAdapter(),flat,3,ok,,0.6318288839999582,1,False,json_object,204,177,27
+baml,BAMLAdapter(),nested,1,ok,,1.8042912249999858,1,False,json_object,239,187,52
+baml,BAMLAdapter(),nested,2,ok,,1.831367983000007,1,False,json_object,239,187,52
+baml,BAMLAdapter(),nested,3,ok,,1.5504881790000127,1,False,json_object,239,187,52
+baml,BAMLAdapter(),list_of_model,1,ok,,1.858017048000022,1,False,json_object,248,188,60
+baml,BAMLAdapter(),list_of_model,2,ok,,1.5640113670000346,1,False,json_object,248,188,60
+baml,BAMLAdapter(),list_of_model,3,ok,,1.5561971650000146,1,False,json_object,248,188,60
+baml,BAMLAdapter(),enum,1,validation_error,ValueError,0.6580051610000055,1,False,json_object,217,199,18
+baml,BAMLAdapter(),enum,2,validation_error,ValueError,0.5586878809999689,1,False,json_object,217,199,18
+baml,BAMLAdapter(),enum,3,validation_error,ValueError,0.4864251559999957,1,False,json_object,217,199,18
+baml,BAMLAdapter(),optional,1,ok,,0.6794353679999858,1,False,json_object,208,192,16
+baml,BAMLAdapter(),optional,2,ok,,0.5427695569999855,1,False,json_object,208,192,16
+baml,BAMLAdapter(),optional,3,ok,,0.517731369000046,1,False,json_object,208,192,16
+baml,BAMLAdapter(),recursive,1,format_error,ValueError,0.027103135000004386,0,False,none,,,
+baml,BAMLAdapter(),recursive,2,format_error,ValueError,0.021795428999951127,0,False,none,,,
+baml,BAMLAdapter(),recursive,3,format_error,ValueError,0.01958955100002413,0,False,none,,,
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",flat,1,ok,,0.8021733350000204,1,False,json_object,203,180,23
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",flat,2,ok,,0.6591392880000058,1,False,json_object,203,180,23
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",flat,3,ok,,0.6016256510000062,1,False,json_object,203,180,23
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",nested,1,ok,,1.6264789940000242,1,False,json_object,367,315,52
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",nested,2,ok,,1.3499710789999995,1,False,json_object,367,315,52
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",nested,3,ok,,1.313198342000021,1,False,json_object,367,315,52
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",list_of_model,1,ok,,1.5818292810000116,1,False,json_object,394,334,60
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",list_of_model,2,ok,,1.397283969,1,False,json_object,394,334,60
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",list_of_model,3,ok,,1.4099643149999679,1,False,json_object,394,334,60
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",enum,1,ok,,0.5092215439999563,1,False,json_object,241,224,17
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",enum,2,ok,,0.4045460320000416,1,False,json_object,241,224,17
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",enum,3,ok,,0.4116262200000165,1,False,json_object,241,224,17
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",optional,1,ok,,0.49366852600002176,1,False,json_object,227,210,17
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",optional,2,ok,,0.41023896699999796,1,False,json_object,227,210,17
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",optional,3,ok,,0.40265179899995474,1,False,json_object,227,210,17
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",recursive,1,ok,,1.3756768830000397,1,False,json_object,298,242,56
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",recursive,2,ok,,1.2967026049999504,1,False,json_object,298,242,56
+sola-json-sections,"StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS)",recursive,3,ok,,1.296072109000022,1,False,json_object,298,242,56
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",flat,1,ok,,0.5860534560000019,1,False,json_object,203,180,23
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",flat,2,ok,,0.5388518649999696,1,False,json_object,203,180,23
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",flat,3,ok,,0.5412646429999768,1,False,json_object,203,180,23
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",nested,1,ok,,1.2877710760000127,1,False,json_object,276,224,52
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",nested,2,ok,,1.2136501739999517,1,False,json_object,276,224,52
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",nested,3,ok,,1.210350367999979,1,False,json_object,276,224,52
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",list_of_model,1,ok,,1.1994664599999965,1,False,json_object,264,216,48
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",list_of_model,2,ok,,1.117143499000008,1,False,json_object,264,216,48
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",list_of_model,3,ok,,1.105844320000017,1,False,json_object,264,216,48
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",enum,1,ok,,0.45635638200002404,1,False,json_object,241,224,17
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",enum,2,ok,,0.4062206180000203,1,False,json_object,241,224,17
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",enum,3,ok,,0.40288739999999734,1,False,json_object,241,224,17
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",optional,1,ok,,0.46499457900000607,1,False,json_object,219,203,16
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",optional,2,ok,,0.38479306400000723,1,False,json_object,219,203,16
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",optional,3,ok,,0.39247929599997633,1,False,json_object,219,203,16
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",recursive,1,ok,,1.3863647039999591,1,False,json_object,263,207,56
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",recursive,2,ok,,1.2945929969999952,1,False,json_object,263,207,56
+sola-jsonish-sections,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS)",recursive,3,ok,,1.301475384000014,1,False,json_object,263,207,56
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",flat,1,ok,,0.36692571899999393,1,False,none,187,175,12
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",flat,2,ok,,0.2907985400000257,1,False,none,187,175,12
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",flat,3,ok,,0.29533769699997947,1,False,none,187,175,12
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",nested,1,ok,,0.873618964000002,1,False,none,247,213,34
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",nested,2,ok,,0.7889921350000009,1,False,none,247,213,34
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",nested,3,ok,,0.793005423000011,1,False,none,247,213,34
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",list_of_model,1,ok,,0.7547007320000034,1,False,none,233,205,28
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",list_of_model,2,ok,,0.6528253249999807,1,False,none,233,205,28
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",list_of_model,3,ok,,0.6575459780000301,1,False,none,233,205,28
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",enum,1,ok,,0.33799810299996125,1,False,none,227,219,8
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",enum,2,ok,,0.32918001999996704,1,False,none,227,219,8
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",enum,3,ok,,0.2619299899999987,1,False,none,227,219,8
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",optional,1,ok,,0.466206542000009,1,False,none,202,193,9
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",optional,2,ok,,0.2973996140000281,1,False,none,202,193,9
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",optional,3,ok,,0.31270246399998314,1,False,none,202,193,9
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",recursive,1,ok,,1.2900513260000253,1,False,none,230,199,31
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",recursive,2,ok,,1.1086129070000084,1,False,none,230,199,31
+sola-yaml-sections,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)",recursive,3,ok,,0.9735035030000176,1,False,none,230,199,31
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",flat,1,ok,,0.6556259679999812,1,False,json_object,200,180,20
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",flat,2,ok,,0.5113238619999834,1,False,json_object,200,180,20
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",flat,3,ok,,0.562758328999962,1,False,json_object,200,180,20
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",nested,1,ok,,1.4496648929999765,1,False,json_object,276,224,52
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",nested,2,ok,,1.4071133039999495,1,False,json_object,276,224,52
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",nested,3,ok,,1.3764911200000256,1,False,json_object,276,224,52
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",list_of_model,1,ok,,1.2791918160000364,1,False,json_object,264,216,48
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",list_of_model,2,ok,,1.2679785180000067,1,False,json_object,264,216,48
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",list_of_model,3,ok,,1.3340498609999827,1,False,json_object,264,216,48
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",enum,1,ok,,0.6164852829999745,1,False,json_object,241,224,17
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",enum,2,ok,,0.4372498100000257,1,False,json_object,241,224,17
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",enum,3,ok,,0.44466427500003647,1,False,json_object,241,224,17
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",optional,1,ok,,0.6360233890000018,1,False,json_object,219,203,16
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",optional,2,ok,,0.42539597900002946,1,False,json_object,219,203,16
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",optional,3,ok,,0.449803653999993,1,False,json_object,219,203,16
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",recursive,1,ok,,1.4350619240000242,1,False,json_object,263,207,56
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",recursive,2,ok,,1.2912652869999874,1,False,json_object,263,207,56
+sola-jsonish-rescue,"StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())",recursive,3,ok,,1.283033402000001,1,False,json_object,263,207,56
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",flat,1,ok,,0.3463695290000146,1,False,none,187,175,12
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",flat,2,ok,,0.2891344619999927,1,False,none,187,175,12
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",flat,3,ok,,0.2973539679999817,1,False,none,187,175,12
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",nested,1,ok,,0.8147744569999986,1,False,none,247,213,34
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",nested,2,ok,,0.8035447660000159,1,False,none,247,213,34
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",nested,3,ok,,0.7859387310000443,1,False,none,247,213,34
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",list_of_model,1,ok,,0.6864090700000247,1,False,none,233,205,28
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",list_of_model,2,ok,,0.6466149870000208,1,False,none,233,205,28
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",list_of_model,3,ok,,0.6465461060000166,1,False,none,233,205,28
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",enum,1,ok,,0.28441916700001,1,False,none,227,219,8
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",enum,2,ok,,0.19755629100001215,1,False,none,227,219,8
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",enum,3,ok,,0.1982329880000293,1,False,none,227,219,8
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",optional,1,ok,,0.285281762000011,1,False,none,202,193,9
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",optional,2,ok,,0.2242369659999781,1,False,none,202,193,9
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",optional,3,ok,,0.23042892799998071,1,False,none,202,193,9
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",recursive,1,ok,,0.7390154209999764,1,False,none,230,199,31
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",recursive,2,ok,,0.7225335150000092,1,False,none,230,199,31
+sola-yaml-rescue,"StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())",recursive,3,ok,,0.7260473339999862,1,False,none,230,199,31

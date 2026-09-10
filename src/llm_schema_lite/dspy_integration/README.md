@@ -223,6 +223,30 @@ adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML)
 - Working with models that understand YAML well
 - Need human-readable outputs
 
+**Pass a `ParseConfig()` in YAML mode.** Small models answering in YAML often write an
+empty list as a list holding one all-null item (`contacts: [{email: null, phone: null}]`),
+which fails validation; `ParseConfig()` prunes that item. Measured on `qwen3.5:0.8b` over
+40 labeled extraction cases, it moved YAML from 0.714 to 0.848 field accuracy and 16/40 to
+22/40 exact records, with validation errors halved (11 -> 5). It does not yet repair
+YAML's typed plain scalars — `postcode: 95014` loads as an `int` and still fails a `str`
+field — because coercion only reaches scalar output fields, not fields nested in a model:
+
+```python
+from llm_schema_lite import ParseConfig
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
+adapter = StructuredOutputAdapter(output_mode=OutputMode.YAML, parse_config=ParseConfig())
+```
+
+The prompt's output section is itself YAML — `record:` with the schema nested under it,
+not `[[ ## record ## ]]` markers. This matters more in YAML than elsewhere: JSON and
+JSONish send `response_format={"type": "json_object"}`, which forces the reply back into
+shape whatever the prompt demonstrated, while YAML mode sends no response format at all,
+so the demonstration *is* the specification. When the two disagreed, models followed the
+demonstration and emitted markers under a "respond with YAML" instruction — `qwen3:8b`
+returned 0 parseable replies out of 18 in the outcomes arm. With the block rendered as
+YAML it returns 18/18, in slightly fewer prompt tokens.
+
 ## Configuration Options
 
 ```python

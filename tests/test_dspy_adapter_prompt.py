@@ -208,7 +208,14 @@ class TestFieldStructure:
     def test_tool_calls_output_carries_a_schema_note(self, mode, layout):
         """A ToolCalls OUTPUT is no longer a bare placeholder in any mode/layout."""
         out = make_adapter(mode, layout=layout).format_field_structure(ToolCallSig)
-        assert "{tool_calls}        # note:" in out
+        # YAML sections nests the schema under a real `tool_calls:` key rather than a
+        # placeholder, so the note hangs off the key instead. Same field, same note.
+        lead = (
+            "tool_calls:"
+            if mode is OutputMode.YAML and layout is PromptLayout.SECTIONS
+            else "{tool_calls}"
+        )
+        assert f"{lead}        # note:" in out
 
     def test_tool_calls_json_mode_note_stem_matches_upstream(self):
         """JSON mode carries our verbatim JSON-schema note stem for tool_calls."""
@@ -668,11 +675,43 @@ class TestOutputSchemaIsBoundToItsFieldName:
     def test_schema_opens_on_a_line_naming_its_output_field(self):
         assert self._schema_line(OutputMode.JSONISH).startswith('"answer":')
 
-    def test_yaml_is_left_alone(self):
-        """Measured: the prefix moved YAML the wrong way (0.849 -> 0.760 field accuracy
-        on qwen3.5:0.8b) while moving JSONISH from 0.000 to 0.745. YAML has no brace
-        envelope to disambiguate, and its own failure mode is being handled separately."""
-        assert not self._schema_line(OutputMode.YAML).startswith("answer:")
+    def test_yaml_binds_the_field_name_as_a_yaml_key_not_a_json_one(self):
+        """YAML gets the same fix in its own syntax, via `_render_yaml_sections`.
+
+        The JSON `"answer":` prefix is not valid YAML and measured as a regression
+        (0.849 -> 0.760 field accuracy on qwen3.5:0.8b) when it was tried here; nesting
+        the schema under a real `answer:` key disambiguates the envelope *and* leaves
+        the block parseable as the YAML the prompt asks for.
+        """
+        out = make_adapter(OutputMode.YAML).format_field_structure(_sig_for(Item))
+        assert f"answer:        {NOTE_PARSEABLE}" in out
+        assert '"answer":' not in out
+        assert self._schema_line(OutputMode.YAML).startswith("  ")  # nested under the key
+
+    def test_yaml_output_block_demonstrates_no_marker_syntax(self):
+        """The defect this renderer fixes: a `[[ ## field ## ]]` demonstration under a
+        "respond with YAML" instruction asks for two incompatible things, and YAML mode
+        sends no `response_format` to override the demonstration the way JSON/JSONISH do.
+        Small models follow the demonstration; `sola-yaml-sections` scored 0/18 on
+        qwen3:8b in the outcomes arm before this, every cell an AdapterParseError."""
+        out = make_adapter(OutputMode.YAML).format_field_structure(_sig_for(Item))
+        output_block = out.split("Outputs will be in YAML format", 1)[1]
+        assert "[[ ##" not in output_block
+        assert "answer:" in output_block
+
+    def test_yaml_output_block_is_itself_loadable_yaml_keyed_by_the_output_fields(self):
+        """The strongest form of the fix: the demonstration parses as the very thing it
+        asks the model for -- a mapping whose keys are the output field names, with the
+        schema nested underneath. If this stops holding, the prompt is asking for one
+        shape and showing another again."""
+        import yaml
+
+        out = make_adapter(OutputMode.YAML).format_field_structure(_sig_for(Item))
+        block = out.split("Outputs will be in YAML format with the following fields.", 1)[1]
+        loaded = yaml.safe_load(block)
+        assert isinstance(loaded, dict)
+        assert list(loaded) == ["answer"]
+        assert isinstance(loaded["answer"], dict)  # the schema, nested under its key
 
     def test_input_schemas_are_not_prefixed(self):
         """Inputs are given, never produced, so they carry no envelope ambiguity -- and

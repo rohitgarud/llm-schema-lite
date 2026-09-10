@@ -99,6 +99,22 @@ class TestYAMLParser:
         result = parser.parse("```yml\nname: Alice\nage: 28\n```")
         assert result == {"name": "Alice", "age": 28}
 
+    def test_parse_yaml_in_an_untagged_fence_with_prose_after_it(self):
+        """The tag is optional. Small models fence with a bare ``` and add a closing
+        remark; without this the whole reply was parsed and the trailing prose alone
+        was enough to fail it (measured: llama3.2:1b, 15/30 YAML parse errors)."""
+        parser = YAMLParser()
+        result = parser.parse(
+            "Here is the record:\n\n```\nname: Alice\nage: 28\n```\n\nNote: I assumed a name."
+        )
+        assert result == {"name": "Alice", "age": 28}
+
+    def test_parse_json_in_a_mislabelled_fence(self):
+        """A ```python fence around JSON is a real small-model reply, not a hypothetical."""
+        parser = JSONParser()
+        result = parser.parse('Sure:\n\n```python\n{"name": "Alice"}\n```\n\nLet me know.')
+        assert result == {"name": "Alice"}
+
     def test_parse_yaml_embedded_in_text(self):
         """Test parsing YAML embedded in explanatory text."""
         parser = YAMLParser()

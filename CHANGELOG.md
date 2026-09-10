@@ -235,9 +235,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extraction scored zero. The schema is now prefixed `"<field>": `. Measured on
   `qwen3.5:0.8b` over 30 labeled extraction cases, JSONISH went 0/30 parsed to 30/30
   (0.000 -> 0.745 field accuracy); JSON mode was unchanged. Costs 2-3 prompt tokens on the
-  8 of 53 matrix cells that carry an output schema, and nothing elsewhere. YAML is excluded
-  deliberately — the same prefix measured as a *regression* there (0.849 -> 0.760), because
-  YAML has no brace envelope to disambiguate; its own failure mode is separate work.
+  8 of 53 matrix cells that carry an output schema, and nothing elsewhere. YAML gets the
+  same fix in its own syntax (below) rather than this JSON prefix, which measured as a
+  *regression* there (0.849 -> 0.760) because it is not valid YAML.
+- **YAML mode's prompt no longer demonstrates a shape it is not asking for.** The output
+  section rendered `[[ ## record ## ]]` markers under a "respond with YAML" instruction —
+  two incompatible requests. JSON and JSONish hide the same contradiction because they
+  send `response_format={"type": "json_object"}`, which forces the reply back into shape;
+  YAML sends no response format, so the demonstration *is* the specification and models
+  follow it. `qwen3:8b` returned 0 parseable replies out of 18 in the outcomes arm. The
+  block is now real YAML (`record:` with the schema nested under it), which also removes
+  the envelope ambiguity: 18/18 `ok`, and 2-8 fewer prompt tokens per signature. YAML
+  mode wants `parse_config=ParseConfig()`: its replies hit the same all-null list item as
+  JSONish (see the rescue below), and pruning it moved `qwen3.5:0.8b` from 0.714 to 0.848
+  field accuracy over 40 cases, 16/40 -> 22/40 exact. YAML's typed plain scalars
+  (`postcode: 95014` loads as an int) are not repaired yet: the coercion rescue covers
+  scalar output fields only, not fields nested inside a model.
+- **A markdown code fence no longer has to carry a language tag to be extracted.**
+  `_extract_from_markdown` matched only ` ```json ` / ` ```yaml `, so a reply fenced with a
+  bare ` ``` ` — or mislabelled ` ```python ` — was parsed whole, and a single line of
+  prose after the closing fence was enough to fail it. Tagged patterns are still tried
+  first. Measured on `llama3.2:1b` in YAML mode: 15/30 parse errors -> 3/30, field
+  accuracy 0.080 -> 0.225.
 - **Parse-time rescue for all-null list items** (`ParseConfig` only, off when
   `parse_config is None`). Small models answer an empty list with a placeholder rather than
   `[]` — `{"contacts": [{"email": null, "phone": null}]}` — which fails a required

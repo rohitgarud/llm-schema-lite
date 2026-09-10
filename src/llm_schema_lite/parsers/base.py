@@ -75,15 +75,18 @@ def _smart_extract_content(text: str, mode: str) -> str:
 
 
 def _extract_from_markdown(text: str, mode: str) -> str:
-    """Extract content from markdown code blocks."""
-    if mode == "json":
-        # Look for ```json code blocks
-        match = re.search(r"```json(.*?)```", text, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-    elif mode == "yaml":
-        # Look for ```yaml or ```yml code blocks
-        match = re.search(r"```ya?ml(.*?)```", text, re.DOTALL)
+    """Extract content from markdown code blocks.
+
+    The language tag is preferred but optional. Small models routinely fence their
+    answer with a bare ``` (or mislabel it, e.g. ```python around JSON), and requiring
+    the tag meant the whole reply was parsed instead -- where a single line of prose
+    after the closing fence is enough to fail it. The tagged patterns are tried first,
+    so a correctly-tagged block is still what wins when one is present.
+    """
+    tagged = {"json": r"```json(.*?)```", "yaml": r"```ya?ml(.*?)```"}.get(mode)
+    patterns = [p for p in (tagged, r"```[^\n`]*\n(.*?)```") if p is not None]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.DOTALL)
         if match:
             return match.group(1).strip()
 

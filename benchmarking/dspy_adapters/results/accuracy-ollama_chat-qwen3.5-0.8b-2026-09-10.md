@@ -1,15 +1,15 @@
 ```
 arm: accuracy
-generated: 2026-09-09T14:01:50.694001+00:00
+generated: 2026-09-10T06:20:18.287813+00:00
 command: python -m benchmarking.dspy_adapters --accuracy --cases 30
-git_head: 054da0a
+git_head: daf210b
 dspy_version: 3.3.1
 llm_schema_lite_version: 0.6.1
-model: ollama_chat/llama3.2:1b
+model: ollama_chat/qwen3.5:0.8b
 api_base: http://localhost:11434
-lm_kwargs: {'temperature': 0.0, 'max_tokens': 900, 'cache': False, 'num_retries': 0, 'seed': 7, 'cases': 30, 'cases_seed': 0}
+lm_kwargs: {'temperature': 0.0, 'max_tokens': 900, 'cache': False, 'num_retries': 0, 'seed': 7, 'think': False, 'cases': 30, 'cases_seed': 0}
 supports_response_schema: False
-supports_function_calling: True
+supports_function_calling: False
 ```
 
 ## Metric integrity
@@ -26,13 +26,14 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 
 | adapter | cases | field accuracy | exact records | ok | parse | validation | empty | transport | format | median wall_s | median total_tokens | response_format |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| chat | 30 | 0.022 | 0/30 (0.00) | 1 | 29 | 0 | 0 | 0 | 0 | 5.758 | 1554.0 | none |
-| json | 30 | 0.203 | 0/30 (0.00) | 9 | 0 | 21 | 0 | 0 | 0 | 1.184 | 981.5 | json_object |
-| baml | 30 | 0.000 | 0/30 (0.00) | 0 | 30 | 0 | 0 | 0 | 0 | 0.991 | 511.0 | json_object |
-| sola-json-sections | 30 | 0.363 | 1/30 (0.03) | 14 | 14 | 2 | 0 | 0 | 0 | 1.189 | 892.5 | json_object |
-| sola-jsonish-sections | 30 | 0.215 | 2/30 (0.07) | 9 | 10 | 11 | 0 | 0 | 0 | 0.946 | 545.0 | json_object |
-| sola-yaml-sections | 30 | 0.206 | 3/30 (0.10) | 7 | 5 | 18 | 0 | 0 | 0 | 1.044 | 533.0 | none |
-| sola-jsonish-rescue | 30 | 0.215 | 2/30 (0.07) | 9 | 10 | 11 | 0 | 0 | 0 | 0.953 | 545.0 | json_object |
+| chat | 30 | 0.000 | 0/30 (0.00) | 0 | 30 | 0 | 0 | 0 | 0 | 1.864 | 968.0 | none |
+| json | 30 | 0.889 | 20/30 (0.67) | 29 | 0 | 1 | 0 | 0 | 0 | 1.297 | 995.0 | json_object |
+| baml | 30 | 0.000 | 0/30 (0.00) | 0 | 30 | 0 | 0 | 0 | 0 | 1.264 | 571.5 | json_object |
+| sola-json-sections | 30 | 0.886 | 14/30 (0.47) | 30 | 0 | 0 | 0 | 0 | 0 | 1.228 | 905.0 | json_object |
+| sola-jsonish-sections | 30 | 0.745 | 13/30 (0.43) | 24 | 0 | 6 | 0 | 0 | 0 | 1.357 | 622.0 | json_object |
+| sola-yaml-sections | 30 | 0.711 | 11/30 (0.37) | 22 | 0 | 8 | 0 | 0 | 0 | 1.368 | 579.5 | none |
+| sola-jsonish-rescue | 30 | 0.929 | 19/30 (0.63) | 30 | 0 | 0 | 0 | 0 | 0 | 1.274 | 622.0 | json_object |
+| sola-yaml-rescue | 30 | 0.831 | 15/30 (0.50) | 26 | 0 | 4 | 0 | 0 | 0 | 1.274 | 579.5 | none |
 
 ## Most-missed fields
 
@@ -41,26 +42,26 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 | field | wrong | missing |
 |---|---|---|
 | `tags[]` | 0 | 45 |
-| `address.city` | 0 | 29 |
-| `address.postcode` | 0 | 29 |
-| `address.street` | 0 | 29 |
-| `age` | 0 | 29 |
-| `name` | 0 | 29 |
-| `contacts[].email` | 0 | 27 |
-| `contacts[].phone` | 0 | 27 |
+| `address.city` | 0 | 30 |
+| `address.postcode` | 0 | 30 |
+| `address.street` | 0 | 30 |
+| `age` | 0 | 30 |
+| `name` | 0 | 30 |
+| `contacts[].email` | 0 | 28 |
+| `contacts[].phone` | 0 | 28 |
 
 **json**
 
 | field | wrong | missing |
 |---|---|---|
-| `tags[]` | 0 | 45 |
-| `contacts[].email` | 0 | 26 |
-| `contacts[].phone` | 0 | 26 |
-| `address.street` | 2 | 21 |
-| `address.postcode` | 1 | 21 |
-| `address.city` | 0 | 21 |
-| `age` | 0 | 21 |
-| `name` | 0 | 21 |
+| `tags[]` | 0 | 10 |
+| `contacts[].email` | 8 | 0 |
+| `contacts[].phone` | 8 | 0 |
+| `address.street` | 2 | 1 |
+| `address.city` | 0 | 1 |
+| `address.postcode` | 0 | 1 |
+| `age` | 0 | 1 |
+| `employment.company` | 0 | 1 |
 
 **baml**
 
@@ -79,52 +80,57 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 
 | field | wrong | missing |
 |---|---|---|
-| `tags[]` | 0 | 42 |
-| `contacts[].phone` | 11 | 14 |
-| `address.postcode` | 4 | 16 |
-| `contacts[].email` | 4 | 14 |
-| `address.city` | 0 | 16 |
-| `address.street` | 0 | 16 |
-| `age` | 0 | 16 |
-| `name` | 0 | 16 |
+| `tags[]` | 3 | 19 |
+| `contacts[].phone` | 8 | 0 |
+| `contacts[].email` | 6 | 0 |
+| `address.street` | 1 | 0 |
 
 **sola-jsonish-sections**
 
 | field | wrong | missing |
 |---|---|---|
-| `tags[]` | 0 | 38 |
-| `address.postcode` | 4 | 21 |
-| `contacts[].email` | 0 | 23 |
-| `contacts[].phone` | 0 | 23 |
-| `address.city` | 0 | 21 |
-| `address.street` | 0 | 21 |
-| `age` | 0 | 21 |
-| `name` | 0 | 21 |
+| `tags[]` | 4 | 14 |
+| `contacts[].phone` | 7 | 2 |
+| `address.street` | 2 | 6 |
+| `contacts[].email` | 6 | 2 |
+| `address.city` | 0 | 6 |
+| `address.postcode` | 0 | 6 |
+| `age` | 0 | 6 |
+| `name` | 0 | 6 |
 
 **sola-yaml-sections**
 
 | field | wrong | missing |
 |---|---|---|
-| `tags[]` | 0 | 39 |
-| `address.city` | 0 | 23 |
-| `address.postcode` | 0 | 23 |
-| `address.street` | 0 | 23 |
-| `age` | 0 | 23 |
-| `contacts[].phone` | 1 | 22 |
-| `name` | 0 | 23 |
-| `contacts[].email` | 0 | 22 |
+| `tags[]` | 0 | 14 |
+| `contacts[].email` | 6 | 7 |
+| `contacts[].phone` | 6 | 7 |
+| `address.city` | 0 | 8 |
+| `address.postcode` | 0 | 8 |
+| `address.street` | 0 | 8 |
+| `age` | 0 | 8 |
+| `name` | 0 | 8 |
 
 **sola-jsonish-rescue**
 
 | field | wrong | missing |
 |---|---|---|
-| `tags[]` | 0 | 38 |
-| `address.postcode` | 4 | 21 |
-| `contacts[].email` | 0 | 23 |
-| `contacts[].phone` | 0 | 23 |
-| `address.city` | 0 | 21 |
-| `address.street` | 0 | 21 |
-| `age` | 0 | 21 |
-| `name` | 0 | 21 |
+| `contacts[].phone` | 7 | 2 |
+| `contacts[].email` | 6 | 2 |
+| `tags[]` | 4 | 0 |
+| `address.street` | 2 | 0 |
+
+**sola-yaml-rescue**
+
+| field | wrong | missing |
+|---|---|---|
+| `contacts[].email` | 6 | 7 |
+| `contacts[].phone` | 6 | 7 |
+| `tags[]` | 0 | 5 |
+| `address.city` | 0 | 4 |
+| `address.postcode` | 0 | 4 |
+| `address.street` | 0 | 4 |
+| `age` | 0 | 4 |
+| `employment` | 0 | 4 |
 
 Per-case detail is in the companion `.csv`; it is not duplicated here.

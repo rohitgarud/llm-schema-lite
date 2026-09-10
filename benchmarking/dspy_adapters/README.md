@@ -38,15 +38,15 @@ runs against Ollama on the **`ollama_chat/` provider with `{"think": false}`**:
 
 | file | arm | model | scope |
 |---|---|---|---|
-| `prompt-cost-2026-09-09.md` | offline | — | 10 adapters x 6 signatures |
-| `live-ollama_chat-qwen3-8b-2026-09-09.md` | outcomes | `qwen3:8b` | 7 adapters x 6 signatures x 3 trials |
-| `accuracy-ollama_chat-<model>-2026-09-09.md` | accuracy | six sub-1.2B models | 7 adapters x 30 cases each |
+| `prompt-cost-2026-09-10.md` | offline | — | 11 adapters x 6 signatures |
+| `live-ollama_chat-qwen3-8b-2026-09-10.md` | outcomes | `qwen3:8b` | 8 adapters x 6 signatures x 3 trials |
+| `accuracy-ollama_chat-<model>-2026-09-10.md` | accuracy | six sub-1.2B models | 8 adapters x 30 cases each |
 
 Each file's provenance block carries the exact command, git head and effective
 `lm_kwargs`. If no results file is present for a given arm and date, that pass was not
 run and no numbers exist for it — this file does not claim otherwise.
 
-Two sets of superseded artefacts were deleted rather than kept:
+Three sets of superseded artefacts were deleted rather than kept:
 
 - The `2026-09-05` live pair was generated at `41810a5`, before the
   `response_format_sent` fix and the `parse rate` / `validation rate` columns, so its
@@ -57,6 +57,13 @@ Two sets of superseded artefacts were deleted rather than kept:
   as if it were confidence. It also ran on a provider where `think` is silently ignored,
   so most of its latency is a thinking trace. Superseded on both counts by the
   `ollama_chat` pair.
+- The **`2026-09-09`** `ollama_chat` set — prompt-cost, the `qwen3:8b` live pair and all
+  six accuracy pairs — was generated at `daf210b`, before YAML's output section was
+  rendered as YAML and before untagged code fences were extracted. Every
+  `sola-yaml-sections` row in it measured a prompt that no longer exists (0/18 on
+  `qwen3:8b`), and it predates the `sola-yaml-rescue` cell. Superseded by the
+  `2026-09-10` set, which re-ran every arm on one code version rather than patching the
+  YAML rows in.
 
 ## 2. Quick start
 
@@ -116,7 +123,7 @@ exposes eleven flags:
 | `--accuracy` | `store_true` | `False` | Live accuracy arm **only**, and never run by default. Requires the same two env vars. |
 | `--cases` | `int` | `30` | Accuracy-arm case count. Ignored by every other arm. |
 | `--cases-seed` | `int` | `0` | Accuracy-arm corpus seed. Recorded in the report's provenance block, because two accuracy runs are comparable only if they scored the same cases. |
-| `--adapters` | `str` (comma-separated) | offline: all 10 · live: the 6 `*-sections` ids + `sola-jsonish-rescue` | Filter by adapter id. Unknown id → stderr listing valid ids, exit 2. |
+| `--adapters` | `str` (comma-separated) | offline: all 11 · live: the 8 in `LIVE_DEFAULT_ADAPTER_IDS` | Filter by adapter id. Unknown id → stderr listing valid ids, exit 2. |
 | `--signatures` | `str` (comma-separated) | all 6 | Filter by signature id. Unknown id → same treatment. |
 | `--trials` | `int` | `1` | Live-arm repetitions per cell. Ignored by the offline arm (deterministic). |
 | `--out` | `Path` | `<package dir>/results` | Output directory; created if absent. |
@@ -242,6 +249,7 @@ used exclusively by the #1871 cell set):
 | `sola-json-block` | `StructuredOutputAdapter(output_mode=JSON, prompt_layout=JSON_BLOCK)` |
 | `sola-jsonish-block` | `StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=JSON_BLOCK)` |
 | `sola-jsonish-rescue` | `StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())` |
+| `sola-yaml-rescue` | `StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())` |
 | `sola-yaml-block` | `StructuredOutputAdapter(output_mode=YAML, prompt_layout=JSON_BLOCK)` |
 | `sola-jsonish-nojsonobject` (repro-only) | `StructuredOutputAdapter(output_mode=JSONISH, use_json_object_response_format=False)` |
 
@@ -250,8 +258,9 @@ used exclusively by the #1871 cell set):
 would silently mask parsing failures (Δ1/D3.1 in the design notes).
 
 The live arms default to the six `*-sections` ids (`chat`, `json`, `baml`,
-`sola-json-sections`, `sola-jsonish-sections`, `sola-yaml-sections`) **plus**
-`sola-jsonish-rescue`; the offline arm covers all ten.
+`sola-json-sections`, `sola-jsonish-sections`, `sola-yaml-sections`) **plus** the two
+rescue cells, `sola-jsonish-rescue` and `sola-yaml-rescue`; the offline arm covers all
+eleven.
 
 `sola-jsonish-rescue` is `sola-jsonish-sections` with one thing changed —
 `parse_config=ParseConfig()`, which arms the parse-time rescues — so the pair isolates
@@ -355,11 +364,12 @@ Six sub-1.2B models across five families, 30 labeled cases each, field accuracy:
 
 | adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
 |---|---|---|---|---|---|---|
-| `sola-jsonish-rescue` | **0.929** | 0.858 | 0.215 | 0.095 | 0.000 | 0.000 |
+| `sola-jsonish-rescue` | **0.929** | **0.858** | 0.215 | **0.095** | 0.000 | 0.000 |
 | `json` (`JSONAdapter`) | 0.889 | 0.797 | 0.203 | 0.000 | 0.000 | 0.000 |
 | `sola-json-sections` | 0.886 | 0.157 | **0.363** | 0.000 | 0.000 | 0.000 |
 | `sola-jsonish-sections` | 0.745 | **0.858** | 0.215 | **0.095** | 0.000 | 0.000 |
-| `sola-yaml-sections` | 0.849 | 0.363 | 0.206 | 0.000 | 0.000 | 0.000 |
+| `sola-yaml-rescue` | 0.831 | 0.422 | 0.311 | 0.000 | 0.000 | 0.000 |
+| `sola-yaml-sections` | 0.711 | 0.422 | 0.255 | 0.000 | 0.000 | 0.000 |
 | `baml` (`BAMLAdapter`) | 0.000 | 0.760 | 0.000 | 0.000 | 0.000 | 0.000 |
 | `chat` (`ChatAdapter`) | 0.000 | 0.000 | 0.022 | 0.000 | 0.000 | 0.000 |
 
@@ -384,13 +394,41 @@ extraction with optionality needs roughly ≥0.8B.
 **Adapter ranking is model-dependent, and mode matters more than adapter.** JSON beats
 JSONISH on `qwen3.5:0.8b` (0.886 vs 0.745) and loses badly on `granite3.1-moe:1b` (0.157
 vs 0.858, where JSON mode's verbose schema draws 24/30 validation errors). No adapter wins
-everywhere. The two live arms also disagree with each other — `sola-jsonish-sections` is
-18/18 `ok` on `qwen3:8b` in the outcomes arm while `sola-yaml-sections` is 0/18, and on
-`qwen3.5:0.8b` they swap — which is exactly why no number from one arm is carried into
-the other's table.
+everywhere. The two live arms also measure different things — every `sola-*` cell is
+18/18 `ok` on `qwen3:8b` in the outcomes arm, because `ok` means *parsed and validated*,
+not *right* — which is exactly why no number from one arm is carried into the other's
+table.
+
+**Differences under ~0.02 are noise.** Ollama is not bit-deterministic even at
+`temperature=0` with a fixed `seed`; repeat runs of the same `llama3.2:1b` cell on the
+same code moved by up to 0.02.
+
+**What YAML's prompt fix was worth, and what it cost.** Before `2026-09-10`, YAML mode's
+output section demonstrated `[[ ## record ## ]]` markers while the instructions asked for
+YAML. YAML sends no `response_format` to overrule the demonstration, so `qwen3:8b`
+followed the markers: `sola-yaml-sections` was 0/18 in the outcomes arm. Rendering the
+section as YAML (`record:` over the indented schema) made it 18/18. On the small models the
+prompt change alone was not a uniform win, and the recovery came from two other places:
+
+- `granite3.1-moe:1b` improved outright, 0.363 -> 0.422.
+- `llama3.2:1b` *fell*, 0.206 -> 0.080 with 15/30 parse errors. It was now answering in
+  valid YAML inside an untagged ```` ``` ```` fence followed by prose, which the extractor
+  did not look for. Extracting untagged and mislabelled fences brought it to 0.255.
+- `qwen3.5:0.8b` fell 0.849 -> 0.711, with the losses in validation, not parsing. The
+  rescuable ones are the null-item bug below, and `ParseConfig()` prunes them:
+  `sola-yaml-rescue` scores 0.831 (8 -> 4 validation errors).
+
+So the fix removes a total failure on the 8B model at the cost of roughly 0.02 on
+`qwen3.5:0.8b`, provided YAML mode is used with `ParseConfig()`. Without it that
+regression is 0.14.
 
 **What parse-time repair is worth.** `sola-jsonish-rescue` differs from
 `sola-jsonish-sections` only by `parse_config=ParseConfig()`, and the offline arm confirms
 the two prompts are token-identical. It converts 6 validation errors into 6 correct
 records on `qwen3.5:0.8b` (0.745 -> 0.929, 24/30 -> 30/30) and is inert everywhere else —
 all six were the same bug, an empty list answered with `[{"email": null, "phone": null}]`.
+`sola-yaml-rescue` is the same comparison for YAML: +0.120 on `qwen3.5:0.8b`, +0.056 on
+`llama3.2:1b`, inert on `granite3.1-moe:1b`. It is the same bug: replayed, all six
+rescued cases fail on `contacts.0.email = None`. YAML's typed scalars (`postcode: 95014`
+loads as an int) are *not* repaired by it — coercion only reaches scalar output fields,
+and `record` is a model. They surfaced once in development runs, not in this artefact. The dspy-integration README therefore tells YAML users to pass it.

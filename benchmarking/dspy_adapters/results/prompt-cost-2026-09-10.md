@@ -1,8 +1,8 @@
 ```
 arm: prompt-cost
-generated: 2026-09-09T13:49:06.509720+00:00
+generated: 2026-09-10T06:12:22.176362+00:00
 command: python -m benchmarking.dspy_adapters --offline
-git_head: 054da0a
+git_head: daf210b
 dspy_version: 3.3.1
 llm_schema_lite_version: 0.6.1
 encoding: cl100k_base
@@ -27,10 +27,11 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 | baml | 156 | 164 | 165 | 178 | 171 | — |
 | sola-json-sections | 159 | 292 | 311 | 203 | 189 | 221 |
 | sola-jsonish-sections | 159 | 201 | 193 | 203 | 182 | 186 |
-| sola-yaml-sections | 160 | 192 | 187 | 204 | 180 | 180 |
+| sola-yaml-sections | 154 | 190 | 182 | 198 | 172 | 178 |
 | sola-json-block | 159 | 294 | 313 | 203 | 189 | 223 |
 | sola-jsonish-block | 159 | 199 | 192 | 203 | 179 | 184 |
 | sola-jsonish-rescue | 159 | 201 | 193 | 203 | 182 | 186 |
+| sola-yaml-rescue | 154 | 190 | 182 | 198 | 172 | 178 |
 | sola-yaml-block | 160 | 193 | 188 | 204 | 180 | 181 |
 
 ## Prompt cost — detail
@@ -67,12 +68,12 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 | sola-jsonish-sections | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS) | enum | 2 | 799 | 203 | ok |
 | sola-jsonish-sections | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS) | optional | 2 | 750 | 182 | ok |
 | sola-jsonish-sections | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS) | recursive | 2 | 772 | 186 | ok |
-| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | flat | 2 | 698 | 160 | ok |
-| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | nested | 2 | 790 | 192 | ok |
-| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | list_of_model | 2 | 772 | 187 | ok |
-| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | enum | 2 | 806 | 204 | ok |
-| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | optional | 2 | 749 | 180 | ok |
-| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | recursive | 2 | 753 | 180 | ok |
+| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | flat | 2 | 675 | 154 | ok |
+| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | nested | 2 | 782 | 190 | ok |
+| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | list_of_model | 2 | 762 | 182 | ok |
+| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | enum | 2 | 783 | 198 | ok |
+| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | optional | 2 | 721 | 172 | ok |
+| sola-yaml-sections | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS) | recursive | 2 | 745 | 178 | ok |
 | sola-json-block | StructuredOutputAdapter(output_mode=JSON, prompt_layout=JSON_BLOCK) | flat | 2 | 685 | 159 | ok |
 | sola-json-block | StructuredOutputAdapter(output_mode=JSON, prompt_layout=JSON_BLOCK) | nested | 2 | 1076 | 294 | ok |
 | sola-json-block | StructuredOutputAdapter(output_mode=JSON, prompt_layout=JSON_BLOCK) | list_of_model | 2 | 1132 | 313 | ok |
@@ -91,6 +92,12 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 | sola-jsonish-rescue | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig()) | enum | 2 | 799 | 203 | ok |
 | sola-jsonish-rescue | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig()) | optional | 2 | 750 | 182 | ok |
 | sola-jsonish-rescue | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig()) | recursive | 2 | 772 | 186 | ok |
+| sola-yaml-rescue | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig()) | flat | 2 | 675 | 154 | ok |
+| sola-yaml-rescue | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig()) | nested | 2 | 782 | 190 | ok |
+| sola-yaml-rescue | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig()) | list_of_model | 2 | 762 | 182 | ok |
+| sola-yaml-rescue | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig()) | enum | 2 | 783 | 198 | ok |
+| sola-yaml-rescue | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig()) | optional | 2 | 721 | 172 | ok |
+| sola-yaml-rescue | StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig()) | recursive | 2 | 745 | 178 | ok |
 | sola-yaml-block | StructuredOutputAdapter(output_mode=YAML, prompt_layout=JSON_BLOCK) | flat | 2 | 692 | 160 | ok |
 | sola-yaml-block | StructuredOutputAdapter(output_mode=YAML, prompt_layout=JSON_BLOCK) | nested | 2 | 787 | 193 | ok |
 | sola-yaml-block | StructuredOutputAdapter(output_mode=YAML, prompt_layout=JSON_BLOCK) | list_of_model | 2 | 769 | 188 | ok |

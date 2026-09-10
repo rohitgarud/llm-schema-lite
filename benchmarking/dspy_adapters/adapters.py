@@ -104,6 +104,18 @@ ADAPTERS: dict[str, AdapterCell] = {
             "parse_config=ParseConfig())"
         ),
     ),
+    "sola-yaml-rescue": AdapterCell(
+        id="sola-yaml-rescue",
+        factory=lambda: StructuredOutputAdapter(
+            output_mode=OutputMode.YAML,
+            prompt_layout=PromptLayout.SECTIONS,
+            parse_config=ParseConfig(),
+        ),
+        config_repr=(
+            "StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, "
+            "parse_config=ParseConfig())"
+        ),
+    ),
     "sola-yaml-block": AdapterCell(
         id="sola-yaml-block",
         factory=lambda: StructuredOutputAdapter(
@@ -123,8 +135,9 @@ LIVE_DEFAULT_ADAPTER_IDS: tuple[str, ...] = (
     "sola-jsonish-sections",
     "sola-yaml-sections",
     "sola-jsonish-rescue",
+    "sola-yaml-rescue",
 )
-"""The live arms default to the six *-sections ids plus the parse-time rescue cell.
+"""The live arms default to the six *-sections ids plus the two parse-time rescue cells.
 
 `sola-jsonish-rescue` differs from `sola-jsonish-sections` in exactly one thing --
 `parse_config=ParseConfig()`, which arms the coercion and all-null-list-item rescues --
@@ -133,6 +146,12 @@ byte-identical to `sola-jsonish-sections`, which the offline arm makes visible: 
 rows must agree on every token count, or the cell is measuring more than it claims.
 Measured on qwen3.5:0.8b, 30 accuracy cases: 0.745 -> 0.929 field accuracy, 24/30 ->
 30/30 parsed; inert on granite3.1-moe:1b and llama3.2:1b.
+
+`sola-yaml-rescue` is the same controlled pair for YAML. What it rescues is the same
+all-null list item, not YAML's typed scalars (`postcode: 95014` loads as an int): the
+coercion rescue declines nested-model fields, so that failure passes through. Measured
+on qwen3.5:0.8b over 40 accuracy cases, against `sola-yaml-sections` on the same run:
+0.714 -> 0.848 field accuracy, 16/40 -> 22/40 exact records, 11 -> 5 validation errors.
 """
 
 REPRO_1871_ADAPTER_IDS: tuple[str, ...] = (

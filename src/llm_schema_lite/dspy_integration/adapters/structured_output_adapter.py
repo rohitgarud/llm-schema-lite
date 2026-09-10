@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 import re
+import textwrap
 from typing import Any, Literal, get_origin
 
 import dspy
@@ -647,15 +648,12 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         """
         if self.prompt_layout == PromptLayout.JSON_BLOCK:
             return self._render_json_block(blocks)
-        # YAML is excluded deliberately, not by oversight. Measured on qwen3.5:0.8b over
-        # the same 30 cases, the prefix moved YAML the WRONG way (0.849 -> 0.760 field
-        # accuracy, 27 -> 24 parsed) while moving JSONISH from 0.000 to 0.745. YAML's
-        # failure mode is a separate, larger problem -- its SECTIONS prompt demonstrates
-        # `[[ ## field ## ]]` markers while asking for YAML, and sends no `response_format`
-        # to override the demonstration -- and it is being addressed on its own. Applying
-        # a fix aimed at a brace-envelope to a format that has no braces bought a
-        # regression, so YAML stays byte-identical here until that work happens.
-        return self._render_sections(blocks, bind_field_name=self.output_mode != OutputMode.YAML)
+        # YAML gets its own renderer rather than the JSON one's `"name":` prefix. The
+        # prefix is not valid YAML, and bolting it on measured as a regression
+        # (0.849 -> 0.760 field accuracy on qwen3.5:0.8b) before this renderer existed.
+        if self.output_mode == OutputMode.YAML:
+            return self._render_yaml_sections(blocks)
+        return self._render_sections(blocks, bind_field_name=True)
 
     def _render_sections(self, blocks: list[_FieldBlock], bind_field_name: bool = False) -> str:
         """Render ``blocks`` as ``[[ ## name ## ]]`` sections joined by a blank line.
@@ -693,6 +691,44 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                     text += f"\n{block.schema_text}"
             rendered.append(text)
         return "\n\n".join(rendered).strip()
+
+    def _render_yaml_sections(self, blocks: list[_FieldBlock]) -> str:
+        """Render OUTPUT ``blocks`` as a YAML mapping, one ``name:`` key per field.
+
+        The ``[[ ## name ## ]]`` marker form used everywhere else is not YAML, and in
+        YAML mode nothing overrides it: JSON and JSONISH send
+        ``response_format={"type": "json_object"}``, which forces the reply back into
+        shape no matter what the structure block demonstrated, while YAML sends no
+        response format at all. So the demonstration *is* the specification, and a
+        marker demonstration under a "respond with YAML" instruction asks the model for
+        two incompatible things. Small models follow the demonstration and reply::
+
+            [[ ## record ## ]]
+            name: Ada
+
+        which the YAML parser rejects - ``sola-yaml-sections`` scored 0/18 on
+        ``qwen3:8b`` in the outcomes arm before this. Emitting a real YAML skeleton
+        instead also solves the envelope ambiguity ``_render_sections`` documents, for
+        the same reason and by the same means: the schema is nested under the key it
+        must be produced under rather than starting at column 0 on its own line.
+
+        The schema body is indented as a whole, which is safe precisely because YAML
+        indentation is relative - shifting every line by two columns nests the mapping
+        without disturbing the formatter's own structure. Comment lines shift with it
+        and stay comments.
+        """
+        rendered: list[str] = []
+        for block in blocks:
+            if block.schema_text is None:
+                text = f"{block.name}: {{{block.name}}}"
+            else:
+                text = f"{block.name}:"
+            if block.note_text is not None:
+                text += f"{' ' * 8}# note: {block.note_text}"
+            if block.schema_text is not None:
+                text += "\n" + textwrap.indent(block.schema_text.strip("\n"), "  ")
+            rendered.append(text)
+        return "\n".join(rendered).strip()
 
     def _render_json_block(self, blocks: list[_FieldBlock]) -> str:
         """Render ``blocks`` as one ``{ "name": ... }``-shaped block, unescaped.

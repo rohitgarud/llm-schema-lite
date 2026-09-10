@@ -247,17 +247,24 @@ class TestRunAccuracyArm:
         assert csv_path.read_text().splitlines()[0].startswith("adapter,adapter_config,case_id")
 
 
-def test_rescue_cell_differs_from_its_twin_only_at_parse_time():
-    """`sola-jsonish-rescue` must isolate parse-time repair, nothing else.
+@pytest.mark.parametrize(
+    ("plain_id", "rescue_id"),
+    [
+        ("sola-jsonish-sections", "sola-jsonish-rescue"),
+        ("sola-yaml-sections", "sola-yaml-rescue"),
+    ],
+)
+def test_rescue_cell_differs_from_its_twin_only_at_parse_time(plain_id, rescue_id):
+    """A rescue cell must isolate parse-time repair, nothing else.
 
-    If its prompt ever diverges from `sola-jsonish-sections`, the pair stops being a
-    controlled comparison and any accuracy delta between them becomes uninterpretable.
+    If its prompt ever diverges from its twin, the pair stops being a controlled
+    comparison and any accuracy delta between them becomes uninterpretable.
     """
     from benchmarking.dspy_adapters.adapters import ADAPTERS
     from benchmarking.dspy_adapters.signatures import SIGNATURE_IDS, SIGNATURES
 
-    plain = ADAPTERS["sola-jsonish-sections"].factory()
-    rescue = ADAPTERS["sola-jsonish-rescue"].factory()
+    plain = ADAPTERS[plain_id].factory()
+    rescue = ADAPTERS[rescue_id].factory()
     assert plain.parse_config is None
     assert rescue.parse_config is not None
 
