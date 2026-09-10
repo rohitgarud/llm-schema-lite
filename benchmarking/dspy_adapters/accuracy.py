@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 import statistics
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,6 +40,7 @@ __all__ = [
     "AccuracyRow",
     "flatten",
     "score",
+    "null_floor",
     "normalize",
     "aggregate_accuracy",
     "worst_fields",
@@ -73,7 +75,9 @@ def flatten(value: Any, prefix: str = "") -> dict[str, Any]:
     benchmark cares most about.
     """
     if isinstance(value, BaseModel):
-        value = value.model_dump()
+        # JSON mode, because gold labels are JSON: a `date` field must flatten to the
+        # "2024-04-22" the label holds, not to a `datetime.date` that never equals it.
+        value = value.model_dump(mode="json")
 
     if isinstance(value, dict):
         out: dict[str, Any] = {}
@@ -139,9 +143,28 @@ def score(expected: Any, produced: Any | None) -> FieldScore:
     )
 
 
+def null_floor(cases: Iterable[Any]) -> float:
+    """Micro field accuracy of a reply with every output field ``None`` - "extracted nothing".
+
+    A correct ``None`` is a match (see :func:`flatten`), so on a sparse corpus this is far
+    above 0 - 0.949 on the first 30 PII cases - and a score only means something as a
+    distance above it. Goes through each case's ``align`` exactly as a real reply does.
+    """
+    matched = total = 0
+    for case in cases:
+        model = case.signature.output_fields[case.output_field].annotation
+        expected, produced = case.expected, dict.fromkeys(model.model_fields)
+        if case.align is not None:
+            expected, produced = case.align(expected, produced)
+        result = score(expected, produced)
+        matched += result.matched
+        total += result.total
+    return 1.0 if total == 0 else matched / total
+
+
 @dataclass(frozen=True)
 class AccuracyRow:
-    """One accuracy cell: adapter x case, measured via `dspy.Predict(ExtractPerson)`.
+    """One accuracy cell: adapter x case, measured via `dspy.Predict(case.signature)`.
 
     Deliberately its own row type rather than a field bolted onto `TrialRow`: this arm is
     scored against ground truth, the outcomes arm against the schema, and the two are not

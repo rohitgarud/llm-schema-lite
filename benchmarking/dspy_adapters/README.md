@@ -20,7 +20,8 @@ table**, anywhere, in any file:
   serving `qwen3:8b`). Token counts here are whatever the provider reports back, and a
   live run is not deterministic run to run. It scores **validity**: did the reply parse
   and satisfy the schema.
-- **`accuracy`** — live, over a synthetic corpus of labeled extraction cases, scored
+- **`accuracy`** — live, over labeled extraction cases — a synthetic corpus by default,
+  or one of four third-party corpora (`--corpus`) — scored
   field-by-field against ground truth. It scores **correctness**, which validity cannot:
   a reply can be perfectly shaped, pass every schema check, and be entirely wrong. This
   is the arm that speaks to the package's actual claim — that a compact, explicit schema
@@ -38,9 +39,10 @@ runs against Ollama on the **`ollama_chat/` provider with `{"think": false}`**:
 
 | file | arm | model | scope |
 |---|---|---|---|
-| `prompt-cost-2026-09-10.md` | offline | — | 11 adapters x 6 signatures |
+| `prompt-cost-2026-09-10.md` | offline | — | 12 adapters x 6 signatures |
 | `live-ollama_chat-qwen3-8b-2026-09-10.md` | outcomes | `qwen3:8b` | 8 adapters x 6 signatures x 3 trials |
 | `accuracy-ollama_chat-<model>-2026-09-10.md` | accuracy | six sub-1.2B models | 8 adapters x 30 cases each |
+| `accuracy-<corpus>-ollama_chat-<model>-2026-09-10.md` | accuracy | same six models | 4 third-party corpora x 8 adapters x 30 cases |
 
 Each file's provenance block carries the exact command, git head and effective
 `lm_kwargs`. If no results file is present for a given arm and date, that pass was not
@@ -114,7 +116,7 @@ probe configured) never touch `os.environ` at all.
 ## 4. CLI flags and exit codes
 
 `python -m benchmarking.dspy_adapters` (equivalently `make bench-dspy BENCH_ARGS=...`)
-exposes eleven flags:
+exposes twelve flags:
 
 | flag | `argparse` type | default | meaning |
 |---|---|---|---|
@@ -122,8 +124,9 @@ exposes eleven flags:
 | `--live` | `store_true` | `False` | Live outcomes arm only. Requires the two env vars. |
 | `--accuracy` | `store_true` | `False` | Live accuracy arm **only**, and never run by default. Requires the same two env vars. |
 | `--cases` | `int` | `30` | Accuracy-arm case count. Ignored by every other arm. |
-| `--cases-seed` | `int` | `0` | Accuracy-arm corpus seed. Recorded in the report's provenance block, because two accuracy runs are comparable only if they scored the same cases. |
-| `--adapters` | `str` (comma-separated) | offline: all 11 · live: the 8 in `LIVE_DEFAULT_ADAPTER_IDS` | Filter by adapter id. Unknown id → stderr listing valid ids, exit 2. |
+| `--cases-seed` | `int` | `0` | Synthetic-corpus seed. Recorded in the report's provenance block, because two accuracy runs are comparable only if they scored the same cases. |
+| `--corpus` | choice | `synthetic` | Accuracy-arm corpus: `synthetic`, or the third-party `pii`, `financial-ner`, `insurance-claims`, `patient-notes` (first `--cases` rows at a pinned revision — Hugging Face, which needs the `benchmark` extra, or GitHub for `patient-notes`). Recorded in provenance and named in the file stem. See §12. |
+| `--adapters` | `str` (comma-separated) | offline: all 12 · live: the 8 in `LIVE_DEFAULT_ADAPTER_IDS` | Filter by adapter id. Unknown id → stderr listing valid ids, exit 2. |
 | `--signatures` | `str` (comma-separated) | all 6 | Filter by signature id. Unknown id → same treatment. |
 | `--trials` | `int` | `1` | Live-arm repetitions per cell. Ignored by the offline arm (deterministic). |
 | `--out` | `Path` | `<package dir>/results` | Output directory; created if absent. |
@@ -235,7 +238,7 @@ this is stated as a fact about the bug, not a claim of a run that didn't happen.
 
 ## 10. Adapter and signature ids
 
-**Adapters** (ten in `ADAPTERS`, plus one repro-only extra in `REPRO_1871_ADAPTERS`
+**Adapters** (twelve in `ADAPTERS`, plus one repro-only extra in `REPRO_1871_ADAPTERS`
 used exclusively by the #1871 cell set):
 
 | id | `config_repr` |
@@ -248,6 +251,7 @@ used exclusively by the #1871 cell set):
 | `sola-yaml-sections` | `StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS)` |
 | `sola-json-block` | `StructuredOutputAdapter(output_mode=JSON, prompt_layout=JSON_BLOCK)` |
 | `sola-jsonish-block` | `StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=JSON_BLOCK)` |
+| `sola-json-rescue` | `StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig())` |
 | `sola-jsonish-rescue` | `StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())` |
 | `sola-yaml-rescue` | `StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())` |
 | `sola-yaml-block` | `StructuredOutputAdapter(output_mode=YAML, prompt_layout=JSON_BLOCK)` |
@@ -258,16 +262,18 @@ used exclusively by the #1871 cell set):
 would silently mask parsing failures (Δ1/D3.1 in the design notes).
 
 The live arms default to the six `*-sections` ids (`chat`, `json`, `baml`,
-`sola-json-sections`, `sola-jsonish-sections`, `sola-yaml-sections`) **plus** the two
+`sola-json-sections`, `sola-jsonish-sections`, `sola-yaml-sections`) **plus** two
 rescue cells, `sola-jsonish-rescue` and `sola-yaml-rescue`; the offline arm covers all
-eleven.
+twelve. `sola-json-rescue` is opt-in (`--adapters sola-json-rescue`): it was added after
+the `2026-09-10` accuracy artefacts, which it would otherwise leave incomplete.
 
-`sola-jsonish-rescue` is `sola-jsonish-sections` with one thing changed —
+Each `sola-*-rescue` cell is its `*-sections` twin with one thing changed —
 `parse_config=ParseConfig()`, which arms the parse-time rescues — so the pair isolates
 what parse-time repair is worth. Its *prompt* is byte-identical to its twin, which the
 offline arm makes checkable: the two rows must agree on every token count, and a test
-asserts it for all six signatures. The rescue that matters here drops list items whose
-every field is `null`, the shape a small model produces instead of `[]`.
+asserts it for all six signatures. Which repair matters depends on the mode: in JSONISH
+and YAML it is dropping list items whose every field is `null` (the shape a small model
+produces instead of `[]`); in JSON it is unwrapping a record sent as a one-item list.
 
 **Signatures** (six, `SIGNATURE_IDS` order):
 
@@ -330,6 +336,65 @@ A test enforces the fairness invariant directly: for 30 generated cases, every
 non-`None` scored value must appear verbatim in the case's prose
 (`test_every_scored_value_appears_in_the_text`). A field the prose never states cannot
 be scored.
+
+### Third-party corpora
+
+A benchmark scored only on a corpus its authors wrote can end up measuring how well the
+adapters fit those authors' habits. `--corpus` swaps in one of the four structured-output
+tasks run by [thedataquarry/structured-outputs][dq] — three Cleanlab benchmarks and a set of
+clinical notes:
+
+| corpus | source | rows | output shape | all-null floor (first 30) |
+|---|---|---|---|---|
+| `pii` | `Cleanlab/pii-extraction` | 100 | 56 flat optional strings | 0.949 |
+| `financial-ner` | `Cleanlab/fire-financial-ner-extraction` | 2,117 | 7 optional string lists | 0.590 |
+| `insurance-claims` | `Cleanlab/insurance-claims-extraction` | 30 | nested objects, enums, dates, a list of objects | 0.018 |
+| `patient-notes` | `thedataquarry/structured-outputs` (GitHub) | 2,726 | patient record with practitioner, allergy and immunization lists | 0.356 |
+
+- **Their task wording, not ours.** Signature instructions and field descriptions are
+  copied from thedataquarry's DSPy code into `external.py`, so no adapter is scored on
+  wording this package chose. The schema deviates only where upstream's own gold could not
+  otherwise match — chiefly `patient-notes`, whose upstream schema nests fields its gold
+  keeps flat and misspells `primaryLanguage` — and each deviation is marked at its field.
+  Every adapter sees the same schema, so a fix favours none of them.
+- **Never vendored.** None of the sources states a licence, so rows are fetched at run
+  time at a pinned revision — from Hugging Face (the `benchmark` extra), or for
+  `patient-notes` from thedataquarry's repo, where its notes and gold live — and only
+  scores and field paths reach `results/`.
+- **Scored by this arm's metric, not upstream's**, so the numbers are not comparable with
+  thedataquarry's tables. Two adjustments keep it fair: `financial-ner` lists are aligned
+  to gold order before scoring (`align_entity_lists`), which reproduces upstream's
+  order-blind set matching, and every reply is dumped in JSON mode, so a `date` compares
+  as the `"2024-04-22"` its label holds. `insured_objects` is still compared by position.
+  `patient-notes` adopts upstream's leniencies (`align_patient_record`: case-insensitive
+  strings, state abbreviations, written-out birth dates, empty lists as null) but compares
+  every practitioner and immunization field, where upstream checks the first practitioner
+  and only counts immunizations.
+- **Read every score against its floor.** A correct `None` is a match, so a reply that
+  extracts nothing already scores 0.949 on `pii`. Every report prints its own all-null
+  floor under the aggregate table.
+- **`baml` cannot run `patient-notes` at all.** DSPy's `BAMLAdapter` rejects any schema
+  that uses one model in two places as "recursive": its `seen_models` set is shared
+  across sibling fields and never popped, so it is a visited set, not a recursion stack.
+  `PatientRecord` reuses `PersonNameAndTitle` and `Address` under the patient and under
+  each practitioner — exactly as upstream's own schema does — so every `baml` cell on this
+  corpus is a `format_error` raised before any LM call. The check is identical in DSPy
+  3.0.4 (upstream's pin) and 3.3.1 (ours); a two-field repro reproduces it offline.
+- **`patient-notes` failures are mostly not a parse-repair problem.** Small models often
+  wrap a single object in a one-item list here (`"name": [{...}]`; FHIR, which the notes
+  come from, stores names and addresses as arrays). The list-unwrap repair that
+  `ParseConfig()` arms fixes that shape, but on this corpus it rescues little: parsing
+  `qwen3.5:0.8b`'s completions with and without it, JSON mode goes from 0/30 to 4/30
+  parsed (0.092, still under the 0.356 floor) and JSONISH and YAML do not move. With the
+  wrapping repaired, the same records still fail on upstream's strict schema —
+  `address.country` must be exactly `"US"` (models write `"U.S."`, `"United States"`),
+  `maritalStatus` rejects `"Single"`, and required fields such as `manifestation` are
+  omitted — and in YAML mode `name` comes back as a bare `['Rudolf']`, which has no
+  object to unwrap to. None of those can be repaired without inventing a value.
+
+```bash
+python -m benchmarking.dspy_adapters --accuracy --corpus pii --cases 30
+```
 
 ### The two denominator decisions
 
@@ -429,6 +494,100 @@ records on `qwen3.5:0.8b` (0.745 -> 0.929, 24/30 -> 30/30) and is inert everywhe
 all six were the same bug, an empty list answered with `[{"email": null, "phone": null}]`.
 `sola-yaml-rescue` is the same comparison for YAML: +0.120 on `qwen3.5:0.8b`, +0.056 on
 `llama3.2:1b`, inert on `granite3.1-moe:1b`. It is the same bug: replayed, all six
-rescued cases fail on `contacts.0.email = None`. YAML's typed scalars (`postcode: 95014`
-loads as an int) are *not* repaired by it — coercion only reaches scalar output fields,
-and `record` is a model. They surfaced once in development runs, not in this artefact. The dspy-integration README therefore tells YAML users to pass it.
+rescued cases fail on `contacts.0.email = None`. The dspy-integration README therefore
+tells YAML users to pass it. YAML's typed scalars (`postcode: 95014` loads as an int) are
+*not* repaired by it — coercion only reaches scalar output fields, and `record` is a
+model. They surfaced once in development runs, not in this artefact.
+
+### What the third-party corpora found
+
+The same six models and eight adapters, the first 30 cases of each corpus, field accuracy.
+Bold marks each model's best cell. Read every table against its all-null floor — the
+score of a reply that extracts nothing.
+
+**`pii`** (floor **0.949**):
+
+| adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
+|---|---|---|---|---|---|---|
+| `chat` | 0.000 | 0.256 | 0.159 | 0.095 | 0.000 | 0.632 |
+| `json` | 0.907 | **0.767** | **0.507** | 0.190 | 0.095 | **0.918** |
+| `baml` | 0.833 | 0.696 | 0.000 | 0.142 | 0.000 | 0.000 |
+| `sola-json-sections` | 0.496 | 0.575 | 0.402 | 0.000 | 0.346 | 0.000 |
+| `sola-jsonish-sections` | 0.864 | 0.710 | 0.082 | 0.000 | 0.321 | 0.000 |
+| `sola-yaml-sections` | 0.928 | 0.289 | 0.000 | **0.443** | 0.383 | 0.000 |
+| `sola-jsonish-rescue` | 0.862 | 0.710 | 0.082 | 0.000 | 0.321 | 0.000 |
+| `sola-yaml-rescue` | **0.929** | 0.289 | 0.000 | **0.443** | **0.396** | 0.000 |
+
+**`financial-ner`** (floor **0.590**):
+
+| adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
+|---|---|---|---|---|---|---|
+| `chat` | 0.000 | 0.000 | **0.173** | 0.000 | 0.028 | 0.000 |
+| `json` | 0.044 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `baml` | 0.570 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-json-sections` | 0.213 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-jsonish-sections` | 0.639 | 0.000 | 0.000 | **0.333** | 0.000 | 0.000 |
+| `sola-yaml-sections` | **0.763** | **0.020** | 0.000 | 0.100 | **0.112** | **0.036** |
+| `sola-jsonish-rescue` | 0.618 | 0.000 | 0.000 | **0.333** | 0.000 | 0.000 |
+| `sola-yaml-rescue` | **0.763** | **0.020** | 0.000 | 0.100 | **0.112** | 0.016 |
+
+**`insurance-claims`** (floor **0.018**):
+
+| adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
+|---|---|---|---|---|---|---|
+| `chat` | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `json` | 0.111 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `baml` | 0.026 | **0.152** | **0.025** | 0.000 | 0.000 | 0.000 |
+| `sola-json-sections` | **0.686** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-jsonish-sections` | 0.219 | 0.030 | 0.000 | 0.000 | **0.021** | 0.000 |
+| `sola-yaml-sections` | 0.628 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-jsonish-rescue` | 0.233 | 0.030 | 0.000 | 0.000 | **0.021** | 0.000 |
+| `sola-yaml-rescue` | 0.670 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+
+**`patient-notes`** (floor **0.356**):
+
+| adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
+|---|---|---|---|---|---|---|
+| `sola-jsonish-sections` | **0.162** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-jsonish-rescue` | 0.160 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| every other adapter | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+
+The causes below come from replaying failing cells and counting pydantic's first error
+(location, type, input type) per case. Replays are separate live runs, so their counts
+match the artefacts to within Ollama's noise, not exactly.
+
+- **Nothing beats the floor on `pii`.** The best cell, `qwen3.5:0.8b` with
+  `sola-yaml-rescue`, is 0.929 against 0.949. Its misses are mostly *invented* values:
+  under `json` it filled 93 fields that gold leaves null, dropped 53 real ones and got 10
+  wrong; under `sola-yaml-rescue` the counts are 55 / 52 / 12. YAML's lead on this corpus
+  is restraint, not recall. `gemma3:270m` with `json` (0.918) is the floor effect in pure
+  form — every one of its misses is a real value left null. It extracted nothing.
+- **`financial-ner`: JSON mode fails on one shape, and a repair recovers it.** Only
+  `qwen3.5:0.8b` clears the 0.590 floor, in YAML (0.763) and JSONISH (0.639). JSON mode
+  collapses because the model sends the record as a one-item list,
+  `{"entities": [{...}]}` — that is the first error of every failed case under `json`
+  (29/29) and `sola-json-sections` (21/21). `baml` parses but leaves 99 real values null.
+  The list-unwrap repair recovers the shape. Parsing the same completions with and
+  without it (`sola-json-rescue`): 9/30 -> 26/30 parsed, 0.209 -> 0.606 — onto the floor,
+  still short of YAML. `llama3.2:1b` gains 3 records (0 -> 0.036), `granite3.1-moe:1b`
+  none, and JSONISH and YAML replies are unchanged on every corpus: they never send the
+  shape.
+- **`insurance-claims` rewards keeping the nesting.** Under most adapters `qwen3.5:0.8b`
+  hoists `ClaimHeader`'s fields to the top level, so `header` is reported missing: the
+  first error of 18 of `json`'s 26 failures, 29/29 of `baml`'s, 21/22 of
+  `sola-jsonish-sections`'. `sola-json-sections` keeps the nesting — 29/30 validate — and
+  scores 0.686, with YAML close behind at 0.670 with the rescue. This is the one corpus
+  where JSON mode's full schema beats the compact ones. With a 0.018 floor, every
+  non-zero score here is real extraction.
+- **`patient-notes` defeats every model.** The best cell is 0.162 against a 0.356 floor.
+  Of the 240 cells each model runs, all but `qwen3.5:0.8b`'s 16 JSONISH records are
+  parse, validation or (for `baml`) format errors; *Third-party corpora* above gives the
+  causes.
+
+**What carries over from the synthetic corpus.** No adapter wins everywhere: on
+`qwen3.5:0.8b`, the only model that clears a floor, the best adapter is YAML on `pii` and
+`financial-ner`, `sola-json-sections` on `insurance-claims` and JSONISH on
+`patient-notes`. `falcon3:1b`, `gemma3:270m` and `smollm2:360m` clear no floor on any
+corpus, as on the synthetic one. What changes is the failure: the missing `record`
+envelope that dominated the synthetic sweep gives way to shape errors *inside* the
+envelope — records wrapped in lists, nested objects flattened, strict literals missed.

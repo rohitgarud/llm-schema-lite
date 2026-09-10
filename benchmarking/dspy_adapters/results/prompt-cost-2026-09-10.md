@@ -1,8 +1,8 @@
 ```
 arm: prompt-cost
-generated: 2026-09-10T06:12:22.176362+00:00
+generated: 2026-09-10T12:54:51.106511+00:00
 command: python -m benchmarking.dspy_adapters --offline
-git_head: daf210b
+git_head: 867819b
 dspy_version: 3.3.1
 llm_schema_lite_version: 0.6.1
 encoding: cl100k_base
@@ -30,6 +30,7 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 | sola-yaml-sections | 154 | 190 | 182 | 198 | 172 | 178 |
 | sola-json-block | 159 | 294 | 313 | 203 | 189 | 223 |
 | sola-jsonish-block | 159 | 199 | 192 | 203 | 179 | 184 |
+| sola-json-rescue | 159 | 292 | 311 | 203 | 189 | 221 |
 | sola-jsonish-rescue | 159 | 201 | 193 | 203 | 182 | 186 |
 | sola-yaml-rescue | 154 | 190 | 182 | 198 | 172 | 178 |
 | sola-yaml-block | 160 | 193 | 188 | 204 | 180 | 181 |
@@ -86,6 +87,12 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 | sola-jsonish-block | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=JSON_BLOCK) | enum | 2 | 793 | 203 | ok |
 | sola-jsonish-block | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=JSON_BLOCK) | optional | 2 | 734 | 179 | ok |
 | sola-jsonish-block | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=JSON_BLOCK) | recursive | 2 | 761 | 184 | ok |
+| sola-json-rescue | StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig()) | flat | 2 | 691 | 159 | ok |
+| sola-json-rescue | StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig()) | nested | 2 | 1077 | 292 | ok |
+| sola-json-rescue | StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig()) | list_of_model | 2 | 1133 | 311 | ok |
+| sola-json-rescue | StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig()) | enum | 2 | 799 | 203 | ok |
+| sola-json-rescue | StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig()) | optional | 2 | 756 | 189 | ok |
+| sola-json-rescue | StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig()) | recursive | 2 | 840 | 221 | ok |
 | sola-jsonish-rescue | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig()) | flat | 2 | 691 | 159 | ok |
 | sola-jsonish-rescue | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig()) | nested | 2 | 815 | 201 | ok |
 | sola-jsonish-rescue | StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig()) | list_of_model | 2 | 791 | 193 | ok |

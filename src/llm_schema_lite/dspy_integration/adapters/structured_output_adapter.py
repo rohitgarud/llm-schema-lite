@@ -5,7 +5,8 @@ import json
 import logging
 import re
 import textwrap
-from typing import Any, Literal, get_origin
+import types
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 import dspy
 import pydantic
@@ -186,6 +187,68 @@ def _prune_null_list_items(value: Any) -> Any:
                 dropped = True
             kept.append(item_pruned)
         return kept if dropped else value
+    return value
+
+
+def _is_list_type(annotation: Any) -> bool:
+    return annotation is list or get_origin(annotation) is list
+
+
+def _unwrap_single_item_lists(value: Any, annotation: Any) -> Any:
+    """Replace a one-item list with its item wherever the schema expects an object.
+
+    Rescue-only, like :func:`_prune_null_list_items`, and run just before it in the same
+    step so the two compose. Small models wrap a single object in a one-item list, most
+    often the whole record in JSON mode: ``qwen3.5:0.8b`` answered
+    ``{"entities": [{"Company": [...], ...}]}`` on 29 of 30 financial-NER cases. Replaying
+    the same completions with and without this repair (JSON, SECTIONS, ``ParseConfig()``):
+    9/30 -> 26/30 parsed and field accuracy 0.209 -> 0.606 there, 0/30 -> 4/30 on clinical
+    notes. JSONISH and YAML replies were unchanged on every corpus measured -- they do not
+    produce the shape.
+
+    **Why this repair is safe.** A list holding exactly one object, where exactly one object
+    is allowed, has a single reading - unwrapping it invents nothing.
+
+    **Schema-guided, unlike the prune.** It unwraps only where the annotation expects a
+    pydantic model and admits no list, so a legitimate one-item list (``contacts: [...]``)
+    is never touched, and a list of two or more items is left for validation to reject -
+    picking one would be inventing.
+
+    Returns ``value`` itself (identity-comparable) when nothing changed.
+    """
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _unwrap_single_item_lists(value, get_args(annotation)[0])
+    if origin is Union or origin is types.UnionType:
+        members = [arg for arg in get_args(annotation) if arg is not type(None)]
+        listy = next((m for m in members if _is_list_type(m)), None)
+        if isinstance(value, list) and listy is not None:
+            return _unwrap_single_item_lists(value, listy)
+        # ponytail: first model member only; a union of two models is never unwrapped into
+        # the second. Resolve by trying each member if a real schema ever needs it.
+        model = next(
+            (m for m in members if isinstance(m, type) and issubclass(m, pydantic.BaseModel)),
+            None,
+        )
+        return value if model is None else _unwrap_single_item_lists(value, model)
+    if isinstance(annotation, type) and issubclass(annotation, pydantic.BaseModel):
+        wrapped = isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict)
+        item = value[0] if wrapped else value
+        if not isinstance(item, dict):
+            return value
+        fields = annotation.model_fields
+        repaired = {
+            k: _unwrap_single_item_lists(v, fields[k].annotation) if k in fields else v
+            for k, v in item.items()
+        }
+        changed = wrapped or any(repaired[k] is not item[k] for k in item)
+        return repaired if changed else value
+    if _is_list_type(annotation) and isinstance(value, list) and get_args(annotation):
+        item_type = get_args(annotation)[0]
+        items = [_unwrap_single_item_lists(v, item_type) for v in value]
+        return (
+            items if any(new is not old for new, old in zip(items, value, strict=True)) else value
+        )
     return value
 
 
@@ -1054,8 +1117,9 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         """The shared field pipeline: byte-identical semantics for JSON and YAML.
 
         Mirrors upstream JSONAdapter.parse (DSPy 3.3.1) with two rescues as the only
-        insertions -- _coerce_field_value, then _prune_null_list_items. Both _parse_json
-        and _parse_yaml funnel through it after their mode-specific extraction.
+        insertions -- _coerce_field_value, then the structural repair
+        (_unwrap_single_item_lists, then _prune_null_list_items). Both _parse_json and
+        _parse_yaml funnel through it after their mode-specific extraction.
 
         Invariants that any change to this method must preserve:
           - self.parse_config is None => structurally upstream-equivalent. The first
@@ -1121,14 +1185,16 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                         logger.debug(f"Coercion rescued output field {k!r}: {metadata}")
                         continue
                 if self.parse_config.allow_coercion:
-                    pruned = _prune_null_list_items(v)
-                    if pruned is not v:
+                    # Unwrap first: pruning first would turn `[{"family": null}]` under an
+                    # object-typed field into `[]`, which no longer has anything to unwrap.
+                    repaired = _prune_null_list_items(_unwrap_single_item_lists(v, annotation))
+                    if repaired is not v:
                         try:
-                            out[k] = parse_value(pruned, annotation)
+                            out[k] = parse_value(repaired, annotation)
                         except (pydantic.ValidationError, ValueError):
                             pass
                         else:
-                            logger.debug(f"Prune rescued output field {k!r}: dropped null items")
+                            logger.debug(f"Structural rescue repaired output field {k!r}")
                             continue
                 if self.parse_config.partial:
                     logger.debug(f"Dropping unparseable output field {k!r} (partial=True)")

@@ -92,6 +92,18 @@ ADAPTERS: dict[str, AdapterCell] = {
         ),
         config_repr="StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=JSON_BLOCK)",
     ),
+    "sola-json-rescue": AdapterCell(
+        id="sola-json-rescue",
+        factory=lambda: StructuredOutputAdapter(
+            output_mode=OutputMode.JSON,
+            prompt_layout=PromptLayout.SECTIONS,
+            parse_config=ParseConfig(),
+        ),
+        config_repr=(
+            "StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, "
+            "parse_config=ParseConfig())"
+        ),
+    ),
     "sola-jsonish-rescue": AdapterCell(
         id="sola-jsonish-rescue",
         factory=lambda: StructuredOutputAdapter(
@@ -140,7 +152,8 @@ LIVE_DEFAULT_ADAPTER_IDS: tuple[str, ...] = (
 """The live arms default to the six *-sections ids plus the two parse-time rescue cells.
 
 `sola-jsonish-rescue` differs from `sola-jsonish-sections` in exactly one thing --
-`parse_config=ParseConfig()`, which arms the coercion and all-null-list-item rescues --
+`parse_config=ParseConfig()`, which arms the coercion rescue and the structural repair
+(list-wrapped objects unwrapped, all-null list items dropped) --
 so the pair isolates what parse-time repair is worth on a given model. Its PROMPT is
 byte-identical to `sola-jsonish-sections`, which the offline arm makes visible: the two
 rows must agree on every token count, or the cell is measuring more than it claims.
@@ -152,6 +165,12 @@ all-null list item, not YAML's typed scalars (`postcode: 95014` loads as an int)
 coercion rescue declines nested-model fields, so that failure passes through. Measured
 on qwen3.5:0.8b over 40 accuracy cases, against `sola-yaml-sections` on the same run:
 0.714 -> 0.848 field accuracy, 16/40 -> 22/40 exact records, 11 -> 5 validation errors.
+
+`sola-json-rescue` is the JSON twin and is opt-in (`--adapters`), not a default: it was
+added after the `2026-09-10` accuracy artefacts, which it would otherwise leave
+incomplete. The repair it isolates is the list unwrap -- JSON mode is the only mode seen
+sending a whole record as a one-item list. Replaying qwen3.5:0.8b's financial-NER
+completions with and without it: 9/30 -> 26/30 parsed, 0.209 -> 0.606 field accuracy.
 """
 
 REPRO_1871_ADAPTER_IDS: tuple[str, ...] = (

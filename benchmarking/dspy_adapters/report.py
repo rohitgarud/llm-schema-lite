@@ -180,7 +180,10 @@ ACCURACY_EXTRA_CAVEAT = (
     "field accuracy is micro-averaged over the **expected** fields of every case: a cell "
     "that raised scores 0 against its full denominator rather than being excluded, and "
     "emitting fewer fields can never raise the score. Fields the model invents are "
-    "reported under `spurious` and break `exact`, but do not enter the denominator. "
+    "reported under `spurious` and break `exact`, but do not enter the denominator."
+)
+
+SYNTHETIC_GROUND_TRUTH_NOTE = (
     "Ground truth is the generated record the prose was rendered from, so the corpus "
     "measures schema-following under paraphrase — not real-world extraction."
 )
@@ -670,14 +673,35 @@ def _render_accuracy_fields(rows: list[AccuracyRow]) -> list[str]:
     return lines
 
 
-def _render_accuracy_markdown(rows: list[AccuracyRow], meta: RunMeta) -> str:
+def _render_accuracy_markdown(
+    rows: list[AccuracyRow],
+    meta: RunMeta,
+    corpus: str | None = None,
+    null_floor: float | None = None,
+) -> str:
+    ground_truth = (
+        SYNTHETIC_GROUND_TRUTH_NOTE
+        if corpus is None
+        else (
+            f"Ground truth is the label shipped with the third-party `{corpus}` corpus "
+            "(Hugging Face, revision in `lm_kwargs`), and the prompt is that benchmark's own "
+            "signature, not one written by this package's authors."
+        )
+    )
     lines: list[str] = []
     lines.extend(_render_provenance_block(meta))
-    lines.extend(_metric_integrity_section(ACCURACY_EXTRA_CAVEAT))
+    lines.extend(_metric_integrity_section(f"{ACCURACY_EXTRA_CAVEAT} {ground_truth}"))
     lines.append("")
     lines.append("## Extraction accuracy — aggregate")
     lines.append("")
     lines.extend(_render_accuracy_aggregate(rows))
+    if null_floor is not None:
+        lines.append("")
+        lines.append(
+            f"**All-null floor: {null_floor:.3f}** — the field accuracy of a reply that "
+            "extracts nothing (every output field `None`) on these same cases. A correct "
+            "`None` counts as a match, so read every score above as a distance from this."
+        )
     lines.append("")
     lines.append("## Most-missed fields")
     lines.extend(_render_accuracy_fields(rows))
@@ -692,8 +716,14 @@ def write_accuracy_report(
     out_dir: Path,
     meta: RunMeta | None = None,
     today: dt.date | None = None,
+    corpus: str | None = None,
+    null_floor: float | None = None,
 ) -> tuple[Path, Path]:
-    """Write `results/accuracy-<model-slug>-<YYYY-MM-DD>.{md,csv}` and return both paths.
+    """Write `results/accuracy[-<corpus>]-<model-slug>-<YYYY-MM-DD>.{md,csv}`; return both.
+
+    `corpus=None` is the synthetic corpus, which keeps the stem its committed artefacts
+    already have; a third-party corpus is named in the stem so two corpora run against one
+    model on one day never collide.
 
     A third file stem, never merged into `live-*`: this arm scores against ground truth
     while the outcomes arm scores against the schema, and one file would invite exactly
@@ -707,7 +737,8 @@ def write_accuracy_report(
         today = dt.date.today()
 
     model_slug = "unknown" if meta.model is None else slugify_model(meta.model)
-    stem = f"accuracy-{model_slug}-{today.isoformat()}"
+    prefix = "accuracy" if corpus is None else f"accuracy-{corpus}"
+    stem = f"{prefix}-{model_slug}-{today.isoformat()}"
     md_path = resolve_output_path(out_dir, stem, ".md")
     csv_path = resolve_output_path(out_dir, stem, ".csv")
 
@@ -735,5 +766,5 @@ def write_accuracy_report(
         for row in rows
     ]
     _write_csv_file(csv_path, ACCURACY_CSV_HEADER, csv_rows)
-    md_path.write_text(_render_accuracy_markdown(rows, meta), encoding="utf-8")
+    md_path.write_text(_render_accuracy_markdown(rows, meta, corpus, null_floor), encoding="utf-8")
     return md_path, csv_path

@@ -43,6 +43,7 @@ import sys
 from pathlib import Path
 
 from .adapters import ADAPTERS, LIVE_DEFAULT_ADAPTER_IDS, resolve_adapter_ids
+from .external import CORPORA
 from .outcomes import ReproRow, UnknownCellError
 from .provenance import PROG, invocation_command
 from .signatures import SIGNATURES, resolve_signature_ids
@@ -78,9 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--accuracy",
         action="store_true",
         help=(
-            "Run the live extraction-accuracy arm only: N synthetic labeled cases scored "
-            "field-by-field against ground truth. Requires the same live environment as "
-            "--live. Never combined with the other arms into one score."
+            "Run the live extraction-accuracy arm only: N labeled cases (see --corpus) "
+            "scored field-by-field against ground truth. Requires the same live environment "
+            "as --live. Never combined with the other arms into one score."
         ),
     )
     parser.add_argument(
@@ -93,7 +94,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--cases-seed",
         type=int,
         default=0,
-        help="Accuracy-arm corpus seed; recorded in the report. Default: 0.",
+        help="Synthetic accuracy-corpus seed; recorded in the report. Default: 0.",
+    )
+    parser.add_argument(
+        "--corpus",
+        choices=("synthetic", *CORPORA),
+        default="synthetic",
+        help=(
+            "Accuracy-arm corpus. 'synthetic' (default) is generated locally from "
+            "--cases-seed; the others are third-party labeled sets fetched at a pinned "
+            "revision (Hugging Face, or GitHub for patient-notes; first --cases rows; the HF "
+            "ones need the `benchmark` extra). "
+            "Ignored by every other arm."
+        ),
     )
     parser.add_argument(
         "--adapters",
@@ -301,6 +314,7 @@ def _run_accuracy(args: argparse.Namespace) -> int:
     """Run the live accuracy arm against one shared `dspy.LM`, then write its report."""
     from . import config as config_module
     from . import report as report_module
+    from .accuracy import null_floor
     from .cases import generate
     from .runner import run_accuracy_arm
 
@@ -309,7 +323,16 @@ def _run_accuracy(args: argparse.Namespace) -> int:
     cfg = config_module.load_config()  # exits 2 itself when not configured
     lm = config_module.build_lm(cfg)
 
-    cases = generate(args.cases, seed=args.cases_seed)
+    corpus_meta: dict[str, object]
+    if args.corpus == "synthetic":
+        cases = generate(args.cases, seed=args.cases_seed)
+        corpus_meta = {"cases": args.cases, "cases_seed": args.cases_seed}
+    else:
+        from .external import load as load_corpus
+
+        cases = load_corpus(args.corpus, args.cases)
+        source = CORPORA[args.corpus]
+        corpus_meta = {"corpus": f"{source.repo}@{source.revision}", "cases": len(cases)}
     rows = run_accuracy_arm(lambda _adapter: lm, cases, adapter_ids=adapter_ids)
 
     harness_failed = bool(rows) and all(row.error_class == "LMTransportError" for row in rows)
@@ -328,16 +351,21 @@ def _run_accuracy(args: argparse.Namespace) -> int:
             **config_module.BASELINE_LM_KWARGS,
             **cfg.lm_kwargs,
             # Corpus identity belongs in provenance: two accuracy runs are only comparable
-            # if they scored the same cases, and (n, seed) is what fixes that.
-            "cases": args.cases,
-            "cases_seed": args.cases_seed,
+            # if they scored the same cases, and (n, seed) or (repo@revision, n) fixes that.
+            **corpus_meta,
         },
         supports_response_schema=getattr(lm, "supports_response_schema", None),
         supports_function_calling=getattr(lm, "supports_function_calling", None),
         integrity_overridden=cfg.integrity_overridden,
     )
     try:
-        md_path, csv_path = report_module.write_accuracy_report(rows, args.out, meta=meta)
+        md_path, csv_path = report_module.write_accuracy_report(
+            rows,
+            args.out,
+            meta=meta,
+            corpus=None if args.corpus == "synthetic" else args.corpus,
+            null_floor=null_floor(cases),
+        )
     except OSError as exc:
         print(f"error: could not write results to {args.out}: {exc}", file=sys.stderr)
         return 1

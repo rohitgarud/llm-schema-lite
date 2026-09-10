@@ -250,6 +250,7 @@ class TestRunAccuracyArm:
 @pytest.mark.parametrize(
     ("plain_id", "rescue_id"),
     [
+        ("sola-json-sections", "sola-json-rescue"),
         ("sola-jsonish-sections", "sola-jsonish-rescue"),
         ("sola-yaml-sections", "sola-yaml-rescue"),
     ],

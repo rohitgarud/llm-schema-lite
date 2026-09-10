@@ -9,7 +9,8 @@ two arms that never share a row or a file:
   cache; without one it reports ``prompt_tokens`` as unavailable instead of failing.
 - **Live ``outcomes`` arm** — real ``dspy.Predict`` calls against a local LM, producing
   ``TrialRow`` records. Scores *validity*: did the reply parse and satisfy the schema.
-- **Live ``accuracy`` arm** — the same live calls over synthetic labeled cases, scored
+- **Live ``accuracy`` arm** — the same live calls over labeled cases (a synthetic corpus,
+  or one of four third-party ones fetched by ``external.py``), scored
   field-by-field against ground truth, producing ``AccuracyRow`` records. Scores
   *correctness*, which validity cannot: a reply can be perfectly shaped and entirely wrong.
 

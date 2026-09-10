@@ -174,7 +174,7 @@ def cold_encoding_memo() -> Iterator[None]:
 
 def test_benchmarking_package_imports() -> None:
     """The `benchmarking.dspy_adapters` import mechanism works under pytest."""
-    assert len(ADAPTERS) == 11
+    assert len(ADAPTERS) == 12
     assert len(SIGNATURES) == 6
 
 
@@ -195,11 +195,11 @@ def test_every_signature_cell_builds() -> None:
 
 
 def test_offline_arm_covers_full_matrix() -> None:
-    """run_offline_arm() returns exactly 66 unique PromptRows (11 adapters x 6 sigs)."""
+    """run_offline_arm() returns exactly 72 unique PromptRows (12 adapters x 6 sigs)."""
     rows = run_offline_arm()
-    assert len(rows) == 66
+    assert len(rows) == 72
     assert all(isinstance(row, PromptRow) for row in rows)
-    assert len({(row.adapter, row.signature) for row in rows}) == 66
+    assert len({(row.adapter, row.signature) for row in rows}) == 72
 
 
 def test_offline_arm_reports_positive_tokens() -> None:

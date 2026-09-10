@@ -28,7 +28,9 @@ reproducible.
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import dspy
 from pydantic import BaseModel, Field
@@ -93,11 +95,20 @@ class ExtractPerson(dspy.Signature):
 
 @dataclass(frozen=True)
 class Case:
-    """One labeled case: the prose the model sees, and the record it must recover."""
+    """One labeled case: the prose the model sees, and the record it must recover.
+
+    The last four fields default to this module's corpus; ``external.py`` overrides them to
+    run another benchmark's signature against that benchmark's labels. ``align`` rewrites an
+    (expected, produced) pair before scoring, for corpora whose lists are unordered sets.
+    """
 
     case_id: str
     text: str
-    expected: PersonRecord
+    expected: Any
+    signature: type[dspy.Signature] = ExtractPerson
+    input_field: str = "text"
+    output_field: str = "record"
+    align: Callable[[Any, Any | None], tuple[Any, Any | None]] | None = None
 
 
 _FIRST = ["Ada", "Grace", "Alan", "Katherine", "Linus", "Barbara", "Edsger", "Radia"]

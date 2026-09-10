@@ -57,7 +57,7 @@ from .adapters import (
     REPRO_1871_ADAPTER_IDS,
     REPRO_1871_ADAPTERS,
 )
-from .cases import Case, ExtractPerson
+from .cases import Case
 from .fakes import JSON_OBJECT_RESPONSE_FORMAT, Issue1871LM, JsonObjectOnlyLM
 from .outcomes import Outcome, PromptRow, ReproRow, TrialRow, classify
 from .signatures import SIGNATURE_IDS, SIGNATURES
@@ -361,7 +361,7 @@ def run_accuracy_arm(
     adapter_ids: list[str] | None = None,
     disable_cache: bool = True,
 ) -> list[AccuracyRow]:
-    """Score every (adapter, case) cell against ground truth via `ExtractPerson`.
+    """Score every (adapter, case) cell against ground truth via each case's own signature.
 
     Same Δ2 construction rule as `run_live_arm`: `lm_factory` receives the adapter under
     test. No `trials` parameter and no seed offsetting - the outcomes arm needs those
@@ -409,14 +409,18 @@ def run_one_case(
         with dspy.context(
             lm=lm, adapter=adapter, track_usage=True, callbacks=_callbacks_with(recorder)
         ):
-            produced = dspy.Predict(ExtractPerson)(text=case.text).record
+            prediction = dspy.Predict(case.signature)(**{case.input_field: case.text})
+            produced = getattr(prediction, case.output_field)
     except BaseException as caught:
         exc = caught
     wall_s = time.perf_counter() - t0
 
     lm_calls = len(lm.history) - n0
     outcome, error_class = classify(exc, lm_calls)
-    field_score = score(case.expected, produced)
+    expected = case.expected
+    if case.align is not None:
+        expected, produced = case.align(expected, produced)
+    field_score = score(expected, produced)
     total_tokens, _, _ = _reported_tokens(lm, n0, lm_calls)
 
     return AccuracyRow(

@@ -302,7 +302,8 @@ adapter = StructuredOutputAdapter(
   - `None` reproduces upstream `JSONAdapter`: a field that fails `parse_value` leaks its
     `ValidationError`
   - When given, a rejected field is offered to two rescues in order — the coercion
-    rescue, then the all-null-list-item prune (`allow_coercion`, on by default); if
+    rescue, then a structural repair that unwraps one-item lists where the schema wants an
+    object and drops all-null list items (`allow_coercion`, on by default); if
     `parse_config.partial` is `True` the field is then dropped and refilled by
     `apply_output_field_defaults`
   - The prune matters most on small models, which routinely answer an empty list with

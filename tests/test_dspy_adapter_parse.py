@@ -14,6 +14,7 @@ from llm_schema_lite import FormatterConfig, ParseConfig  # noqa: E402
 from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
 from llm_schema_lite.dspy_integration.adapters.structured_output_adapter import (
     _prune_null_list_items,
+    _unwrap_single_item_lists,
 )  # noqa: E402
 from tests.dspy_helpers import QA, QAOptional, Typed, make_adapter  # noqa: E402
 
@@ -398,3 +399,94 @@ class TestPruneNullListItemsUnit:
 
     def test_scalars_and_plain_lists_pass_through(self):
         assert _prune_null_list_items([1, None, "x"]) == [1, None, "x"]
+
+
+class _UnwrapName(pydantic.BaseModel):
+    family: str
+    given: list[str] | None = None
+
+
+class _UnwrapRec(pydantic.BaseModel):
+    name: _UnwrapName | None
+    contacts: list[_PruneContact] = pydantic.Field(default_factory=list)
+
+
+class _UnwrapDoc(pydantic.BaseModel):
+    name: _UnwrapName
+
+
+class TestUnwrapSingleItemListRescue:
+    """A single object wrapped in a one-item list, where the schema wants the object.
+
+    In JSON mode qwen3.5:0.8b sent the whole financial-NER record so (`{"entities": [{...}]}`)
+    on 29 of 30 cases; on clinical notes it also wraps nested `name` / `address` objects.
+    """
+
+    @staticmethod
+    def _sig():
+        return dspy.Signature(
+            {"text": (str, dspy.InputField()), "record": (_UnwrapRec, dspy.OutputField())}
+        )
+
+    WRAPPED = (
+        '{"record": {"name": [{"family": "Doe"}], "contacts": [{"email": "a@b.c", "phone": null}]}}'
+    )
+
+    def test_rescue_unwraps_the_object_and_leaves_a_real_list_alone(self):
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig()
+        ).parse(self._sig(), self.WRAPPED)
+        assert out["record"].name.family == "Doe"
+        assert len(out["record"].contacts) == 1
+
+    def test_unwraps_a_whole_output_field(self):
+        """The financial-NER shape: the entire record in a one-item list, in JSON mode."""
+        sig = dspy.Signature(
+            {"text": (str, dspy.InputField()), "record": (_UnwrapName, dspy.OutputField())}
+        )
+        adapter = StructuredOutputAdapter(output_mode=OutputMode.JSON, parse_config=ParseConfig())
+        out = adapter.parse(sig, '{"record": [{"family": "Doe"}]}')
+        assert out["record"].family == "Doe"
+
+    def test_is_off_when_parse_config_is_none(self):
+        with pytest.raises((pydantic.ValidationError, AdapterParseError, ValueError)):
+            StructuredOutputAdapter(output_mode=OutputMode.JSONISH).parse(self._sig(), self.WRAPPED)
+
+    def test_composes_with_the_null_item_prune(self):
+        both = (
+            '{"record": {"name": [{"family": "Doe"}], '
+            '"contacts": [{"email": null, "phone": null}]}}'
+        )
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig()
+        ).parse(self._sig(), both)
+        assert out["record"].name.family == "Doe"
+        assert out["record"].contacts == []
+
+
+class TestUnwrapSingleItemListsUnit:
+    """`_unwrap_single_item_lists` in isolation -- where it may and may not unwrap."""
+
+    def test_unwraps_where_the_schema_wants_an_object(self):
+        value = {"name": [{"family": "Doe"}], "contacts": []}
+        assert _unwrap_single_item_lists(value, _UnwrapRec) == {
+            "name": {"family": "Doe"},
+            "contacts": [],
+        }
+
+    def test_never_unwraps_a_list_typed_field(self):
+        value = {"name": None, "contacts": [{"email": "a@b.c"}]}
+        assert _unwrap_single_item_lists(value, _UnwrapRec) is value
+
+    def test_leaves_two_items_for_validation_to_reject(self):
+        value = {"name": [{"family": "A"}, {"family": "B"}]}
+        assert _unwrap_single_item_lists(value, _UnwrapRec) is value
+
+    def test_reaches_models_nested_in_a_list(self):
+        value = [{"name": [{"family": "X"}]}]
+        assert _unwrap_single_item_lists(value, list[_UnwrapDoc]) == [{"name": {"family": "X"}}]
+
+    def test_a_wrapped_scalar_is_not_an_object(self):
+        """`name: ['Rudolf']` (seen in YAML mode) has no object to unwrap to."""
+        value = {"name": ["Rudolf"]}
+        assert _unwrap_single_item_lists(value, _UnwrapRec) is value

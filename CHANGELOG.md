@@ -93,6 +93,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A failed cell scores 0 against its full denominator rather than being excluded, and the
   denominator is the expected fields, never the produced ones. The arm is opt-in and never
   runs by default — it costs `adapters x cases` live calls.
+- **List-unwrap rescue in the DSPy adapter.** With `parse_config` set (`allow_coercion`),
+  an output value sent as a one-item list where the schema wants an object is unwrapped
+  before validation, ahead of the all-null-item prune. It is schema-guided: a list-typed
+  field is never touched, and a list of two or more objects is left for validation to
+  reject. Measured by parsing the same live completions with and without it: in JSON mode
+  `qwen3.5:0.8b` wraps the whole financial-NER record so on 29 of 30 cases, and the repair
+  takes it from 9/30 to 26/30 parsed (field accuracy 0.209 -> 0.606); JSONISH and YAML
+  replies were unchanged on every corpus measured. The benchmark gains an opt-in
+  `sola-json-rescue` cell to reproduce it.
+- **Third-party corpora for the accuracy arm**
+  (`--corpus pii|financial-ner|insurance-claims|patient-notes`).
+  `benchmarking/dspy_adapters/external.py` runs the four structured-output tasks of
+  thedataquarry/structured-outputs — three Cleanlab benchmarks and clinical patient notes —
+  with that repo's own signature instructions and field descriptions, so the arm is no
+  longer scored only on a corpus this package wrote. Rows are fetched at pinned revisions
+  (Hugging Face via the `benchmark` extra, or thedataquarry's GitHub for patient notes) and
+  never vendored — no source states a licence. The patient-notes schema is reshaped to
+  match its own gold, which upstream's does not; each deviation is marked at its field. Reports name the corpus in the file stem
+  (`accuracy-<corpus>-<model>-<date>`) and print an all-null floor under the aggregate: a
+  correct `None` is a match, so a reply that extracts nothing already scores 0.949 on the
+  first 30 PII cases. `flatten` now dumps models in JSON mode so a `date` compares equal
+  to its label; synthetic-corpus scores are unchanged.
 - **`sola-jsonish-rescue` benchmark cell** — `sola-jsonish-sections` with
   `parse_config=ParseConfig()` and nothing else changed, so the pair isolates what
   parse-time repair is worth. A test asserts the two render byte-identical prompts for all
