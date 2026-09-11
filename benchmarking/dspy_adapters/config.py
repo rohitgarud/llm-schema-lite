@@ -19,8 +19,9 @@ bookkeeping (see Anti-masking, R9). An override of either value via
 This module is never imported by ``__init__.py``, ``runner.py``, or the smoke test —
 those must remain importable and runnable fully offline, with no dependency on
 ``os.environ``. ``encoding.py`` follows the same quarantine for the same reason: it is
-the only other module here that writes ``os.environ``, only ``cli.py`` imports it in the
-package, and it does so lazily inside ``_run_offline``.
+the only other module here that writes ``os.environ``, it does so only inside
+``seed_tiktoken_cache``, and only ``cli.py`` calls that, lazily inside ``_run_offline``
+(``runner.py`` imports nothing from it but the ``ENCODING_NAME`` constant).
 """
 
 from __future__ import annotations
@@ -51,7 +52,6 @@ BASELINE_LM_KWARGS: dict[str, Any] = {
 empty_response was observed at 300 because qwen3's thinking trace exhausts the budget.
 Lowering it fills the live arm with empty_response rows."""
 
-INTEGRITY_KEYS: tuple[str, ...] = ("cache", "num_retries")
 INTEGRITY_VALUES: dict[str, Any] = {"cache": False, "num_retries": 0}
 
 
@@ -113,12 +113,12 @@ def load_config() -> BenchConfig:
         lm_kwargs = parsed
 
     integrity_overridden = False
-    for key in INTEGRITY_KEYS:
-        if key in lm_kwargs and lm_kwargs[key] != INTEGRITY_VALUES[key]:
+    for key, expected in INTEGRITY_VALUES.items():
+        if key in lm_kwargs and lm_kwargs[key] != expected:
             integrity_overridden = True
             print(
                 f"warning: {ENV_LM_KWARGS} overrides integrity-critical setting "
-                f"{key}={lm_kwargs[key]!r} (expected {INTEGRITY_VALUES[key]!r}); "
+                f"{key}={lm_kwargs[key]!r} (expected {expected!r}); "
                 "results may not be trustworthy.",
                 file=sys.stderr,
             )

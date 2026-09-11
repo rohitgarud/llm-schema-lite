@@ -28,7 +28,6 @@ repos:
       - id: mypy
         files: ^src/
         additional_dependencies: [
-          pytest>=7.0.0,
           pydantic>=2.10.0,
           types-PyYAML>=6.0.0,
         ]

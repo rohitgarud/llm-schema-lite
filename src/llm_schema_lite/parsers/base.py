@@ -9,8 +9,7 @@ class BaseParser(ABC):
     """
     Abstract base class for parsers.
 
-    Provides a common interface for parsing text content and shared
-    extraction utilities for handling various LLM response formats.
+    Provides a common interface for parsing text content.
     """
 
     @abstractmethod
@@ -30,49 +29,6 @@ class BaseParser(ABC):
         """
         pass
 
-    def _extract_content(self, text: str, mode: str) -> str:
-        """
-        Intelligently extract structured content from various LLM response formats.
-
-        This function tries multiple extraction strategies in order of preference:
-        1. Markdown code blocks (```json, ```yaml, etc.)
-        2. Direct structured content detection
-        3. Embedded structured content extraction
-
-        Args:
-            text: The raw text content
-            mode: The parsing mode ("json" or "yaml")
-
-        Returns:
-            Extracted structured content
-        """
-        return _smart_extract_content(text, mode)
-
-
-def _smart_extract_content(text: str, mode: str) -> str:
-    """
-    Intelligently extract structured content from various LLM response formats.
-
-    This function tries multiple extraction strategies in order of preference:
-    1. Markdown code blocks (```json, ```yaml, etc.)
-    2. Direct structured content detection
-    3. Embedded structured content extraction
-
-    Args:
-        text: The raw text content
-        mode: The parsing mode ("json" or "yaml")
-
-    Returns:
-        Extracted structured content
-    """
-    # Strategy 1: Try markdown code blocks first
-    markdown_extracted = _extract_from_markdown(text, mode)
-    if markdown_extracted != text:
-        return markdown_extracted
-
-    # Strategy 2: Return original text (mode-specific extraction handled by subclasses)
-    return text
-
 
 def _extract_from_markdown(text: str, mode: str) -> str:
     """Extract content from markdown code blocks.
@@ -82,6 +38,9 @@ def _extract_from_markdown(text: str, mode: str) -> str:
     the tag meant the whole reply was parsed instead -- where a single line of prose
     after the closing fence is enough to fail it. The tagged patterns are tried first,
     so a correctly-tagged block is still what wins when one is present.
+
+    Returns ``text`` itself when no fence is found, so callers detect "no block" by
+    identity with their input and fall back to their mode-specific extraction.
     """
     tagged = {"json": r"```json(.*?)```", "yaml": r"```ya?ml(.*?)```"}.get(mode)
     patterns = [p for p in (tagged, r"```[^\n`]*\n(.*?)```") if p is not None]

@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 import dspy
 import pydantic
+import yaml
 from dspy.adapters.chat_adapter import FieldInfoWithName
 from dspy.adapters.json_adapter import JSONAdapter
 from dspy.adapters.types import Type as DSPyType
@@ -17,7 +18,6 @@ from dspy.adapters.types.history import History as DSPyHistory
 from dspy.adapters.types.tool import Tool, ToolCalls
 from dspy.adapters.utils import (
     apply_output_field_defaults,
-    format_field_value,
     get_annotation_name,
     parse_value,
     serialize_for_json,
@@ -136,6 +136,16 @@ class _ResponseFormatPlan(enum.Enum):
     SCHEMA = "schema"  # build the Pydantic model; fall back on failure
 
 
+def _same_or_new(old: Any, new: Any) -> Any:
+    """``new`` if any item differs by identity from ``old``'s (same keys/length), else ``old``.
+
+    Every structural repair returns its input BY IDENTITY when nothing changed, so the caller
+    can skip a pointless re-parse; this is that check for one rebuilt dict or list.
+    """
+    olds, news = (old.values(), new.values()) if isinstance(old, dict) else (old, new)
+    return new if any(n is not o for o, n in zip(olds, news, strict=True)) else old
+
+
 def _prune_null_list_items(value: Any) -> Any:
     """Drop list items in which EVERY field is ``None``, recursively.
 
@@ -170,8 +180,7 @@ def _prune_null_list_items(value: Any) -> Any:
     caller can skip a pointless re-parse.
     """
     if isinstance(value, dict):
-        pruned = {k: _prune_null_list_items(v) for k, v in value.items()}
-        return value if all(pruned[k] is value[k] for k in value) else pruned
+        return _same_or_new(value, {k: _prune_null_list_items(v) for k, v in value.items()})
     if isinstance(value, list):
         kept: list[Any] = []
         dropped = False
@@ -195,6 +204,42 @@ def _is_list_type(annotation: Any) -> bool:
     return annotation is list or get_origin(annotation) is list
 
 
+def _members(annotation: Any) -> tuple[list[Any], bool]:
+    """Strip ``Annotated`` and split a ``Union``: its non-None members, and whether None was one.
+
+    One level only: a member comes back as written (it may itself be ``Annotated``). An
+    annotation that is neither is its own only member.
+    """
+    while get_origin(annotation) is Annotated:
+        annotation = get_args(annotation)[0]
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        args = get_args(annotation)
+        return [arg for arg in args if arg is not type(None)], type(None) in args
+    return [annotation], False
+
+
+def _walk(value: Any, annotation: Any, fn: Any) -> Any:
+    """Apply ``fn(child, child_annotation)`` to every child the schema types.
+
+    A child is a field of the dict ``value`` when ``annotation`` admits an object (keys the
+    model does not declare are kept as-is), else an item of the list ``value`` when it
+    admits a list; anything else is a leaf. Returns ``value`` itself when no child changed.
+    """
+    model = _object_model(annotation)
+    if model is not None:
+        if not isinstance(value, dict):
+            return value
+        fields = model.model_fields
+        return _same_or_new(
+            value, {k: fn(v, fields[k].annotation) if k in fields else v for k, v in value.items()}
+        )
+    item_type = _list_item_type(annotation)
+    if item_type is not None and isinstance(value, list):
+        return _same_or_new(value, [fn(v, item_type) for v in value])
+    return value
+
+
 def _unwrap_single_item_lists(value: Any, annotation: Any) -> Any:
     """Replace a one-item list with its item wherever the schema expects an object.
 
@@ -215,51 +260,31 @@ def _unwrap_single_item_lists(value: Any, annotation: Any) -> Any:
     is never touched, and a list of two or more items is left for validation to reject -
     picking one would be inventing.
 
-    Returns ``value`` itself (identity-comparable) when nothing changed.
+    Returns ``value`` itself (identity-comparable) when nothing changed. Unlike the other
+    repairs it reads only the annotation's own members, never through an ``Annotated``
+    member of a Union.
     """
-    origin = get_origin(annotation)
-    if origin is Annotated:
-        return _unwrap_single_item_lists(value, get_args(annotation)[0])
-    if origin is Union or origin is types.UnionType:
-        members = [arg for arg in get_args(annotation) if arg is not type(None)]
-        listy = next((m for m in members if _is_list_type(m)), None)
-        if isinstance(value, list) and listy is not None:
-            return _unwrap_single_item_lists(value, listy)
-        # ponytail: first model member only; a union of two models is never unwrapped into
-        # the second. Resolve by trying each member if a real schema ever needs it.
-        model = next(
-            (m for m in members if isinstance(m, type) and issubclass(m, pydantic.BaseModel)),
-            None,
-        )
-        return value if model is None else _unwrap_single_item_lists(value, model)
-    if isinstance(annotation, type) and issubclass(annotation, pydantic.BaseModel):
-        wrapped = isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict)
-        item = value[0] if wrapped else value
-        if not isinstance(item, dict):
-            return value
-        fields = annotation.model_fields
-        repaired = {
-            k: _unwrap_single_item_lists(v, fields[k].annotation) if k in fields else v
-            for k, v in item.items()
-        }
-        changed = wrapped or any(repaired[k] is not item[k] for k in item)
-        return repaired if changed else value
-    if _is_list_type(annotation) and isinstance(value, list) and get_args(annotation):
-        item_type = get_args(annotation)[0]
-        items = [_unwrap_single_item_lists(v, item_type) for v in value]
-        return (
-            items if any(new is not old for new, old in zip(items, value, strict=True)) else value
-        )
-    return value
+    members, _ = _members(annotation)
+    listy = next((m for m in members if _is_list_type(m)), None)
+    if isinstance(value, list) and listy is not None:
+        return _walk(value, listy, _unwrap_single_item_lists)
+    # ponytail: first model member only; a union of two models is never unwrapped into
+    # the second. Resolve by trying each member if a real schema ever needs it.
+    model = next(
+        (m for m in members if isinstance(m, type) and issubclass(m, pydantic.BaseModel)),
+        None,
+    )
+    if model is None:
+        return value
+    if isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict):
+        return _walk(value[0], model, _unwrap_single_item_lists)
+    return _walk(value, model, _unwrap_single_item_lists)
 
 
 def _object_model(annotation: Any) -> type[pydantic.BaseModel] | None:
     """The pydantic model an annotation admits as an object (through Optional/Annotated)."""
-    origin = get_origin(annotation)
-    if origin is Annotated:
-        return _object_model(get_args(annotation)[0])
-    if origin is Union or origin is types.UnionType:
-        members = [arg for arg in get_args(annotation) if arg is not type(None)]
+    members, _ = _members(annotation)
+    if members[0] is not annotation:  # not a leaf: search the members, depth-first
         return next((m for m in map(_object_model, members) if m is not None), None)
     if isinstance(annotation, type) and issubclass(annotation, pydantic.BaseModel):
         return annotation
@@ -268,11 +293,8 @@ def _object_model(annotation: Any) -> type[pydantic.BaseModel] | None:
 
 def _list_item_type(annotation: Any) -> Any:
     """The item type of a list annotation (through Optional/Annotated), else None."""
-    origin = get_origin(annotation)
-    if origin is Annotated:
-        return _list_item_type(get_args(annotation)[0])
-    if origin is Union or origin is types.UnionType:
-        members = [arg for arg in get_args(annotation) if arg is not type(None)]
+    members, _ = _members(annotation)
+    if members[0] is not annotation:  # not a leaf: search the members, depth-first
         return next((t for t in map(_list_item_type, members) if t is not None), None)
     if _is_list_type(annotation) and get_args(annotation):
         return get_args(annotation)[0]
@@ -323,31 +345,13 @@ def _renest_hoisted_fields(value: Any, annotation: Any) -> Any:
     Returns ``value`` itself (identity-comparable) when nothing changed.
     """
     model = _object_model(annotation)
-    if model is not None:
-        if not isinstance(value, dict):
-            return value
-        fields = model.model_fields
-        moved = _move_strays(value, {k: f.annotation for k, f in fields.items()})
-        item = {
-            k: _renest_hoisted_fields(v, fields[k].annotation) if k in fields else v
-            for k, v in moved.items()
-        }
-        changed = moved is not value or any(item[k] is not moved[k] for k in moved)
-        return item if changed else value
-    item_type = _list_item_type(annotation)
-    if item_type is not None and isinstance(value, list):
-        items = [_renest_hoisted_fields(v, item_type) for v in value]
-        return (
-            items if any(new is not old for new, old in zip(items, value, strict=True)) else value
-        )
-    return value
+    if model is not None and isinstance(value, dict):
+        value = _move_strays(value, {k: f.annotation for k, f in model.model_fields.items()})
+    return _walk(value, annotation, _renest_hoisted_fields)
 
 
 def _admits_none(annotation: Any) -> bool:
-    origin = get_origin(annotation)
-    if origin is Annotated:
-        return _admits_none(get_args(annotation)[0])
-    return (origin is Union or origin is types.UnionType) and type(None) in get_args(annotation)
+    return _members(annotation)[1]
 
 
 def _null_empty_objects(value: Any, annotation: Any) -> Any:
@@ -361,33 +365,22 @@ def _null_empty_objects(value: Any, annotation: Any) -> Any:
 
     Returns ``value`` itself (identity-comparable) when nothing changed.
     """
+    walked = _walk(value, annotation, _null_empty_objects)
     model = _object_model(annotation)
-    if model is not None:
-        if not isinstance(value, dict):
-            return value
-        fields = model.model_fields
-        item = {
-            k: _null_empty_objects(v, fields[k].annotation) if k in fields else v
-            for k, v in value.items()
-        }
-        for k, v in item.items():
-            if (
-                k in fields
-                and isinstance(v, dict)
-                and v
-                and all(x is None for x in v.values())
-                and _object_model(fields[k].annotation) is not None
-                and _admits_none(fields[k].annotation)
-            ):
-                item[k] = None
-        return item if any(item[k] is not value[k] for k in value) else value
-    item_type = _list_item_type(annotation)
-    if item_type is not None and isinstance(value, list):
-        items = [_null_empty_objects(v, item_type) for v in value]
-        return (
-            items if any(new is not old for new, old in zip(items, value, strict=True)) else value
-        )
-    return value
+    if model is None or not isinstance(walked, dict):
+        return walked
+    fields = model.model_fields
+    empty = [
+        k
+        for k, v in walked.items()
+        if k in fields
+        and isinstance(v, dict)
+        and v
+        and all(x is None for x in v.values())
+        and _object_model(fields[k].annotation) is not None
+        and _admits_none(fields[k].annotation)
+    ]
+    return {**walked, **dict.fromkeys(empty)} if empty else walked
 
 
 def _wrap_scalars_in_lists(value: Any, annotation: Any) -> Any:
@@ -402,27 +395,11 @@ def _wrap_scalars_in_lists(value: Any, annotation: Any) -> Any:
 
     Returns ``value`` itself (identity-comparable) when nothing changed.
     """
-    model = _object_model(annotation)
-    if model is not None:
-        if not isinstance(value, dict):
-            return value
-        fields = model.model_fields
-        item = {
-            k: _wrap_scalars_in_lists(v, fields[k].annotation) if k in fields else v
-            for k, v in value.items()
-        }
-        return item if any(item[k] is not value[k] for k in value) else value
-    item_type = _list_item_type(annotation)
-    if item_type is None:
-        return value
-    if isinstance(value, list):
-        items = [_wrap_scalars_in_lists(v, item_type) for v in value]
-        return (
-            items if any(new is not old for new, old in zip(items, value, strict=True)) else value
-        )
-    if isinstance(value, (str, int, float)) and _object_model(item_type) is None:
-        return [value]
-    return value
+    if isinstance(value, (str, int, float)) and _object_model(annotation) is None:
+        item_type = _list_item_type(annotation)
+        if item_type is not None and _object_model(item_type) is None:
+            return [value]
+    return _walk(value, annotation, _wrap_scalars_in_lists)
 
 
 def _strip_nested_markers(value: Any, annotation: Any, markers: list[str]) -> Any:
@@ -726,14 +703,11 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             return self.formatter_config
         return FormatterConfig(max_recursion_depth=self.max_recursion_depth)
 
-    def _comment_prefix(self) -> str:
-        """Return the formatter's comment prefix for the current output mode."""
-        return "#" if self.output_mode == OutputMode.YAML else "//"
-
     def _legend_line(self) -> str:
         """Return the once-per-prompt required-marker legend line for this mode."""
         marker = self._effective_formatter_config().required_marker
-        return f"{self._comment_prefix()} Fields marked with {marker} are required"
+        comment_prefix = "#" if self.output_mode == OutputMode.YAML else "//"
+        return f"{comment_prefix} Fields marked with {marker} are required"
 
     @staticmethod
     def _legend_needed(schema_text: str, legend_line: str, marker: str) -> bool:
@@ -1014,33 +988,15 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         return "{\n" + ",\n".join(entries) + "\n}"
 
     def user_message_output_requirements(self, signature: type[Signature]) -> str:
-        """Specify output format requirements based on mode."""
+        """Upstream JSONAdapter's sentence; YAML mode asks for a YAML-style object instead.
 
-        def type_info(v: Any) -> str:
-            if v.annotation == ToolCalls:
-                return (
-                    ' (must be a JSON object like {"tool_calls": [{"name": "...", "args": {...}}]})'
-                )
-            return (
-                f" (must be formatted as a valid Python {get_annotation_name(v.annotation)})"
-                if v.annotation is not str
-                else ""
-            )
-
-        base_message = "Respond with "
-
+        Only the leading "a JSON object" is swapped, so the ToolCalls hint ("must be a JSON
+        object like ...") survives in every mode.
+        """
+        message: str = super().user_message_output_requirements(signature)
         if self.output_mode == OutputMode.YAML:
-            base_message += "a YAML-style object "
-        else:
-            # Both JSON and JSONish output JSON
-            base_message += "a JSON object "
-
-        base_message += "in the following order of fields: "
-        base_message += ", then ".join(
-            f"`{f}`{type_info(v)}" for f, v in signature.output_fields.items()
-        )
-        base_message += "."
-        return base_message
+            return message.replace("a JSON object", "a YAML-style object", 1)
+        return message
 
     def format_user_message_content(
         self,
@@ -1083,62 +1039,24 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         """
         Format field values according to role.
 
-        - User role: Always uses DSPy's [[ ## field ## ]] format (unchanged)
-        - Assistant role: JSON for JSON/JSONish modes, YAML for YAML mode
+        - User role: upstream JSONAdapter's [[ ## field ## ]] format, unchanged
+        - Assistant role: JSON for JSON/JSONish modes (unlike upstream, without
+          ensure_ascii=False), YAML for YAML mode
         """
         if role == "user":
-            # Input formatting - keep DSPy standard format
-            output = []
-            for field, field_value in fields_with_values.items():
-                formatted_field_value = format_field_value(field_info=field.info, value=field_value)
-                output.append(f"[[ ## {field.name} ## ]]\n{formatted_field_value}")
-            return "\n\n".join(output).strip()
-        else:
-            # Output formatting - based on mode
-            d = {k.name: v for k, v in fields_with_values.items()}
-
-            if self.output_mode in (OutputMode.JSON, OutputMode.JSONISH):
-                # Both JSON and JSONish output JSON format
-                return json.dumps(serialize_for_json(d), indent=2)
-            elif self.output_mode == OutputMode.YAML:
-                return self._format_yaml_output(d)
-            else:
-                # Fallback to JSON
-                return json.dumps(serialize_for_json(d), indent=2)
-
-    def format_assistant_message_content(
-        self,
-        signature: type[Signature],
-        outputs: dict[str, Any],
-        missing_field_message: Any = None,
-    ) -> str:
-        """Format assistant message content based on output mode."""
-        fields_with_values = {
-            FieldInfoWithName(name=k, info=v): outputs.get(k, missing_field_message)
-            for k, v in signature.output_fields.items()
-        }
-        return self.format_field_with_value(fields_with_values, role="assistant")
+            return super().format_field_with_value(fields_with_values, role)  # type: ignore[no-any-return]
+        d = {k.name: v for k, v in fields_with_values.items()}
+        if self.output_mode == OutputMode.YAML:
+            return self._format_yaml_output(d)
+        return json.dumps(serialize_for_json(d), indent=2)
 
     # ==================== Format-Specific Output Methods ====================
 
     def _format_yaml_output(self, data: dict[str, Any]) -> str:
         """Format output as YAML-style."""
         try:
-            import yaml
-
             serialized = serialize_for_json(data)
             return yaml.dump(serialized, default_flow_style=False, allow_unicode=True)  # type: ignore[no-any-return, unused-ignore]
-        except ImportError:
-            logger.warning("PyYAML not installed, falling back to JSON-like YAML")
-            # Fallback to your current implementation
-            serialized = serialize_for_json(data)
-            lines = []
-            for key, value in serialized.items():
-                if isinstance(value, dict | list):
-                    lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
-                else:
-                    lines.append(f"{key}: {value}")
-            return "\n".join(lines)
         except Exception as e:
             logger.warning(f"Failed to format as YAML: {e}")
             return json.dumps(serialize_for_json(data), indent=2)
@@ -1153,38 +1071,13 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         - JSONish mode: Parse JSON (same as JSON, just different schema in prompt)
         - YAML mode: Parse YAML, fallback to JSON
 
-        Delegates extraction to _extract_json / _extract_yaml and field-building to the
-        shared _build_output_fields pipeline; parse/_parse_json/_parse_yaml keep their
-        existing names so nothing that references them by name breaks.
+        Mode-specific extraction via _extract_json / _extract_yaml, then the mode-shared
+        _build_output_fields pipeline.
         """
-        # JSON and JSONish both parse as JSON
-        if self.output_mode in (OutputMode.JSON, OutputMode.JSONISH):
-            return self._parse_json(signature, completion)
-        elif self.output_mode == OutputMode.YAML:
-            return self._parse_yaml(signature, completion)
+        if self.output_mode == OutputMode.YAML:
+            raw = self._extract_yaml(signature, completion)
         else:
-            # Fallback
-            return self._parse_json(signature, completion)
-
-    def _parse_json(self, signature: type[Signature], completion: str) -> dict[str, Any]:
-        """Parse JSON completion (used for both JSON and JSONish modes).
-
-        Thin wrapper: mode-specific extraction via _extract_json, then the mode-shared
-        field pipeline via _build_output_fields.
-        """
-        raw = self._extract_json(signature, completion)
-        return self._build_output_fields(signature, completion, raw)
-
-    def _parse_yaml(self, signature: type[Signature], completion: str) -> dict[str, Any]:
-        """Parse YAML completion (with a narrow JSON-extraction rescue).
-
-        Thin wrapper: mode-specific extraction via _extract_yaml, then the mode-shared
-        field pipeline via _build_output_fields. Unlike the previous implementation, no
-        `except Exception` here ever swallows a completeness-check AdapterParseError
-        raised further down the pipeline -- that defect is what this rewrite removes
-        structurally, not just at this call site.
-        """
-        raw = self._extract_yaml(signature, completion)
+            raw = self._extract_json(signature, completion)
         return self._build_output_fields(signature, completion, raw)
 
     def _extract_json(self, signature: type[Signature], completion: str) -> Any:
@@ -1318,8 +1211,8 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         (_strip_nested_markers), then _unwrap_single_item_lists, _renest_hoisted_fields,
         _null_empty_objects, _wrap_scalars_in_lists and _prune_null_list_items -- plus one
         fallback before the missing-field error: an output field sent without its key is
-        moved under it and the reply parsed once more. Both _parse_json and _parse_yaml
-        funnel through it after their mode-specific extraction.
+        moved under it and the reply parsed once more. parse funnels every mode through
+        it after the mode-specific extraction.
 
         Invariants that any change to this method must preserve:
           - self.parse_config is None => structurally upstream-equivalent. The first

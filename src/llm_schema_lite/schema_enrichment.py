@@ -3,10 +3,7 @@
 from enum import Enum
 from typing import Any, get_args, get_origin
 
-try:
-    from pydantic import BaseModel
-except ImportError:
-    BaseModel = None  # type: ignore[assignment, misc]
+from pydantic import BaseModel
 
 
 def _get_enum_class(annotation: Any) -> type[Enum] | None:
@@ -44,7 +41,7 @@ def _collect_enum_classes_from_model(
         Set of Enum classes reachable from the model's fields.
     """
     enums: set[type[Enum]] = set()
-    if BaseModel is None or not isinstance(model, type) or not issubclass(model, BaseModel):
+    if not isinstance(model, type) or not issubclass(model, BaseModel):
         return enums
     if _seen is None:
         _seen = set()
@@ -147,7 +144,7 @@ def enrich_schema_with_enum_metadata(model: type[Any], schema: dict[str, Any]) -
     Returns:
         The same schema dict (mutated in place); returned for convenience.
     """
-    if BaseModel is None or not isinstance(model, type) or not issubclass(model, BaseModel):
+    if not isinstance(model, type) or not issubclass(model, BaseModel):
         return schema
 
     defs = schema.get("$defs", schema.get("definitions", {}))

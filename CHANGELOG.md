@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **Private parser helpers are no longer re-exported, and `BaseFormatter` loses two
+  uncalled methods.** `_get_json_schema`, `_validate_field` and `_build_result` leave
+  `llm_schema_lite.__all__` and `llm_schema_lite.parsers`; import them from
+  `llm_schema_lite.parsers.schema_parser`. `BaseFormatter.process_schema` and
+  `process_unique_items` are gone (nothing called them), and `process_anyof` is now
+  abstract; the three shipped formatters all implement it, so only a third-party subclass
+  that relied on the base version is affected. The `regex` runtime dependency is dropped:
+  nothing imported it.
 - **Constraint spelling is ASCII everywhere.** TypeScript's scalar length/range fragments
   and JSONish's nested-position (tuple element, scalar `$ref`) fragments drop `≥`/`≤` for
   `>=`/`<=`; JSONish and YAML property-position output is byte-identical to before. Numeric
@@ -271,9 +279,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hard dependency, so the except branch never ran. (`lsl-2026-09-04-013`)
 - The dead, already-commented-out `_warm_cache` method and its orphaned call-site comment
   in `formatters/base.py`. (`lsl-2026-09-04-013`)
+- **About 5,200 lines of dead or duplicated code, with no output change.** Every
+  formatter output over 297 schemas, every DSPy prompt, and 1,350 captured small-model
+  completions replayed through every parse path compare byte-identical before and after
+  (36,223 probes), as do the offline prompt-cost report and a live accuracy rerun.
+  - Legacy JSONSchemaBench feature-coverage tooling (`benchmarking/base.py`,
+    `benchmarking/jsonschemabench/`) and its 54 tests; 89 unused `conftest.py` fixtures,
+    `TestDataFactory`, and the 16 raw schemas only they used.
+  - Uncalled helpers (`_is_problematic_schema`, `build_alias_map`,
+    `BaseParser._extract_content`, the `_parse_json`/`_parse_yaml` adapter wrappers),
+    unreachable YAML-extraction branches, and import guards for required dependencies.
+  - Duplicates folded into one copy: the JSONish and YAML `anyOf`/`oneOf`/`allOf`
+    renderers, three `process_additional_properties`, the two validators' `validate`,
+    `SchemaLite`'s and `JSONishFormatter`'s token counting, the rescue repairs' tree walk,
+    and the benchmark's report writers, markdown tables and adapter registry.
+  - `StructuredOutputAdapter` code that repeated DSPy's `JSONAdapter`:
+    `format_assistant_message_content` is inherited, and `user_message_output_requirements`
+    and the user branch of `format_field_with_value` call `super()`.
+  - Tooling nobody used: the `psutil`, `types-requests`, `coverage`, `gitlint` and
+    `commitlint` dev packages (the last two come from their pre-commit repos),
+    `[dependency-groups]`, `MANIFEST.in`, the unused pytest markers,
+    `make test-parallel`/`test-fast`/`test-slow`, and ruff settings that restated defaults.
 
 ### Fixed
 
+- `SchemaLite.compare_tokens()` for TypeScript and YAML cached its first counts and
+  returned them for every later call, even with a different `original_schema`,
+  `simplified_schema` or `encoding`. Each call now counts afresh.
 - **Output-field envelope: a schema is now bound to the key it must be emitted under.**
   In SECTIONS layout an output schema opened a brace at column 0 on its own line, so a
   small model read it as the response *envelope* and emitted the record bare —

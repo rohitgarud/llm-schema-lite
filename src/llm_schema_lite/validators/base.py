@@ -1,25 +1,23 @@
 """Base validator interface."""
 
-import json
 from abc import ABC, abstractmethod
-from typing import Any, cast
+from typing import Any
 
-try:
-    from pydantic import BaseModel
-except ImportError:
-    BaseModel = None  # type: ignore[assignment, misc]
+import jsonschema
+from jsonschema import Draft202012Validator, FormatChecker
+from pydantic import BaseModel
 
-from ..exceptions import UnsupportedModelError
-from ..schema_enrichment import enrich_schema_with_enum_metadata
+from ..exceptions import UnsupportedModelError, ValidationError
+from ..parsers.schema_parser import _get_json_schema
+from .enum_aliases import normalize_enum_aliases
 
 
 class BaseValidator(ABC):
     """
     Abstract base class for schema validators.
 
-    Subclasses implement parse_data() for input parsing, validate() for
-    format-specific validation, and _format_validation_error() for
-    format-specific error formatting (e.g. jsonschema for JSON/YAML).
+    Subclasses implement parse_data() for format-specific input parsing; validate()
+    and its jsonschema (Draft 2020-12) error formatting are shared.
     """
 
     def __init__(
@@ -38,21 +36,10 @@ class BaseValidator(ABC):
     def _parse_schema(self) -> dict[str, Any]:
         """Convert schema input to JSON schema dict."""
         schema = self._schema_input
-
-        if BaseModel is not None and isinstance(schema, type) and issubclass(schema, BaseModel):
-            json_schema = schema.model_json_schema()
-            enrich_schema_with_enum_metadata(schema, json_schema)
-            return json_schema
-        if isinstance(schema, dict):
-            return schema
-        if isinstance(schema, str):
-            try:
-                return cast(dict[str, Any], json.loads(schema))
-            except json.JSONDecodeError as e:
-                from ..exceptions import ConversionError
-
-                raise ConversionError(f"Invalid JSON schema string: {e}") from e
-
+        if isinstance(schema, dict | str) or (
+            isinstance(schema, type) and issubclass(schema, BaseModel)
+        ):
+            return _get_json_schema(schema)
         raise UnsupportedModelError(
             f"Unsupported schema type: {type(schema)}. Expected Pydantic BaseModel, dict, or str."
         )
@@ -76,24 +63,58 @@ class BaseValidator(ABC):
         """
         pass
 
-    @abstractmethod
     def _format_validation_error(self, error: Any) -> str:
-        """
-        Format a validation error into a human-readable message for LLMs.
+        """Format a jsonschema ValidationError into a human-readable message for LLMs."""
+        path_parts = list(error.absolute_path)
+        if path_parts:
+            path_str = "." + ".".join(str(p) for p in path_parts)
+        else:
+            path_str = " (root)"
+        message = error.message
+        if hasattr(error, "instance"):
+            instance = error.instance
+            if isinstance(instance, dict | list):
+                instance_str = f" (got {type(instance).__name__})"
+            elif instance is None:
+                instance_str = " (got null)"
+            elif isinstance(instance, str):
+                instance_str = (
+                    f" (got '{instance[:47]}...')" if len(instance) > 50 else f" (got '{instance}')"
+                )
+            else:
+                instance_str = f" (got {instance})"
+        else:
+            instance_str = ""
+        schema_info = ""
+        if hasattr(error, "validator") and hasattr(error, "validator_value"):
+            validator = error.validator
+            validator_value = error.validator_value
+            if validator == "required":
+                schema_info = f" - Required properties: {validator_value}"
+            elif validator == "type":
+                schema_info = f" - Expected type: {validator_value}"
+            elif validator in (
+                "minimum",
+                "maximum",
+                "minLength",
+                "maxLength",
+                "minItems",
+                "maxItems",
+            ):
+                schema_info = f" - Constraint: {validator} = {validator_value}"
+            elif validator == "pattern":
+                schema_info = f" - Expected pattern: {validator_value}"
+            elif validator == "enum":
+                schema_info = f" - Allowed values: {validator_value}"
+        return f"Validation error at '{path_str}': {message}{instance_str}{schema_info}"
 
-        Subclasses implement this for their validation backend (e.g. jsonschema
-        for JSON/YAML, or custom formatting for TypeScript, SQL, etc.).
-        """
-        pass
-
-    @abstractmethod
     def validate(
         self,
         data: dict[str, Any] | str | list[Any] | int | float | bool | None,
         return_all_errors: bool = True,
     ) -> tuple[bool, list[str] | None]:
         """
-        Validate data against the schema.
+        Validate data against the schema using jsonschema (Draft 2020-12).
 
         Args:
             data: Data to validate (string or already-parsed structure).
@@ -106,4 +127,21 @@ class BaseValidator(ABC):
         Raises:
             ValidationError: If validation fails or the schema is invalid.
         """
-        pass
+        parsed = self.parse_data(data)
+        json_schema = self._json_schema
+        normalized = normalize_enum_aliases(parsed, json_schema)
+        try:
+            Draft202012Validator.check_schema(json_schema)
+            format_checker = FormatChecker()
+            validator = Draft202012Validator(json_schema, format_checker=format_checker)
+            errors = list(validator.iter_errors(normalized))
+            if not errors:
+                return (True, None)
+            error_messages = [self._format_validation_error(err) for err in errors]
+            if return_all_errors:
+                return (False, error_messages)
+            return (False, [error_messages[0]])
+        except jsonschema.exceptions.SchemaError as e:
+            raise ValidationError("Invalid JSON schema") from e
+        except Exception as e:
+            raise ValidationError(f"Validation failed: {e}") from e

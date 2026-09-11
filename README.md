@@ -324,9 +324,6 @@ make test-cov             # Run tests with coverage report (core only, no DSPy)
 make test-cov-full        # Run tests with full coverage including DSPy
 make test-dspy            # Run only DSPy integration tests
 make test-benchmarking    # Run benchmarking tests
-make test-parallel        # Run tests in parallel (alias for test)
-make test-fast            # Run tests excluding slow ones
-make test-slow            # Run only slow tests
 make bench-dspy           # Run the DSPy adapter benchmark (see benchmarking/dspy_adapters)
 
 # Code Quality
@@ -360,12 +357,6 @@ make test-cov
 
 # Run with full coverage including DSPy
 make test-cov-full
-
-# Run tests in parallel (faster)
-make test-parallel
-
-# Run only fast tests
-make test-fast
 ```
 
 ### Code Quality Tools

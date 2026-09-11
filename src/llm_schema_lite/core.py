@@ -5,7 +5,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel
 
-from .coercion import CoercionMetadata, ParseConfig, coerce_to_schema
+from .coercion import ParseConfig, coerce_to_schema
 from .exceptions import ConversionError, UnsupportedModelError
 from .formatters import FormatterConfig, JSONishFormatter, TypeScriptFormatter, YAMLFormatter
 from .formatters.base import BaseFormatter
@@ -13,6 +13,37 @@ from .parsers import BaseParser, JSONParser, YAMLParser
 from .parsers.schema_parser import parse_with_schema
 from .schema_enrichment import enrich_schema_with_enum_metadata
 from .validators import JSONValidator, YAMLValidator
+
+_FORMATTERS: dict[str, type[BaseFormatter]] = {
+    "jsonish": JSONishFormatter,
+    "typescript": TypeScriptFormatter,
+    "yaml": YAMLFormatter,
+}
+
+
+def _count_tokens(text: str, encoding: str) -> int:
+    """Count `text`'s tokens with tiktoken. Shared with JSONishFormatter.token_count."""
+    import tiktoken
+
+    return len(tiktoken.get_encoding(encoding).encode(text))
+
+
+def _compare_tokens(
+    original_schema: dict[str, Any], simplified_schema: str, encoding: str
+) -> dict[str, Any]:
+    """Token metrics of the JSON-dumped original vs the simplified string.
+
+    Shared with JSONishFormatter.compare_tokens.
+    """
+    original_tokens = _count_tokens(json.dumps(original_schema), encoding)
+    simplified_tokens = _count_tokens(simplified_schema, encoding)
+    reduction_percent = (original_tokens - simplified_tokens) / original_tokens * 100
+    return {
+        "original_tokens": original_tokens,
+        "simplified_tokens": simplified_tokens,
+        "tokens_saved": original_tokens - simplified_tokens,
+        "reduction_percent": round(reduction_percent, 2),
+    }
 
 
 class SchemaLite:
@@ -38,8 +69,6 @@ class SchemaLite:
         self._formatter = formatter
         self._original_schema = original_schema
         self._string_representation: str | None = None
-        self._original_token_count: int | None = None
-        self._simplified_token_count: int | None = None
 
     def to_string(self) -> str:
         """
@@ -64,24 +93,8 @@ class SchemaLite:
 
         Returns:
             Estimated token count.
-
-        Raises:
-            ImportError: If tiktoken is not installed.
         """
-        # Delegate to formatter if it has token_count method
-        if hasattr(self._formatter, "token_count") and callable(self._formatter.token_count):
-            return self._formatter.token_count(encoding)  # type: ignore[no-any-return]
-
-        # Fallback to default implementation
-        try:
-            import tiktoken
-
-            enc = tiktoken.get_encoding(encoding)
-            return len(enc.encode(self.to_string()))
-        except ImportError as e:
-            raise ImportError(
-                "tiktoken is required for token counting. Install it with: pip install tiktoken"
-            ) from e
+        return _count_tokens(self.to_string(), encoding)
 
     def compare_tokens(
         self,
@@ -100,42 +113,11 @@ class SchemaLite:
         Returns:
             Dictionary with original, simplified, and reduction metrics.
         """
-        # Delegate to formatter if it has compare_tokens method
-        if hasattr(self._formatter, "compare_tokens") and callable(self._formatter.compare_tokens):
-            return self._formatter.compare_tokens(  # type: ignore[no-any-return]
-                original_schema or self._original_schema, simplified_schema, encoding
-            )
-
-        # Fallback to default implementation
-        try:
-            import tiktoken
-
-            enc = tiktoken.get_encoding(encoding)
-            schema_to_compare = original_schema or self._original_schema
-
-            original_str = json.dumps(schema_to_compare)
-            simplified_str = simplified_schema or self.to_string()
-
-            if self._original_token_count is None:
-                self._original_token_count = len(enc.encode(original_str))
-            if self._simplified_token_count is None:
-                self._simplified_token_count = len(enc.encode(simplified_str))
-            reduction_percent = (
-                (self._original_token_count - self._simplified_token_count)
-                / self._original_token_count
-                * 100
-            )
-
-            return {
-                "original_tokens": self._original_token_count,
-                "simplified_tokens": self._simplified_token_count,
-                "tokens_saved": self._original_token_count - self._simplified_token_count,
-                "reduction_percent": round(reduction_percent, 2),
-            }
-        except ImportError as e:
-            raise ImportError(
-                "tiktoken is required for token comparison. Install it with: pip install tiktoken"
-            ) from e
+        return _compare_tokens(
+            original_schema or self._original_schema,
+            simplified_schema or self.to_string(),
+            encoding,
+        )
 
     def __str__(self) -> str:
         """String representation of the schema."""
@@ -248,32 +230,19 @@ def simplify_schema(
         )
 
     # Select formatter based on format_type
-    formatter: BaseFormatter
+    formatter_cls = _FORMATTERS.get(format_type) if isinstance(format_type, str) else None
+    if formatter_cls is None:
+        raise ValueError(
+            f"Unsupported format_type: {format_type}. "
+            f"Supported formats: 'jsonish', 'typescript', 'yaml'"
+        )
     formatter_kwargs: dict[str, Any] = {"schema": original_schema, "config": config}
     # Handle backward compatibility for include_metadata parameter
     if include_metadata is not None:
         formatter_kwargs["include_metadata"] = include_metadata
 
-    if format_type == "jsonish":
-        formatter = JSONishFormatter(**formatter_kwargs)
-    elif format_type == "typescript":
-        formatter = TypeScriptFormatter(**formatter_kwargs)
-    elif format_type == "yaml":
-        formatter = YAMLFormatter(**formatter_kwargs)
-    else:
-        raise ValueError(
-            f"Unsupported format_type: {format_type}. "
-            f"Supported formats: 'jsonish', 'typescript', 'yaml'"
-        )
-
     # Let the formatter handle all processing logic
-    try:
-        return SchemaLite(
-            formatter=formatter,
-            original_schema=original_schema,
-        )
-    except Exception as e:
-        raise ConversionError(f"Failed to convert schema: {e}") from e
+    return SchemaLite(formatter=formatter_cls(**formatter_kwargs), original_schema=original_schema)
 
 
 def loads(
@@ -418,58 +387,15 @@ def validate(
         >>> validate(User, "name: John\\nage: 30", mode="yaml")
         (True, None)
     """
-    schema_arg = cast(type[Any] | dict[str, Any] | str, schema)
-    if mode == "json":
-        return JSONValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
-    if mode == "yaml":
-        return YAMLValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
-    # mode == "auto": try JSON first when data looks like JSON, else YAML
-    if isinstance(data, str) and data.strip().startswith(("{", "[")):
-        return JSONValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
-    return YAMLValidator(schema_arg).validate(data, return_all_errors=return_all_errors)
+    # mode "json" -> JSON; "yaml" -> YAML; "auto" (or anything else) -> JSON when the
+    # data looks like JSON, else YAML
+    use_json = mode == "json" or (
+        mode != "yaml" and isinstance(data, str) and data.strip().startswith(("{", "["))
+    )
+    validator_cls = JSONValidator if use_json else YAMLValidator
+    return validator_cls(cast(type[Any] | dict[str, Any] | str, schema)).validate(
+        data, return_all_errors=return_all_errors
+    )
 
 
-def coerce(
-    data: dict[str, Any] | str | list[Any] | int | float | bool | None,
-    schema: type[BaseModel] | dict[str, Any] | str,
-    config: ParseConfig | None = None,
-) -> tuple[dict[str, Any], list[CoercionMetadata]]:
-    """
-    Coerce data to match schema types.
-
-    This function converts input data to match the expected types defined in a schema.
-    It handles various type coercions like string to int, string to bool, etc.
-
-    Args:
-        data: Data to coerce (can be dict, list, string, number, boolean, null,
-              JSON string, or YAML string)
-        schema: Pydantic BaseModel class, JSON schema dict, or JSON schema string
-        config: ParseConfig with coercion settings (optional, uses default if None)
-
-    Returns:
-        Tuple of (coerced_data, list of CoercionMetadata)
-
-    Raises:
-        ConversionError: If coercion fails or schema is invalid
-
-    Example:
-        >>> from pydantic import BaseModel
-        >>> from llm_schema_lite import coerce
-        >>>
-        >>> class User(BaseModel):
-        ...     name: str
-        ...     age: int
-        ...
-        >>> # Coerce data with type mismatches
-        >>> coerced, metadata = coerce({"name": "John", "age": "30"}, User)
-        >>> print(coerced)
-        {'name': 'John', 'age': 30}
-        >>> # Coerce from JSON string
-        >>> coerced, metadata = coerce('{"name": "Jane", "age": "25"}', User)
-        >>> print(coerced)
-        {'name': 'Jane', 'age': 25}
-        >>> # With custom config
-        >>> config = ParseConfig(coerce_list_single_item=True)
-        >>> coerced, metadata = coerce({"name": "John"}, User, config)
-    """
-    return coerce_to_schema(data, schema, config)
+coerce = coerce_to_schema  # public alias; documented on coerce_to_schema

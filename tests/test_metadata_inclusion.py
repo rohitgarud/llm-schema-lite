@@ -318,7 +318,7 @@ class TestMetadataInclusionBackwardCompatibility:
         Regression for lsl-2026-09-04-005: before this ticket, the "description" key in
         `metadata_inclusion` was a documented no-op in both JSONish and YAML because
         description text was emitted through a separate, ungated extractor. Both formatters
-        now route through `BaseFormatter._should_include_metadata`, so this is a genuine new
+        now route through `FormatterConfig.includes`, so this is a genuine new
         behaviour guarantee.
         """
         config = FormatterConfig(metadata_inclusion={"description": False})

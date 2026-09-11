@@ -1,4 +1,4 @@
-"""Tests for StructuredOutputAdapter.parse (_parse_json / _parse_yaml), all against QAOptional."""
+"""Tests for StructuredOutputAdapter.parse (JSON and YAML extraction), all against QAOptional."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class TestParseJSON:
         }
 
     def test_json_mode_matches_jsonish_mode(self):
-        """JSON and JSONish modes share _parse_json and return identical dicts."""
+        """JSON and JSONish modes share _extract_json and return identical dicts."""
         adapter = make_adapter(OutputMode.JSON)
         assert adapter.parse(QAOptional, '{"answer":"x","note":"y"}') == {
             "answer": "x",

@@ -4,13 +4,11 @@ import json
 
 import pytest
 
-from llm_schema_lite import (
-    ConversionError,
-    ParseConfig,
+from llm_schema_lite import ConversionError, ParseConfig, loads
+from llm_schema_lite.parsers.schema_parser import (
     _build_result,
     _get_json_schema,
     _validate_field,
-    loads,
 )
 
 

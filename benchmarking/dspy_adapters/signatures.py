@@ -20,9 +20,8 @@ import pydantic
 
 @dataclass(frozen=True)
 class SignatureCell:
-    """One signature row of the matrix: its id, the dspy.Signature class, its input dict."""
+    """One signature row of the matrix: the dspy.Signature class and its input dict."""
 
-    id: str
     signature: type[dspy.Signature]
     inputs: dict[str, Any]
 
@@ -101,63 +100,12 @@ class Recursive(dspy.Signature):
 
 
 SIGNATURES: dict[str, SignatureCell] = {
-    "flat": SignatureCell(
-        id="flat",
-        signature=Flat,
-        inputs={"question": "What colour is the sky?"},
-    ),
-    "nested": SignatureCell(
-        id="nested",
-        signature=Nested,
-        inputs={"text": "Ada Lovelace, 36, 12 Baker St, London"},
-    ),
-    "list_of_model": SignatureCell(
-        id="list_of_model",
-        signature=ListOfModel,
-        inputs={"text": "Ada 36; Alan 41"},
-    ),
-    "enum": SignatureCell(
-        id="enum",
-        signature=EnumSig,
-        inputs={"text": "The sky at noon"},
-    ),
-    "optional": SignatureCell(
-        id="optional",
-        signature=OptionalSig,
-        inputs={"question": "What is 2+2?"},
-    ),
-    "recursive": SignatureCell(
-        id="recursive",
-        signature=Recursive,
-        inputs={"text": "root with two leaves a and b"},
-    ),
+    "flat": SignatureCell(Flat, {"question": "What colour is the sky?"}),
+    "nested": SignatureCell(Nested, {"text": "Ada Lovelace, 36, 12 Baker St, London"}),
+    "list_of_model": SignatureCell(ListOfModel, {"text": "Ada 36; Alan 41"}),
+    "enum": SignatureCell(EnumSig, {"text": "The sky at noon"}),
+    "optional": SignatureCell(OptionalSig, {"question": "What is 2+2?"}),
+    "recursive": SignatureCell(Recursive, {"text": "root with two leaves a and b"}),
 }
 
-SIGNATURE_IDS: tuple[str, ...] = (
-    "flat",
-    "nested",
-    "list_of_model",
-    "enum",
-    "optional",
-    "recursive",
-)
-
-
-def resolve_signature_ids(raw: str | None) -> list[str]:
-    """Parse a comma-separated `--signatures` value against `SIGNATURES`.
-
-    Returns all six ids (in `SIGNATURE_IDS` order) when `raw is None`. Whitespace around
-    each id is stripped. Raises `UnknownCellError` (lazily imported from `.outcomes`)
-    naming the offending id and listing every valid id.
-    """
-    from .outcomes import UnknownCellError
-
-    if raw is None:
-        return list(SIGNATURE_IDS)
-
-    ids = [item.strip() for item in raw.split(",")]
-    for signature_id in ids:
-        if signature_id not in SIGNATURES:
-            valid = ", ".join(SIGNATURE_IDS)
-            raise UnknownCellError(f"Unknown signature id {signature_id!r}. Valid ids are: {valid}")
-    return ids
+SIGNATURE_IDS: tuple[str, ...] = tuple(SIGNATURES)

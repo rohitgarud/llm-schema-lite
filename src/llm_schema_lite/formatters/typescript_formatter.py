@@ -11,11 +11,6 @@ class TypeScriptFormatter(BaseFormatter):
     """
     Transforms Pydantic schema into TypeScript interface format.
 
-    This formatter follows Pattern A: it uses base class schema processing
-    (via process_schema and related methods) and caches processed data in
-    _processed_data within transform_schema for improved performance on
-    subsequent calls.
-
     This formatter creates TypeScript-style interface definitions,
     optionally including metadata as inline comments.
 
@@ -27,23 +22,17 @@ class TypeScriptFormatter(BaseFormatter):
         }
     """
 
-    @property
-    def TYPE_MAP(self) -> dict[str, str]:
-        """Type mapping for TypeScript format."""
-        return {
-            "string": "string",
-            "integer": "number",
-            "number": "number",
-            "boolean": "boolean",
-            "array": "Array",
-            "object": "object",
-            "null": "null",
-        }
-
-    @property
-    def comment_prefix(self) -> str:
-        """Comment prefix for TypeScript format."""
-        return "//"
+    TYPE_MAP = {
+        "string": "string",
+        "integer": "number",
+        "number": "number",
+        "boolean": "boolean",
+        "array": "Array",
+        "object": "object",
+        "null": "null",
+    }
+    comment_prefix = "//"
+    additional_properties_gap = " "
 
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
@@ -78,42 +67,6 @@ class TypeScriptFormatter(BaseFormatter):
         # f"  {name}: {type};" sites), so the continuation indent is a constant --
         # unlike YAML, TypeScript has no depth-varying member indent to derive.
         return "\n".join([rendered, *self.comment_lines(rest, "  ")])
-
-    def process_additional_properties(
-        self, schema: dict[str, Any], show_structure: bool = True
-    ) -> str:
-        """Process additionalProperties constraint for TypeScript."""
-        additional_props = schema.get("additionalProperties")
-        if additional_props is False:
-            return " // no additional properties"
-        elif isinstance(additional_props, dict) and additional_props:
-            if not schema.get("properties"):
-                # Pure mapping (classify_container rule 6/C1): the value type is rendered
-                # structurally by the caller's mapping renderer, never as a comment.
-                return ""
-            if not show_structure:
-                # Structure shown via placeholder key, just indicate it's allowed
-                return " // any properties allowed"
-
-            type_str = self.process_type_value(additional_props)
-            required = additional_props.get("required", [])
-            props = additional_props.get("properties", {})
-            if isinstance(props, dict) and props:
-                prop_details = []
-                for prop_name, prop_def in props.items():
-                    if isinstance(prop_def, dict):
-                        prop_type = self.process_type_value(prop_def)
-                    else:
-                        prop_type = str(prop_def)
-                    if prop_name in required:
-                        prop_details.append(f"{prop_name}* (required): {prop_type}")
-                    else:
-                        prop_details.append(f"{prop_name}: {prop_type}")
-                return f" // additional: {type_str} with {', '.join(prop_details)}"
-            if required:
-                return f" // additional: {type_str} with required {', '.join(required)}"
-            return f" // additional: {type_str}"
-        return ""
 
     def _is_complex_additional_props(self, schema: dict[str, Any]) -> bool:
         """True when ``schema`` classifies as a MAPPING (see `classify_container`)."""
@@ -157,17 +110,7 @@ class TypeScriptFormatter(BaseFormatter):
                 item_types.append(self.process_type_value(item))
 
         # Limit the number of union types to prevent excessive expansion
-        # Use same tiers as base formatter
-        if self._global_expansion_count > 100:
-            max_items = 2  # Very aggressive for deep recursion
-        elif self._global_expansion_count > 30:
-            max_items = 3  # Aggressive
-        elif self._global_expansion_count > 10:
-            max_items = 4  # Moderate
-        else:
-            max_items = 5  # Conservative start
-
-        if len(item_types) > max_items:
+        if len(item_types) > self._union_cap():
             return f"anyOf: {len(item_types)} options"
         else:
             return self.config.union_separator.join(item_types) if item_types else "string"
@@ -192,9 +135,9 @@ class TypeScriptFormatter(BaseFormatter):
         enum_literals = [format_literal_value(val) for val in enum_list]
         type_str = self.config.union_separator.join(enum_literals)
         descs, alias_map = self._extract_enum_metadata(enum_value)
-        if not self._should_include_metadata("x-enum-descriptions"):
+        if not self.config.includes("x-enum-descriptions"):
             descs = {}
-        if not self._should_include_metadata("x-enum-aliases"):
+        if not self.config.includes("x-enum-aliases"):
             alias_map = {}
         if not descs and not alias_map:
             return type_str
@@ -279,10 +222,8 @@ class TypeScriptFormatter(BaseFormatter):
         # Handle array type (consolidate both "Array" and "array" cases)
         if type_str == "Array" or type_name == "array":
             items = type_value.get("items")
-            if not items:
+            if not items or isinstance(items, bool):
                 array_type = "Array<any>"
-            elif isinstance(items, bool):
-                array_type = "Array<any>" if items else "Array<any>"
             elif isinstance(items, dict):
                 # Handle object items with properties - expand inline
                 if "properties" in items:
@@ -318,8 +259,6 @@ class TypeScriptFormatter(BaseFormatter):
                 array_type += self.format_array_constraints(type_value)
                 if "contains" in type_value:
                     array_type += self.process_contains(type_value)
-                # process_unique_items is no longer called here (it is what commented out
-                # the terminating ';').
 
             return array_type
 
@@ -435,27 +374,7 @@ class TypeScriptFormatter(BaseFormatter):
         # First branch: no properties - handle schema-level-only cases
         if not self.properties:
             # Handle schema-level features even when there are no properties
-            schema_level_features = ""
-
-            if "patternProperties" in self.schema:
-                schema_level_features += self.process_pattern_properties(self.schema)
-
-            if "dependencies" in self.schema:
-                schema_level_features += self.process_dependencies(self.schema)
-
-            if "if" in self.schema or "then" in self.schema or "else" in self.schema:
-                schema_level_features += self.process_conditional(self.schema)
-
-            if "propertyNames" in self.schema:
-                schema_level_features += self.process_property_names(self.schema)
-
-            if "unevaluatedProperties" in self.schema:
-                schema_level_features += self.process_unevaluated_properties(self.schema)
-
-            # Add additionalProperties to schema-level features
-            additional_props = self.process_additional_properties(self.schema)
-            if additional_props:
-                schema_level_features += additional_props
+            schema_level_features = self._schema_level_features()
 
             # Handle schema with type but no properties
             if "type" in self.schema:
@@ -482,56 +401,21 @@ class TypeScriptFormatter(BaseFormatter):
                         return result
                     if not schema_level_features:
                         return "interface Schema {}"
-                type_content = self.process_type_value(self.schema)
-                result = f"type Schema = {type_content};"
-                # Add schema-level features as comments if present
-                if schema_level_features and (
-                    self.include_metadata or self.emits_closed_world_marker(self.schema)
-                ):
-                    result = (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
-                    )
-                return result
+                body = f"type Schema = {self.process_type_value(self.schema)};"
             elif "oneOf" in self.schema:
-                oneof_content = self.process_oneof(self.schema)
-                result = f"type Schema = {oneof_content};"
-                if schema_level_features and (
-                    self.include_metadata or self.emits_closed_world_marker(self.schema)
-                ):
-                    result = (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
-                    )
-                return result
+                body = f"type Schema = {self.process_oneof(self.schema)};"
             elif "anyOf" in self.schema:
-                anyof_content = self.process_anyof(self.schema)
-                result = f"type Schema = {anyof_content};"
-                if schema_level_features and (
-                    self.include_metadata or self.emits_closed_world_marker(self.schema)
-                ):
-                    result = (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
-                    )
-                return result
+                body = f"type Schema = {self.process_anyof(self.schema)};"
             elif "allOf" in self.schema:
-                allof_content = self.process_allof(self.schema)
-                result = f"type Schema = {allof_content};"
-                if schema_level_features and (
-                    self.include_metadata or self.emits_closed_world_marker(self.schema)
-                ):
-                    result = (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n{result}"
-                    )
-                return result
+                body = f"type Schema = {self.process_allof(self.schema)};"
             else:
-                # Return schema-level features as comments if present
-                if schema_level_features and (
-                    self.include_metadata or self.emits_closed_world_marker(self.schema)
-                ):
-                    return (
-                        f"// Schema-level constraints: {schema_level_features.strip()}\n"
-                        "interface Schema {}"
-                    )
-                return "interface Schema {}"
+                body = "interface Schema {}"
+            # Add schema-level features as comments if present
+            if schema_level_features and (
+                self.include_metadata or self.emits_closed_world_marker(self.schema)
+            ):
+                return f"// Schema-level constraints: {schema_level_features.strip()}\n{body}"
+            return body
 
         # Process main interface
         main_output = StringIO()
@@ -575,8 +459,5 @@ class TypeScriptFormatter(BaseFormatter):
             )
             if additional_props_comment:
                 main_output.write(f"\n{additional_props_comment}")
-
-        # Written for introspection only; there is exactly one render path.
-        self._processed_data = processed_properties
 
         return main_output.getvalue()

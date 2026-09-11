@@ -29,11 +29,6 @@ from .formatters import (
     YAMLFormatter,
 )
 from .parsers import SchemaParser
-from .parsers.schema_parser import (
-    _build_result,
-    _get_json_schema,
-    _validate_field,
-)
 from .validators import BaseValidator, JSONValidator, YAMLValidator
 
 __all__ = [
@@ -67,8 +62,4 @@ __all__ = [
     "ConversionError",
     "ValidationError",
     "StreamingNotSupportedError",
-    # Helper functions (for testing)
-    "_get_json_schema",
-    "_validate_field",
-    "_build_result",
 ]

@@ -20,7 +20,10 @@ comparison that does not exist.
 from __future__ import annotations
 
 import enum
+from collections import Counter
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import pydantic
 from dspy.utils.exceptions import AdapterParseError, LMError
@@ -126,6 +129,23 @@ class ReproRow:
     note: str  # "" for offline rows; the live probe's finding text
 
 
+_OUTCOME_COUNT_KEYS: dict[Outcome, str] = {
+    Outcome.OK: "ok",
+    Outcome.PARSE_ERROR: "parse",
+    Outcome.VALIDATION_ERROR: "validation",
+    Outcome.EMPTY_RESPONSE: "empty",
+    Outcome.TRANSPORT_ERROR: "transport",
+    Outcome.FORMAT_ERROR: "format",
+    Outcome.OTHER_ERROR: "other",
+}
+
+
+def outcome_counts(rows: Iterable[Any]) -> dict[str, int]:
+    """Per-`Outcome` row counts under the short aggregate-record keys, zeros included."""
+    counts = Counter(row.outcome for row in rows)
+    return {key: counts[outcome] for outcome, key in _OUTCOME_COUNT_KEYS.items()}
+
+
 def attempted_rows(rows: list[TrialRow]) -> list[TrialRow]:
     """Rows whose cell actually received a response to parse.
 
@@ -175,5 +195,20 @@ class UnknownCellError(ValueError):
     Carries the pre-rendered stderr message; cli.main turns it into exit code 2.
     """
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
+
+def resolve_ids(
+    raw: str | None, registry: Mapping[str, object], default: Iterable[str], error: str
+) -> list[str]:
+    """Parse a comma-separated `--adapters`/`--signatures` value against `registry`.
+
+    Returns `list(default)` when `raw` is `None`. Each id is stripped of surrounding
+    whitespace. Raises `UnknownCellError` with `error.format(<offending id>, <every valid
+    id, comma-joined>)` when an id is not a key of `registry`.
+    """
+    if raw is None:
+        return list(default)
+    ids = [item.strip() for item in raw.split(",")]
+    for cell_id in ids:
+        if cell_id not in registry:
+            raise UnknownCellError(error.format(cell_id, ", ".join(registry)))
+    return ids

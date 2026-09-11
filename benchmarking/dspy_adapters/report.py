@@ -36,12 +36,21 @@ import csv
 import datetime as dt
 import statistics
 import subprocess
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Sequence
+from dataclasses import astuple, dataclass, field, fields
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from .accuracy import AccuracyRow, aggregate_accuracy, worst_fields
-from .outcomes import Outcome, PromptRow, TrialRow, parse_success_rate, validation_success_rate
+from .outcomes import (
+    Outcome,
+    PromptRow,
+    TrialRow,
+    outcome_counts,
+    parse_success_rate,
+    validation_success_rate,
+)
 from .provenance import redact_lm_kwargs, redact_url_userinfo
 
 
@@ -122,33 +131,11 @@ def _package_version(name: str) -> str:
         return "unknown"
 
 
-PROMPT_COST_CSV_HEADER: tuple[str, ...] = (
-    "adapter",
-    "adapter_config",
-    "signature",
-    "n_messages",
-    "prompt_chars",
-    "prompt_tokens",
-    "outcome",
-    "error_class",
-)
+# One CSV column per row-dataclass field, in declaration order.
+PROMPT_COST_CSV_HEADER: tuple[str, ...] = tuple(f.name for f in fields(PromptRow))
+LIVE_CSV_HEADER: tuple[str, ...] = tuple(f.name for f in fields(TrialRow))
 
-LIVE_CSV_HEADER: tuple[str, ...] = (
-    "adapter",
-    "adapter_config",
-    "signature",
-    "trial",
-    "outcome",
-    "error_class",
-    "wall_s",
-    "lm_calls",
-    "fallback_suspected",
-    "response_format_sent",
-    "total_tokens",
-    "prompt_tokens_reported",
-    "completion_tokens_reported",
-)
-
+# Not AccuracyRow's fields: adds the `ratio`/`exact` properties, in its own column order.
 ACCURACY_CSV_HEADER: tuple[str, ...] = (
     "adapter",
     "adapter_config",
@@ -252,10 +239,8 @@ _PIVOT_SIGNATURE_ORDER: tuple[str, ...] = tuple(
     part.strip() for part in OFFLINE_PIVOT_COLUMNS.strip("|").split("|")
 )[1:]
 
-# Derived from the header string itself so the two can never drift apart -- the same rule
-# `_PIVOT_SIGNATURE_ORDER` (above) already applies to the offline pivot. This ticket is the
-# drift event that guard was invented for.
-_LIVE_AGGREGATE_COLUMN_COUNT: int = len(LIVE_AGGREGATE_COLUMNS.strip("|").split("|"))
+# The per-outcome count columns of both aggregate tables, in column order.
+_COUNT_COLUMNS: tuple[str, ...] = ("ok", "parse", "validation", "empty", "transport", "format")
 
 
 def slugify_model(model: str) -> str:
@@ -280,17 +265,48 @@ def resolve_output_path(out_dir: Path, stem: str, suffix: str) -> Path:
         n += 1
 
 
-def _csv_row(values: list[Any]) -> list[Any]:
-    """Render `None` as an empty CSV cell; every other value passes through untouched."""
-    return ["" if value is None else value for value in values]
+def _dash(value: Any, spec: str = "") -> str:
+    """`value` formatted with `spec`, or the em dash every table uses for an undefined value."""
+    return "—" if value is None else format(value, spec)
 
 
-def _write_csv_file(path: Path, header: tuple[str, ...], rows: list[list[Any]]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as handle:
+def _md_table(header: str, rows: Iterable[Sequence[str]]) -> list[str]:
+    """A markdown table: `header`, a `---` separator exactly as wide, then one line per row."""
+    sep = "|" + "|".join(["---"] * (header.count("|") - 1)) + "|"
+    return [header, sep, *("| " + " | ".join(cells) + " |" for cells in rows)]
+
+
+def _csv_cell(value: Any) -> Any:
+    """`None` -> an empty CSV cell, an `Enum` -> its value; everything else passes through."""
+    if value is None:
+        return ""
+    return value.value if isinstance(value, Enum) else value
+
+
+def _write_report(
+    out_dir: Path,
+    stem: str,
+    today: dt.date | None,
+    header: tuple[str, ...],
+    csv_rows: Iterable[Iterable[Any]],
+    markdown: str,
+) -> tuple[Path, Path]:
+    """Write `<stem>-<YYYY-MM-DD>.{md,csv}` into `out_dir` (created if absent), never clobbering.
+
+    `today=None` uses `dt.date.today()`. Returns `(md_path, csv_path)`.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{stem}-{(today or dt.date.today()).isoformat()}"
+    md_path = resolve_output_path(out_dir, stem, ".md")
+    csv_path = resolve_output_path(out_dir, stem, ".csv")
+    cells = [[_csv_cell(value) for value in row] for row in csv_rows]
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(header)
-        for row in rows:
-            writer.writerow(row)
+        writer.writerows(cells)
+    md_path.write_text(markdown, encoding="utf-8")
+    return md_path, csv_path
 
 
 def _render_provenance_block(meta: RunMeta) -> list[str]:
@@ -328,49 +344,37 @@ def _metric_integrity_section(extra: str | None) -> list[str]:
 
 
 def _render_offline_pivot(rows: list[PromptRow]) -> list[str]:
-    by_adapter: dict[str, dict[str, PromptRow]] = {}
-    order: list[str] = []
+    # Only an `ok` cell has a token count to show; anything else is the em dash.
+    ok_tokens: dict[str, dict[str, int | None]] = {}
     for row in rows:
-        if row.adapter not in by_adapter:
-            by_adapter[row.adapter] = {}
-            order.append(row.adapter)
-        by_adapter[row.adapter][row.signature] = row
-    sep = "|" + "|".join(["---"] * (len(_PIVOT_SIGNATURE_ORDER) + 1)) + "|"
-    lines = [OFFLINE_PIVOT_COLUMNS, sep]
-    for adapter in order:
-        cells = [adapter]
-        for sig in _PIVOT_SIGNATURE_ORDER:
-            cell_row = by_adapter[adapter].get(sig)
-            if (
-                cell_row is None
-                or cell_row.outcome is not Outcome.OK
-                or cell_row.prompt_tokens is None
-            ):
-                cells.append("—")
-            else:
-                cells.append(str(cell_row.prompt_tokens))
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
+        ok_tokens.setdefault(row.adapter, {})[row.signature] = (
+            row.prompt_tokens if row.outcome is Outcome.OK else None
+        )
+    return _md_table(
+        OFFLINE_PIVOT_COLUMNS,
+        (
+            [adapter, *(_dash(cells.get(sig)) for sig in _PIVOT_SIGNATURE_ORDER)]
+            for adapter, cells in ok_tokens.items()
+        ),
+    )
 
 
 def _render_offline_detail(rows: list[PromptRow]) -> list[str]:
-    sep = "|" + "|".join(["---"] * 7) + "|"
-    lines = [OFFLINE_DETAIL_COLUMNS, sep]
-    for row in rows:
-        messages = "—" if row.n_messages is None else str(row.n_messages)
-        chars = "—" if row.prompt_chars is None else str(row.prompt_chars)
-        tokens = "—" if row.prompt_tokens is None else str(row.prompt_tokens)
-        cells = [
-            row.adapter,
-            row.adapter_config,
-            row.signature,
-            messages,
-            chars,
-            tokens,
-            row.outcome.value,
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
+    return _md_table(
+        OFFLINE_DETAIL_COLUMNS,
+        (
+            [
+                row.adapter,
+                row.adapter_config,
+                row.signature,
+                _dash(row.n_messages),
+                _dash(row.prompt_chars),
+                _dash(row.prompt_tokens),
+                row.outcome.value,
+            ]
+            for row in rows
+        ),
+    )
 
 
 def aggregate_live(rows: list[TrialRow]) -> list[dict[str, Any]]:
@@ -385,36 +389,21 @@ def aggregate_live(rows: list[TrialRow]) -> list[dict[str, Any]]:
     than raising.
     """
     groups: dict[tuple[str, str], list[TrialRow]] = {}
-    order: list[tuple[str, str]] = []
     for row in rows:
-        key = (row.adapter, row.signature)
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(row)
+        groups.setdefault((row.adapter, row.signature), []).append(row)
 
     records: list[dict[str, Any]] = []
-    for key in order:
-        group_rows = groups[key]
-        counts = dict.fromkeys(Outcome, 0)
-        for row in group_rows:
-            counts[row.outcome] += 1
+    for (adapter, signature), group_rows in groups.items():
         wall_times = [row.wall_s for row in group_rows]
         token_totals = [row.total_tokens for row in group_rows if row.total_tokens is not None]
         response_formats = {row.response_format_sent for row in group_rows}
         response_format = next(iter(response_formats)) if len(response_formats) == 1 else "mixed"
         records.append(
             {
-                "adapter": key[0],
-                "signature": key[1],
+                "adapter": adapter,
+                "signature": signature,
                 "trials": len(group_rows),
-                "ok": counts[Outcome.OK],
-                "parse": counts[Outcome.PARSE_ERROR],
-                "validation": counts[Outcome.VALIDATION_ERROR],
-                "empty": counts[Outcome.EMPTY_RESPONSE],
-                "transport": counts[Outcome.TRANSPORT_ERROR],
-                "format": counts[Outcome.FORMAT_ERROR],
-                "other": counts[Outcome.OTHER_ERROR],
+                **outcome_counts(group_rows),
                 "parse_success_rate": parse_success_rate(group_rows),  # float | None
                 "validation_success_rate": validation_success_rate(group_rows),  # float | None
                 "median_wall_s": statistics.median(wall_times) if wall_times else 0.0,
@@ -427,77 +416,61 @@ def aggregate_live(rows: list[TrialRow]) -> list[dict[str, Any]]:
 
 
 def _render_live_aggregate(rows: list[TrialRow]) -> list[str]:
-    sep = "|" + "|".join(["---"] * _LIVE_AGGREGATE_COLUMN_COUNT) + "|"
-    lines = [LIVE_AGGREGATE_COLUMNS, sep]
-    for record in aggregate_live(rows):
-        median_tokens = record["median_total_tokens"]
-        median_tokens_cell = "—" if median_tokens is None else str(median_tokens)
-        parse_rate = record["parse_success_rate"]
-        parse_rate_cell = "—" if parse_rate is None else f"{parse_rate:.2f}"
-        validation_rate = record["validation_success_rate"]
-        validation_rate_cell = "—" if validation_rate is None else f"{validation_rate:.2f}"
-        cells = [
-            record["adapter"],
-            record["signature"],
-            str(record["trials"]),
-            str(record["ok"]),
-            str(record["parse"]),
-            str(record["validation"]),
-            str(record["empty"]),
-            str(record["transport"]),
-            str(record["format"]),
-            parse_rate_cell,
-            validation_rate_cell,
-            f"{record['median_wall_s']:.3f}",
-            f"{record['stddev_wall_s']:.3f}",
-            median_tokens_cell,
-            record["response_format"],
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
+    return _md_table(
+        LIVE_AGGREGATE_COLUMNS,
+        (
+            [
+                record["adapter"],
+                record["signature"],
+                str(record["trials"]),
+                *(str(record[key]) for key in _COUNT_COLUMNS),
+                _dash(record["parse_success_rate"], ".2f"),
+                _dash(record["validation_success_rate"], ".2f"),
+                f"{record['median_wall_s']:.3f}",
+                f"{record['stddev_wall_s']:.3f}",
+                _dash(record["median_total_tokens"]),
+                record["response_format"],
+            ]
+            for record in aggregate_live(rows)
+        ),
+    )
 
 
 def _render_live_detail(rows: list[TrialRow]) -> list[str]:
-    sep = "|" + "|".join(["---"] * 8) + "|"
-    lines = [LIVE_DETAIL_COLUMNS, sep]
-    for row in rows:
-        lm_calls_cell = f"{row.lm_calls}†" if row.fallback_suspected else str(row.lm_calls)
-        cells = [
-            row.adapter,
-            row.signature,
-            str(row.trial),
-            row.outcome.value,
-            row.error_class,
-            f"{row.wall_s:.3f}",
-            lm_calls_cell,
-            row.response_format_sent,
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
+    return _md_table(
+        LIVE_DETAIL_COLUMNS,
+        (
+            [
+                row.adapter,
+                row.signature,
+                str(row.trial),
+                row.outcome.value,
+                row.error_class,
+                f"{row.wall_s:.3f}",
+                f"{row.lm_calls}†" if row.fallback_suspected else str(row.lm_calls),
+                row.response_format_sent,
+            ]
+            for row in rows
+        ),
+    )
 
 
 def _render_provider_accounting(rows: list[TrialRow]) -> list[str]:
-    sep = "|" + "|".join(["---"] * 6) + "|"
-    lines = [PROVIDER_ACCOUNTING_COLUMNS, sep]
-    for row in rows:
-        if row.total_tokens is None:
-            continue
-        prompt_reported = (
-            "—" if row.prompt_tokens_reported is None else str(row.prompt_tokens_reported)
-        )
-        completion_reported = (
-            "—" if row.completion_tokens_reported is None else str(row.completion_tokens_reported)
-        )
-        cells = [
-            row.adapter,
-            row.signature,
-            row.response_format_sent,
-            prompt_reported,
-            completion_reported,
-            str(row.total_tokens),
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
+    return _md_table(
+        PROVIDER_ACCOUNTING_COLUMNS,
+        (
+            [
+                row.adapter,
+                row.signature,
+                row.response_format_sent,
+                _dash(row.prompt_tokens_reported),
+                _dash(row.completion_tokens_reported),
+                str(row.total_tokens),
+            ]
+            for row in rows
+            if row.total_tokens is not None
+        ),
+    )
 
 
 def _render_offline_markdown(rows: list[PromptRow], meta: RunMeta) -> str:
@@ -548,35 +521,15 @@ def write_offline_report(
     `out_dir` is created if absent. `meta=None` builds `RunMeta.minimal("prompt-cost")`;
     `today=None` uses `dt.date.today()`.
     """
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if meta is None:
-        meta = RunMeta.minimal("prompt-cost")
-    if today is None:
-        today = dt.date.today()
-
-    stem = f"prompt-cost-{today.isoformat()}"
-    md_path = resolve_output_path(out_dir, stem, ".md")
-    csv_path = resolve_output_path(out_dir, stem, ".csv")
-
-    csv_rows = [
-        _csv_row(
-            [
-                row.adapter,
-                row.adapter_config,
-                row.signature,
-                row.n_messages,
-                row.prompt_chars,
-                row.prompt_tokens,
-                row.outcome.value,
-                row.error_class,
-            ]
-        )
-        for row in rows
-    ]
-    _write_csv_file(csv_path, PROMPT_COST_CSV_HEADER, csv_rows)
-    md_path.write_text(_render_offline_markdown(rows, meta), encoding="utf-8")
-    return md_path, csv_path
+    meta = meta or RunMeta.minimal("prompt-cost")
+    return _write_report(
+        out_dir,
+        "prompt-cost",
+        today,
+        PROMPT_COST_CSV_HEADER,
+        map(astuple, rows),
+        _render_offline_markdown(rows, meta),
+    )
 
 
 def write_live_report(
@@ -591,66 +544,35 @@ def write_live_report(
     `meta.model is None`. `out_dir` is created if absent. `meta=None` builds
     `RunMeta.minimal("live")`; `today=None` uses `dt.date.today()`.
     """
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if meta is None:
-        meta = RunMeta.minimal("live")
-    if today is None:
-        today = dt.date.today()
-
+    meta = meta or RunMeta.minimal("live")
     model_slug = "unknown" if meta.model is None else slugify_model(meta.model)
-    stem = f"live-{model_slug}-{today.isoformat()}"
-    md_path = resolve_output_path(out_dir, stem, ".md")
-    csv_path = resolve_output_path(out_dir, stem, ".csv")
-
-    csv_rows = [
-        _csv_row(
-            [
-                row.adapter,
-                row.adapter_config,
-                row.signature,
-                row.trial,
-                row.outcome.value,
-                row.error_class,
-                row.wall_s,
-                row.lm_calls,
-                row.fallback_suspected,
-                row.response_format_sent,
-                row.total_tokens,
-                row.prompt_tokens_reported,
-                row.completion_tokens_reported,
-            ]
-        )
-        for row in rows
-    ]
-    _write_csv_file(csv_path, LIVE_CSV_HEADER, csv_rows)
-    md_path.write_text(_render_live_markdown(rows, meta), encoding="utf-8")
-    return md_path, csv_path
+    return _write_report(
+        out_dir,
+        f"live-{model_slug}",
+        today,
+        LIVE_CSV_HEADER,
+        map(astuple, rows),
+        _render_live_markdown(rows, meta),
+    )
 
 
 def _render_accuracy_aggregate(rows: list[AccuracyRow]) -> list[str]:
-    sep = "|" + "|".join(["---"] * len(ACCURACY_AGGREGATE_COLUMNS.strip("|").split("|"))) + "|"
-    lines = [ACCURACY_AGGREGATE_COLUMNS, sep]
-    for record in aggregate_accuracy(rows):
-        accuracy = record["field_accuracy"]
-        median_tokens = record["median_total_tokens"]
-        cells = [
-            record["adapter"],
-            str(record["cases"]),
-            "—" if accuracy is None else f"{accuracy:.3f}",
-            f"{record['exact_records']}/{record['cases']} ({record['exact_rate']:.2f})",
-            str(record["ok"]),
-            str(record["parse"]),
-            str(record["validation"]),
-            str(record["empty"]),
-            str(record["transport"]),
-            str(record["format"]),
-            f"{record['median_wall_s']:.3f}",
-            "—" if median_tokens is None else str(median_tokens),
-            record["response_format"],
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
+    return _md_table(
+        ACCURACY_AGGREGATE_COLUMNS,
+        (
+            [
+                record["adapter"],
+                str(record["cases"]),
+                _dash(record["field_accuracy"], ".3f"),
+                f"{record['exact_records']}/{record['cases']} ({record['exact_rate']:.2f})",
+                *(str(record[key]) for key in _COUNT_COLUMNS),
+                f"{record['median_wall_s']:.3f}",
+                _dash(record["median_total_tokens"]),
+                record["response_format"],
+            ]
+            for record in aggregate_accuracy(rows)
+        ),
+    )
 
 
 def _render_accuracy_fields(rows: list[AccuracyRow]) -> list[str]:
@@ -663,13 +585,17 @@ def _render_accuracy_fields(rows: list[AccuracyRow]) -> list[str]:
     by_adapter: dict[str, list[AccuracyRow]] = {}
     for row in rows:
         by_adapter.setdefault(row.adapter, []).append(row)
-    sep = "|---|---|---|"
     for adapter, group in by_adapter.items():
         ranked = worst_fields(group)
         if not ranked:
             continue
-        lines.extend(["", f"**{adapter}**", "", ACCURACY_FIELDS_COLUMNS, sep])
-        lines.extend(f"| `{path}` | {wrong} | {missing} |" for path, wrong, missing in ranked)
+        lines.extend(["", f"**{adapter}**", ""])
+        lines.extend(
+            _md_table(
+                ACCURACY_FIELDS_COLUMNS,
+                ([f"`{path}`", str(wrong), str(missing)] for path, wrong, missing in ranked),
+            )
+        )
     return lines
 
 
@@ -729,42 +655,35 @@ def write_accuracy_report(
     while the outcomes arm scores against the schema, and one file would invite exactly
     the join `outcomes.py` forbids.
     """
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if meta is None:
-        meta = RunMeta.minimal("accuracy")
-    if today is None:
-        today = dt.date.today()
-
+    meta = meta or RunMeta.minimal("accuracy")
     model_slug = "unknown" if meta.model is None else slugify_model(meta.model)
     prefix = "accuracy" if corpus is None else f"accuracy-{corpus}"
-    stem = f"{prefix}-{model_slug}-{today.isoformat()}"
-    md_path = resolve_output_path(out_dir, stem, ".md")
-    csv_path = resolve_output_path(out_dir, stem, ".csv")
-
-    csv_rows = [
-        _csv_row(
-            [
-                row.adapter,
-                row.adapter_config,
-                row.case_id,
-                row.outcome.value,
-                row.error_class,
-                row.wall_s,
-                row.lm_calls,
-                row.response_format_sent,
-                row.matched,
-                row.total,
-                round(row.ratio, 4),
-                row.exact,
-                ";".join(row.wrong),
-                ";".join(row.missing),
-                ";".join(row.spurious),
-                row.total_tokens,
-            ]
-        )
+    csv_rows = (
+        [
+            row.adapter,
+            row.adapter_config,
+            row.case_id,
+            row.outcome,
+            row.error_class,
+            row.wall_s,
+            row.lm_calls,
+            row.response_format_sent,
+            row.matched,
+            row.total,
+            round(row.ratio, 4),
+            row.exact,
+            ";".join(row.wrong),
+            ";".join(row.missing),
+            ";".join(row.spurious),
+            row.total_tokens,
+        ]
         for row in rows
-    ]
-    _write_csv_file(csv_path, ACCURACY_CSV_HEADER, csv_rows)
-    md_path.write_text(_render_accuracy_markdown(rows, meta, corpus, null_floor), encoding="utf-8")
-    return md_path, csv_path
+    )
+    return _write_report(
+        out_dir,
+        f"{prefix}-{model_slug}",
+        today,
+        ACCURACY_CSV_HEADER,
+        csv_rows,
+        _render_accuracy_markdown(rows, meta, corpus, null_floor),
+    )

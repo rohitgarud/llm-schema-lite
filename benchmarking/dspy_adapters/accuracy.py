@@ -33,7 +33,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .outcomes import Outcome
+from .outcomes import Outcome, outcome_counts
 
 __all__ = [
     "FieldScore",
@@ -211,11 +211,9 @@ def aggregate_accuracy(rows: list[AccuracyRow]) -> list[dict[str, Any]]:
 
     records: list[dict[str, Any]] = []
     for adapter, group in groups.items():
-        counts = dict.fromkeys(Outcome, 0)
-        for row in group:
-            counts[row.outcome] += 1
         matched = sum(row.matched for row in group)
         total = sum(row.total for row in group)
+        exact = sum(1 for row in group if row.exact)
         token_totals = [row.total_tokens for row in group if row.total_tokens is not None]
         formats = {row.response_format_sent for row in group}
         records.append(
@@ -223,18 +221,12 @@ def aggregate_accuracy(rows: list[AccuracyRow]) -> list[dict[str, Any]]:
                 "adapter": adapter,
                 "adapter_config": group[0].adapter_config,
                 "cases": len(group),
-                "ok": counts[Outcome.OK],
-                "parse": counts[Outcome.PARSE_ERROR],
-                "validation": counts[Outcome.VALIDATION_ERROR],
-                "empty": counts[Outcome.EMPTY_RESPONSE],
-                "transport": counts[Outcome.TRANSPORT_ERROR],
-                "format": counts[Outcome.FORMAT_ERROR],
-                "other": counts[Outcome.OTHER_ERROR],
+                **outcome_counts(group),
                 "matched": matched,
                 "total": total,
                 "field_accuracy": (matched / total) if total else None,
-                "exact_records": sum(1 for row in group if row.exact),
-                "exact_rate": (sum(1 for row in group if row.exact) / len(group)),
+                "exact_records": exact,
+                "exact_rate": exact / len(group),
                 "median_wall_s": statistics.median([row.wall_s for row in group]),
                 "median_total_tokens": (statistics.median(token_totals) if token_totals else None),
                 "response_format": next(iter(formats)) if len(formats) == 1 else "mixed",

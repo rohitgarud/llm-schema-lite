@@ -1,13 +1,11 @@
 """Type coercion functionality for LLM output handling."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-try:
-    from pydantic import BaseModel
-except ImportError:
-    BaseModel = None  # type: ignore[assignment, misc]
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +62,6 @@ def _is_correct_type(value: Any, target_type: str, enum_values: list[Any] | None
 
 def _coerce_to_int(value: Any) -> tuple[int | Any, CoercionMetadata | None]:
     """Coerce a value to integer."""
-    original = value
     try:
         if isinstance(value, str):
             # Handle "42.0" string by converting through float first
@@ -75,51 +72,48 @@ def _coerce_to_int(value: Any) -> tuple[int | Any, CoercionMetadata | None]:
             coerced = value
         else:
             coerced = int(value)
-        return coerced, CoercionMetadata(original, "integer", coerced, "to_int")
+        return coerced, CoercionMetadata(value, "integer", coerced, "to_int")
     except (ValueError, TypeError):
         return value, None
 
 
 def _coerce_to_float(value: Any) -> tuple[float | Any, CoercionMetadata | None]:
     """Coerce a value to float."""
-    original = value
     try:
         coerced = float(value)
-        return coerced, CoercionMetadata(original, "number", coerced, "to_float")
+        return coerced, CoercionMetadata(value, "number", coerced, "to_float")
     except (ValueError, TypeError):
         return value, None
 
 
 def _coerce_to_bool(value: Any) -> tuple[bool | Any, CoercionMetadata | None]:
     """Coerce a value to boolean."""
-    original = value
     if isinstance(value, bool):
         return value, None  # Already bool
 
     if value is None:
         # None is falsy
-        return False, CoercionMetadata(original, "boolean", False, "none_to_bool")
+        return False, CoercionMetadata(value, "boolean", False, "none_to_bool")
 
     if isinstance(value, str):
         lower = value.lower().strip()
         if lower in BOOL_TRUE_VALUES:
-            return True, CoercionMetadata(original, "boolean", True, "string_to_bool")
+            return True, CoercionMetadata(value, "boolean", True, "string_to_bool")
         elif lower in BOOL_FALSE_VALUES:
-            return False, CoercionMetadata(original, "boolean", False, "string_to_bool")
+            return False, CoercionMetadata(value, "boolean", False, "string_to_bool")
 
     if isinstance(value, int | float):
         # 0, 0.0 -> False; anything else -> True
         coerced = bool(value)
-        return coerced, CoercionMetadata(original, "boolean", coerced, "int_to_bool")
+        return coerced, CoercionMetadata(value, "boolean", coerced, "int_to_bool")
 
     return value, None
 
 
 def _coerce_to_string(value: Any) -> tuple[str, CoercionMetadata]:
     """Coerce a value to string."""
-    original = value
     coerced = str(value)
-    return coerced, CoercionMetadata(original, "string", coerced, "to_string")
+    return coerced, CoercionMetadata(value, "string", coerced, "to_string")
 
 
 def _coerce_single_to_list(
@@ -129,9 +123,16 @@ def _coerce_single_to_list(
     if isinstance(value, list):
         return value, None
 
-    original = value
     coerced = [value]
-    return coerced, CoercionMetadata(original, "array", coerced, "single_to_list")
+    return coerced, CoercionMetadata(value, "array", coerced, "single_to_list")
+
+
+_TYPE_COERCERS: dict[str, Callable[[Any], tuple[Any, CoercionMetadata | None]]] = {
+    "integer": _coerce_to_int,
+    "number": _coerce_to_float,
+    "boolean": _coerce_to_bool,
+    "string": _coerce_to_string,
+}
 
 
 def _coerce_to_enum(value: Any, enum_values: list[Any]) -> tuple[Any, CoercionMetadata | None]:
@@ -188,39 +189,20 @@ def coerce_value(
         # (don't fall through to type coercion when enum is specified)
         return value, None
 
-    # Handle specific coercions based on target type
-    if target_type == "integer":
-        result, metadata = _coerce_to_int(value)
-        if metadata is not None:
-            logger.debug(f"Coerced value {value!r} to int {result!r}")
-        return result, metadata
-    elif target_type == "number":
-        result, metadata = _coerce_to_float(value)
-        if metadata is not None:
-            logger.debug(f"Coerced value {value!r} to float {result!r}")
-        return result, metadata
-    elif target_type == "boolean":
-        result, metadata = _coerce_to_bool(value)
-        if metadata is not None:
-            logger.debug(f"Coerced value {value!r} to bool {result!r}")
-        return result, metadata
-    elif target_type == "string":
-        result, metadata = _coerce_to_string(value)
-        logger.debug(f"Coerced value {value!r} to string {result!r}")
-        return result, metadata
-    elif target_type == "array" and coerce_list_single_item:
-        result, metadata = _coerce_single_to_list(value)
-        if metadata is not None:
-            logger.debug(f"Coerced single value {value!r} to list {result!r}")
-        return result, metadata
+    # Handle specific coercions based on target type (a JSON-schema type list matches none)
+    coercer: Callable[[Any], tuple[Any, CoercionMetadata | None]] | None
+    if target_type == "array" and coerce_list_single_item:
+        coercer = _coerce_single_to_list
+    else:
+        coercer = _TYPE_COERCERS.get(target_type) if isinstance(target_type, str) else None
+    if coercer is None:
+        # No coercion possible
+        return value, None
 
-    # No coercion possible
-    return value, None
-
-
-def _get_type_from_schema(schema: dict[str, Any]) -> str:
-    """Extract type from JSON schema."""
-    return schema.get("type", "string")  # type: ignore[no-any-return]
+    result, metadata = coercer(value)
+    if metadata is not None:
+        logger.debug(f"Coerced value {value!r} to {target_type} {result!r}")
+    return result, metadata
 
 
 def coerce_recursive(
@@ -279,7 +261,7 @@ def coerce_recursive(
         return result_obj, metadata_list
 
     # Scalar value - apply coercion
-    target_type = _get_type_from_schema(schema)
+    target_type = schema.get("type", "string")
     enum_values = schema.get("enum")
 
     coerced, single_metadata = coerce_value(
@@ -301,18 +283,42 @@ def coerce_to_schema(
     config: ParseConfig | None = None,
 ) -> tuple[dict[str, Any], list[CoercionMetadata]]:
     """
-    Coerce data to match schema types.
+    Coerce data to match schema types. Also exported as ``llm_schema_lite.coerce``.
+
+    This function converts input data to match the expected types defined in a schema.
+    It handles various type coercions like string to int, string to bool, etc.
 
     Args:
-        data: The data to coerce (dict or JSON string)
-        schema: Pydantic BaseModel, JSON schema dict, or JSON schema string
-        config: ParseConfig with coercion settings (uses default if None)
+        data: Data to coerce (can be dict, list, string, number, boolean, null,
+              or JSON string)
+        schema: Pydantic BaseModel class, JSON schema dict, or JSON schema string
+        config: ParseConfig with coercion settings (optional, uses default if None)
 
     Returns:
         Tuple of (coerced_data, list of CoercionMetadata)
 
     Raises:
-        ConversionError: If schema is invalid
+        ConversionError: If the schema is invalid
+
+    Example:
+        >>> from pydantic import BaseModel
+        >>> from llm_schema_lite import coerce
+        >>>
+        >>> class User(BaseModel):
+        ...     name: str
+        ...     age: int
+        ...
+        >>> # Coerce data with type mismatches
+        >>> coerced, metadata = coerce({"name": "John", "age": "30"}, User)
+        >>> print(coerced)
+        {'name': 'John', 'age': 30}
+        >>> # Coerce from JSON string
+        >>> coerced, metadata = coerce('{"name": "Jane", "age": "25"}', User)
+        >>> print(coerced)
+        {'name': 'Jane', 'age': 25}
+        >>> # With custom config
+        >>> config = ParseConfig(coerce_list_single_item=True)
+        >>> coerced, metadata = coerce({"name": "John"}, User, config)
     """
     if config is None:
         config = ParseConfig()
@@ -335,10 +341,6 @@ def coerce_to_schema(
         schema_dict = schema
     else:
         # Assume it's a Pydantic model
-        if BaseModel is None:
-            from .exceptions import ConversionError
-
-            raise ConversionError("Pydantic is not installed")
         try:
             schema_dict = schema.model_json_schema()
         except Exception as e:

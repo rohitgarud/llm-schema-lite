@@ -56,41 +56,20 @@ class YAMLFormatter(BaseFormatter):
 
         super().__init__(schema, config, include_metadata)
 
-    @property
-    def TYPE_MAP(self) -> dict[str, str]:
-        """Type mapping for YAML format (aligned with JSONish: string, int, float, bool)."""
-        return {
-            "string": "string",
-            "integer": "int",
-            "number": "float",
-            "boolean": "bool",
-            "array": "list",
-            "object": "dict",
-            "null": "None",
-        }
-
-    def _get_fields_dependencies(self, schema: dict[str, Any], field_name: str) -> str:
-        """Extract dependencies for a field from schema (JSONish wording)."""
-        if "dependencies" in schema and schema["dependencies"]:
-            if field_name in schema["dependencies"]:
-                dependencies = schema["dependencies"][field_name]
-                if isinstance(dependencies, list):
-                    return f"(DEPENDS ON: {', '.join(dependencies)})"
-                return f"(DEPENDS ON: {dependencies})"
-        return ""
-
-    @property
-    def comment_prefix(self) -> str:
-        """Comment prefix for YAML format."""
-        return "#"
-
-    @property
-    def deferred_comment_gap(self) -> str:
-        """Two spaces before a hoisted ``#`` comment.
-
-        Matches ``add_metadata``'s existing ``f"  # {...}"`` suffix convention.
-        """
-        return "  "
+    # Type mapping aligned with JSONish: string, int, float, bool.
+    TYPE_MAP = {
+        "string": "string",
+        "integer": "int",
+        "number": "float",
+        "boolean": "bool",
+        "array": "list",
+        "object": "dict",
+        "null": "None",
+    }
+    comment_prefix = "#"
+    # Two spaces before a hoisted "#" comment, matching add_metadata's "  # ..." suffix.
+    deferred_comment_gap = "  "
+    additional_properties_gap = " "
 
     def _resolve_mapping_value(self, value_schema: dict[str, Any]) -> dict[str, Any]:
         """Resolve a ``$ref`` mapping value schema to its ``$defs`` entry, else return it."""
@@ -201,6 +180,51 @@ class YAMLFormatter(BaseFormatter):
         )
         return self.hoist_deferred_comments(str(result)).rstrip()
 
+    def _union_members(self, members: Any, own_key: str) -> list[str]:
+        """Render the members of an anyOf / oneOf / allOf list, in one dispatch order.
+
+        allOf alone expands a member's ``properties`` (checked first) and drops an empty
+        member, which anyOf/oneOf render as ``any``. A member carrying the parent's own
+        keyword is not recursed into.
+        """
+        nested = [
+            (keyword, process)
+            for keyword, process in (
+                ("anyOf", self.process_anyof),
+                ("oneOf", self.process_oneof),
+                ("allOf", self.process_allof),
+            )
+            if keyword != own_key
+        ]
+        item_types: list[str] = []
+        for item in members:
+            if not isinstance(item, dict):
+                continue
+            if own_key == "allOf" and "properties" in item:
+                # Expand object schemas so allOf merge shows field names (base-formatter
+                # behavior). No re-wrap: ``dict_to_string`` already returns a brace flow
+                # literal, so wrapping it again would double-brace AND re-embed a newline.
+                processed_props = self.process_properties(item["properties"])
+                item_types.append(self.dict_to_string(processed_props, indent=2))
+            elif not item:
+                if own_key != "allOf":
+                    item_types.append("any")
+            elif "enum" in item:
+                item_types.append(self.process_enum(item))
+            elif "const" in item:
+                item_types.append(str(item["const"]))
+            elif "$ref" in item:
+                item_types.append(self.process_ref(item))
+            elif "type" in item:
+                is_null = _is_null_schema(item)
+                item_types.append("null" if is_null else self.process_type_value(item))
+            else:
+                for keyword, process in nested:
+                    if keyword in item:
+                        item_types.append(process(item))
+                        break
+        return item_types
+
     def process_anyof(self, anyof: dict[str, Any]) -> str:
         """
         Process anyOf (union types) with OR keyword (JSONish parity).
@@ -209,31 +233,7 @@ class YAMLFormatter(BaseFormatter):
         anyof_list = anyof.get("anyOf", [])
         if not anyof_list:
             return "string"
-
-        item_types = []
-        for item in anyof_list:
-            if not isinstance(item, dict):
-                continue
-            if not item:
-                item_types.append("any")
-                continue
-            if "enum" in item:
-                item_types.append(self.process_enum(item))
-            elif "const" in item:
-                item_types.append(str(item["const"]))
-            elif "$ref" in item:
-                item_types.append(self.process_ref(item))
-            elif "type" in item:
-                type_name = item.get("type")
-                if type_name == "null" or (isinstance(type_name, list) and "null" in type_name):
-                    item_types.append("null")
-                else:
-                    item_types.append(self.process_type_value(item))
-            elif "oneOf" in item:
-                item_types.append(self.process_oneof(item))
-            elif "allOf" in item:
-                item_types.append(self.process_allof(item))
-
+        item_types = self._union_members(anyof_list, "anyOf")
         return self.config.union_separator.join(item_types) if item_types else "string"
 
     def process_oneof(self, oneof: dict[str, Any]) -> str:
@@ -243,29 +243,7 @@ class YAMLFormatter(BaseFormatter):
         oneof_list = oneof.get("oneOf", [])
         if not oneof_list:
             return "string"
-        item_types = []
-        for item in oneof_list:
-            if not isinstance(item, dict):
-                continue
-            if not item:
-                item_types.append("any")
-                continue
-            if "enum" in item:
-                item_types.append(self.process_enum(item))
-            elif "const" in item:
-                item_types.append(str(item["const"]))
-            elif "$ref" in item:
-                item_types.append(self.process_ref(item))
-            elif "type" in item:
-                type_name = item.get("type")
-                if type_name == "null" or (isinstance(type_name, list) and "null" in type_name):
-                    item_types.append("null")
-                else:
-                    item_types.append(self.process_type_value(item))
-            elif "anyOf" in item:
-                item_types.append(self.process_anyof(item))
-            elif "allOf" in item:
-                item_types.append(self.process_allof(item))
+        item_types = self._union_members(oneof_list, "oneOf")
         if not item_types:
             return "string"
         if len(item_types) > 1:
@@ -280,35 +258,7 @@ class YAMLFormatter(BaseFormatter):
         allof_list = allof.get("allOf", [])
         if not allof_list:
             return "string"
-        item_types = []
-        for item in allof_list:
-            if not isinstance(item, dict):
-                continue
-            if "type" in item and "properties" in item and item.get("type") == "object":
-                # Expand object schemas so allOf merge shows field names (base-formatter behavior)
-                processed_props = self.process_properties(item["properties"])
-                # No re-wrap: ``dict_to_string`` already returns a brace flow literal, so
-                # wrapping it again would double-brace AND re-embed a newline.
-                item_types.append(self.dict_to_string(processed_props, indent=2))
-            elif "properties" in item:
-                processed_props = self.process_properties(item["properties"])
-                item_types.append(self.dict_to_string(processed_props, indent=2))
-            elif "enum" in item:
-                item_types.append(self.process_enum(item))
-            elif "const" in item:
-                item_types.append(str(item["const"]))
-            elif "$ref" in item:
-                item_types.append(self.process_ref(item))
-            elif "type" in item:
-                type_name = item.get("type")
-                if type_name == "null" or (isinstance(type_name, list) and "null" in type_name):
-                    item_types.append("null")
-                else:
-                    item_types.append(self.process_type_value(item))
-            elif "anyOf" in item:
-                item_types.append(self.process_anyof(item))
-            elif "oneOf" in item:
-                item_types.append(self.process_oneof(item))
+        item_types = self._union_members(allof_list, "allOf")
         if not item_types:
             return "string"
         if len(item_types) > 3:
@@ -819,7 +769,7 @@ class YAMLFormatter(BaseFormatter):
         Process $ref and append (default=...) when ref has default (JSONish parity).
         """
         result = super().process_ref(ref)
-        if "default" in ref and result and self._should_include_metadata("default"):
+        if "default" in ref and result and self.config.includes("default"):
             default = ref["default"]
             if isinstance(default, str):
                 result = f"{result} (default='{default}')"
@@ -837,12 +787,12 @@ class YAMLFormatter(BaseFormatter):
             return ""
         comments = []
         schema = self.effective_root_schema()
-        if "title" in schema and schema["title"] and self._should_include_metadata("title"):
+        if "title" in schema and schema["title"] and self.config.includes("title"):
             comments.append(f"Title: {schema['title']}")
         if (
             "description" in schema
             and schema["description"]
-            and self._should_include_metadata("description")
+            and self.config.includes("description")
         ):
             comments.append(f"Description: {schema['description']}")
         if comments:
@@ -855,49 +805,9 @@ class YAMLFormatter(BaseFormatter):
         return ""
 
     def get_required_fields_comment(self) -> str:
-        """Required fields comment with configurable marker."""
-        if not self.include_metadata:
-            return ""
-        if not self.effective_root_schema().get("required", None):
-            return ""
-        marker = self.config.required_marker
-        return f"{self.comment_prefix} Fields marked with {marker} are required\n"
-
-    def process_additional_properties(
-        self, schema: dict[str, Any], show_structure: bool = True
-    ) -> str:
-        """Emit additionalProperties with # prefix for YAML (JSONish semantics)."""
-        additional_props = schema.get("additionalProperties")
-        if additional_props is False:
-            return f" {self.comment_prefix} no additional properties"
-        if isinstance(additional_props, dict) and additional_props:
-            if not schema.get("properties"):
-                # Pure mapping (classify_container rule 6/C1): the value type is rendered
-                # structurally by the caller's mapping renderer, never as a comment.
-                return ""
-            if not show_structure:
-                return f" {self.comment_prefix} any properties allowed"
-            type_str = self.process_type_value(additional_props)
-            required = additional_props.get("required", [])
-            props = additional_props.get("properties", {})
-            if isinstance(props, dict) and props:
-                prop_details = []
-                for prop_name, prop_def in props.items():
-                    if isinstance(prop_def, dict):
-                        prop_type = self.process_type_value(prop_def)
-                    else:
-                        prop_type = str(prop_def)
-                    if prop_name in required:
-                        prop_details.append(f"{prop_name}* (required): {prop_type}")
-                    else:
-                        prop_details.append(f"{prop_name}: {prop_type}")
-                details = ", ".join(prop_details)
-                return f" {self.comment_prefix} additional: {type_str} with {details}"
-            if required:
-                req_str = ", ".join(required)
-                return f" {self.comment_prefix} additional: {type_str} with required {req_str}"
-            return f" {self.comment_prefix} additional: {type_str}"
-        return ""
+        """The base legend plus the trailing newline YAML's assembly expects."""
+        legend = super().get_required_fields_comment()
+        return f"{legend}\n" if legend else ""
 
     def dict_to_string(self, value: Any, indent: int = 1) -> str:
         """
@@ -988,27 +898,8 @@ class YAMLFormatter(BaseFormatter):
                     return self._add_prefix(result)
 
             # Handle schema-level features even when there are no properties
-            schema_level_features = ""
-
-            if "patternProperties" in self.schema:
-                schema_level_features += self.process_pattern_properties(self.schema)
-
-            if "dependencies" in self.schema:
-                schema_level_features += self.process_dependencies(self.schema)
-
-            if "if" in self.schema or "then" in self.schema or "else" in self.schema:
-                schema_level_features += self.process_conditional(self.schema)
-
-            if "propertyNames" in self.schema:
-                schema_level_features += self.process_property_names(self.schema)
-
-            if "unevaluatedProperties" in self.schema:
-                schema_level_features += self.process_unevaluated_properties(self.schema)
-
-            # Add additionalProperties to schema-level features
-            additional_props_feature = self.process_additional_properties(self.schema)
-            if additional_props_feature:
-                schema_level_features += additional_props_feature
+            schema_level_features = self._schema_level_features()
+            header = f"# Schema-level constraints: {schema_level_features.strip()}"
 
             # Handle schema with type but no properties
             if "type" in self.schema:
@@ -1018,43 +909,18 @@ class YAMLFormatter(BaseFormatter):
                     return self._add_prefix("{}")
                 # Add schema-level features as comments (e.g. additionalProperties)
                 if schema_level_features:
-                    return self._add_prefix(
-                        f"# Schema-level constraints: {schema_level_features.strip()}\n"
-                        f"{type_content}"
-                    )
+                    return self._add_prefix(f"{header}\n{type_content}")
                 return self._add_prefix(type_content)
-            elif "oneOf" in self.schema:
-                oneof_content = self.process_oneof(self.schema)
-                if schema_level_features and self.include_metadata:
-                    return self._add_prefix(
-                        f"# Schema-level constraints: {schema_level_features.strip()}\n"
-                        f"{oneof_content}"
-                    )
-                else:
-                    return self._add_prefix(oneof_content)
+            content: str | None = None
+            if "oneOf" in self.schema:
+                content = self.process_oneof(self.schema)
             elif "anyOf" in self.schema:
-                anyof_content = self.process_anyof(self.schema)
-                if schema_level_features and self.include_metadata:
-                    return self._add_prefix(
-                        f"# Schema-level constraints: {schema_level_features.strip()}\n"
-                        f"{anyof_content}"
-                    )
-                else:
-                    return self._add_prefix(anyof_content)
+                content = self.process_anyof(self.schema)
             elif "allOf" in self.schema:
-                allof_content = self.process_allof(self.schema)
-                if schema_level_features and self.include_metadata:
-                    return self._add_prefix(
-                        f"# Schema-level constraints: {schema_level_features.strip()}\n"
-                        f"{allof_content}"
-                    )
-                else:
-                    return self._add_prefix(allof_content)
+                content = self.process_allof(self.schema)
             if schema_level_features and self.include_metadata:
-                constraints_comment = f"# Schema-level constraints: {schema_level_features.strip()}"
-                return self._add_prefix(constraints_comment)
-            else:
-                return self._add_prefix("{}")
+                return self._add_prefix(header if content is None else f"{header}\n{content}")
+            return self._add_prefix("{}" if content is None else content)
 
         # Main flow with properties. No $defs section loop: every def with ``properties``
         # is rendered INLINE, as a real nested block on the property that references it.
@@ -1125,19 +991,4 @@ class YAMLFormatter(BaseFormatter):
         if additional_props_comment:
             main_parts.append(additional_props_comment)
 
-        # Written for introspection only; there is exactly one render path.
-        self._processed_data = processed_properties
-
-        result = "\n".join(main_parts)
-
-        # Add prefix if configured
-        if self.config.prefix:
-            result = self.config.prefix + result
-
-        return result
-
-    def _add_prefix(self, output_string: str) -> str:
-        """Add prefix to output if configured."""
-        if self.config.prefix:
-            return self.config.prefix + output_string
-        return output_string
+        return self._add_prefix("\n".join(main_parts))

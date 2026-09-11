@@ -10,9 +10,11 @@ Two measurement arms live here, and they are never merged (see `outcomes.py`):
   `dspy.Predict` calls against a caller-supplied LM and classifies what happens.
 
 R6 is enforced structurally, not just by discipline: `run_offline_arm` (and everything it
-calls) never constructs a `dspy.LM`, and this module never imports `.config`, `.cli` or
-`.encoding` -- so "the collected test suite constructs no `dspy.LM` and reads no
-environment variable" is a fact about the import graph, not a promise about behaviour.
+calls) never constructs a `dspy.LM`, this module never imports `.config` or `.cli`, and it
+takes nothing from `.encoding` but the `ENCODING_NAME` constant (that module reads the
+environment only inside a function body) -- so "the collected test suite constructs no
+`dspy.LM` and reads no environment variable" is a fact about the import graph, not a
+promise about behaviour.
 The one outbound call this module can still provoke is `tiktoken`'s one-time fetch of the
 `cl100k_base` table on a cold cache; `_get_encoding` treats that fetch as optional and
 returns `None` when it cannot be satisfied, so the arm never fails for want of a network.
@@ -42,7 +44,7 @@ from __future__ import annotations
 import functools
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 import dspy
 import tiktoken
@@ -58,11 +60,10 @@ from .adapters import (
     REPRO_1871_ADAPTERS,
 )
 from .cases import Case
+from .encoding import ENCODING_NAME
 from .fakes import JSON_OBJECT_RESPONSE_FORMAT, Issue1871LM, JsonObjectOnlyLM
 from .outcomes import Outcome, PromptRow, ReproRow, TrialRow, classify
 from .signatures import SIGNATURE_IDS, SIGNATURES
-
-ENCODING_NAME = "cl100k_base"
 
 _REPRO_1871_ANSWER: dict[str, Any] = {"answer": "blue", "confidence": 0.9}
 """Canned Flat-signature answer that satisfies every output mode used in the matrix."""
@@ -155,16 +156,51 @@ class ResponseFormatRecorder(BaseCallback):  # type: ignore[misc]
         return self.formats[-1] if self.formats else "none"
 
 
-def _callbacks_with(recorder: ResponseFormatRecorder) -> list[Any]:
-    """Compose `recorder` onto any settings-level callbacks rather than replacing them.
+class _Observed(NamedTuple):
+    """What one `_observe`d call produced, and what the harness measured around it."""
 
-    `dspy.context(callbacks=[...])` *replaces* the settings-level list -- `context` builds
-    `{**main_thread_config, **original_overrides, **kwargs}` (`settings.py:252`). This
-    harness sets no global callbacks today (`grep -rn "callbacks" benchmarking/` -> zero
-    hits), so composing is inert; it costs one list literal and stops the compose-don't-
-    replace rule drifting across the three call sites.
+    result: Any  # the call's return value; None when it raised
+    exc: BaseException | None
+    outcome: Outcome
+    error_class: str
+    wall_s: float
+    lm_calls: int
+    response_format_sent: str
+    tokens: tuple[int | None, int | None, int | None]  # total, prompt, completion
+
+
+def _observe(lm: BaseLM, call: Callable[[], Any], /, **context: Any) -> _Observed:
+    """Run `call` under `dspy.context(**context)` and classify it. Never raises.
+
+    The one isolation contract every LM-backed cell shares (R9): a fresh
+    `ResponseFormatRecorder` as the context's callback list (this harness sets no global
+    callbacks, so replacing that list loses nothing), `lm_calls` as `lm`'s history-length
+    delta across the call, wall time, `classify(exc, lm_calls)`, and the provider-reported
+    usage of the calls this cell added (`_reported_tokens`).
     """
-    return [*dspy.settings.get("callbacks", []), recorder]
+    recorder = ResponseFormatRecorder()
+    n0 = len(lm.history)
+    t0 = time.perf_counter()
+    result: Any = None
+    exc: BaseException | None = None
+    try:
+        with dspy.context(**context, callbacks=[recorder]):
+            result = call()
+    except BaseException as caught:
+        exc = caught
+    wall_s = time.perf_counter() - t0
+    lm_calls = len(lm.history) - n0
+    outcome, error_class = classify(exc, lm_calls)
+    return _Observed(
+        result,
+        exc,
+        outcome,
+        error_class,
+        wall_s,
+        lm_calls,
+        recorder.last(),
+        _reported_tokens(lm, n0, lm_calls),
+    )
 
 
 def measure_prompt(adapter: Adapter, cell_id: str, sig_id: str) -> PromptRow:
@@ -315,40 +351,25 @@ def run_one_trial(
     reports what was sent; `"none"` means no LM call was attempted.
     """
     sig_cell = SIGNATURES[sig_id]
-    recorder = ResponseFormatRecorder()
-    n0 = len(lm.history)
-    t0 = time.perf_counter()
-    exc: BaseException | None = None
-    try:
-        with dspy.context(
-            lm=lm, adapter=adapter, track_usage=True, callbacks=_callbacks_with(recorder)
-        ):
-            dspy.Predict(sig_cell.signature)(**sig_cell.inputs)
-    except BaseException as caught:
-        exc = caught
-    wall_s = time.perf_counter() - t0
-
-    lm_calls = len(lm.history) - n0
-    outcome, error_class = classify(exc, lm_calls)
-    fallback_suspected = lm_calls >= 2
-
-    response_format_sent = recorder.last()
-
-    total_tokens, prompt_tokens_reported, completion_tokens_reported = _reported_tokens(
-        lm, n0, lm_calls
+    obs = _observe(
+        lm,
+        lambda: dspy.Predict(sig_cell.signature)(**sig_cell.inputs),
+        lm=lm,
+        adapter=adapter,
+        track_usage=True,
     )
-
+    total_tokens, prompt_tokens_reported, completion_tokens_reported = obs.tokens
     return TrialRow(
         adapter=adapter_id,
         adapter_config=adapter_config,
         signature=sig_id,
         trial=trial,
-        outcome=outcome,
-        error_class=error_class,
-        wall_s=wall_s,
-        lm_calls=lm_calls,
-        fallback_suspected=fallback_suspected,
-        response_format_sent=response_format_sent,
+        outcome=obs.outcome,
+        error_class=obs.error_class,
+        wall_s=obs.wall_s,
+        lm_calls=obs.lm_calls,
+        fallback_suspected=obs.lm_calls >= 2,
+        response_format_sent=obs.response_format_sent,
         total_tokens=total_tokens,
         prompt_tokens_reported=prompt_tokens_reported,
         completion_tokens_reported=completion_tokens_reported,
@@ -400,44 +421,32 @@ def run_one_case(
     adapter that answers half the corpus outrank one that answers all of it imperfectly.
     Isolation, callbacks and classification are the same contract as `run_one_trial`.
     """
-    recorder = ResponseFormatRecorder()
-    n0 = len(lm.history)
-    t0 = time.perf_counter()
-    produced: Any = None
-    exc: BaseException | None = None
-    try:
-        with dspy.context(
-            lm=lm, adapter=adapter, track_usage=True, callbacks=_callbacks_with(recorder)
-        ):
-            prediction = dspy.Predict(case.signature)(**{case.input_field: case.text})
-            produced = getattr(prediction, case.output_field)
-    except BaseException as caught:
-        exc = caught
-    wall_s = time.perf_counter() - t0
 
-    lm_calls = len(lm.history) - n0
-    outcome, error_class = classify(exc, lm_calls)
-    expected = case.expected
+    def extract() -> Any:
+        prediction = dspy.Predict(case.signature)(**{case.input_field: case.text})
+        return getattr(prediction, case.output_field)
+
+    obs = _observe(lm, extract, lm=lm, adapter=adapter, track_usage=True)
+    expected, produced = case.expected, obs.result
     if case.align is not None:
         expected, produced = case.align(expected, produced)
     field_score = score(expected, produced)
-    total_tokens, _, _ = _reported_tokens(lm, n0, lm_calls)
 
     return AccuracyRow(
         adapter=adapter_id,
         adapter_config=adapter_config,
         case_id=case.case_id,
-        outcome=outcome,
-        error_class=error_class,
-        wall_s=wall_s,
-        lm_calls=lm_calls,
-        response_format_sent=recorder.last(),
+        outcome=obs.outcome,
+        error_class=obs.error_class,
+        wall_s=obs.wall_s,
+        lm_calls=obs.lm_calls,
+        response_format_sent=obs.response_format_sent,
         matched=field_score.matched,
         total=field_score.total,
         wrong=field_score.wrong,
         missing=field_score.missing,
         spurious=field_score.spurious,
-        total_tokens=total_tokens,
+        total_tokens=obs.tokens[0],
     )
 
 
@@ -445,58 +454,33 @@ def run_repro_1871_offline() -> list[ReproRow]:
     """Synthetic, fully offline reproduction of DSPy issue #1871 (ticket AC-4).
 
     Part 1 (`part="capability"`) drives each of `REPRO_1871_ADAPTER_IDS` through an
-    adapter-seeded `JsonObjectOnlyLM` and records only `response_format_sent`
-    (`outcome=Outcome.OK` always -- this fake never raises). Part 2 (`part="error"`) drives
-    the same seven ids through an adapter-seeded `Issue1871LM`, which rejects
-    `response_format={"type": "json_object"}` the way LM Studio does, via `run_one_trial` so
+    adapter-seeded `JsonObjectOnlyLM` for its `response_format_sent` (this fake never
+    raises, so every row is `ok`). Part 2 (`part="error"`) drives the same seven ids through
+    an adapter-seeded `Issue1871LM`, which rejects `response_format={"type": "json_object"}`
+    the way LM Studio does. Both parts go through `run_one_trial`, so
     `outcome`/`error_class`/`lm_calls` come from the exact same `classify()` contract as the
-    live arm. 14 rows, in the id order of `REPRO_1871_ADAPTER_IDS`. No env, no network, no
-    `dspy.LM`.
+    live arm. 14 rows, part 1 then part 2, each in the id order of
+    `REPRO_1871_ADAPTER_IDS`. No env, no network, no `dspy.LM`.
     """
-    flat = SIGNATURES["flat"]
     rows: list[ReproRow] = []
-
-    for adapter_id in REPRO_1871_ADAPTER_IDS:
-        cell = REPRO_1871_ADAPTERS[adapter_id]
-        adapter = cell.factory()
-        lm = JsonObjectOnlyLM([dict(_REPRO_1871_ANSWER)], adapter=adapter)
-        recorder = ResponseFormatRecorder()
-        with dspy.context(
-            lm=lm, adapter=adapter, track_usage=True, callbacks=_callbacks_with(recorder)
-        ):
-            dspy.Predict(flat.signature)(**flat.inputs)
-        response_format_sent = recorder.last()
-        rows.append(
-            ReproRow(
-                part="capability",
-                adapter=adapter_id,
-                adapter_config=cell.config_repr,
-                response_format_sent=response_format_sent,
-                outcome=Outcome.OK,
-                error_class="",
-                lm_calls=len(lm.history),
-                note="",
+    for part, lm_class in (("capability", JsonObjectOnlyLM), ("error", Issue1871LM)):
+        for adapter_id in REPRO_1871_ADAPTER_IDS:
+            cell = REPRO_1871_ADAPTERS[adapter_id]
+            adapter = cell.factory()
+            lm = lm_class([dict(_REPRO_1871_ANSWER)], adapter=adapter)
+            trial_row = run_one_trial(adapter, adapter_id, cell.config_repr, "flat", 1, lm)
+            rows.append(
+                ReproRow(
+                    part=part,
+                    adapter=adapter_id,
+                    adapter_config=cell.config_repr,
+                    response_format_sent=trial_row.response_format_sent,
+                    outcome=trial_row.outcome,
+                    error_class=trial_row.error_class,
+                    lm_calls=trial_row.lm_calls,
+                    note="",
+                )
             )
-        )
-
-    for adapter_id in REPRO_1871_ADAPTER_IDS:
-        cell = REPRO_1871_ADAPTERS[adapter_id]
-        adapter = cell.factory()
-        lm = Issue1871LM([dict(_REPRO_1871_ANSWER)], adapter=adapter)
-        trial_row = run_one_trial(adapter, adapter_id, cell.config_repr, "flat", 1, lm)
-        rows.append(
-            ReproRow(
-                part="error",
-                adapter=adapter_id,
-                adapter_config=cell.config_repr,
-                response_format_sent=trial_row.response_format_sent,
-                outcome=trial_row.outcome,
-                error_class=trial_row.error_class,
-                lm_calls=trial_row.lm_calls,
-                note="",
-            )
-        )
-
     return rows
 
 
@@ -514,56 +498,40 @@ def probe_1871_live(lm: BaseLM) -> ReproRow:
     `response_format_sent` is the format of the last call attempted, so a rejected second
     call reports `json_schema`, not the first call's `json_object`.
     """
-    adapter_config = "probe_1871_live"
-    recorder = ResponseFormatRecorder()
-    lm_calls_start = len(lm.history)
 
-    try:
-        with dspy.context(callbacks=_callbacks_with(recorder)):
-            lm(
-                messages=[{"role": "user", "content": "Reply with a JSON object."}],
-                response_format=JSON_OBJECT_RESPONSE_FORMAT,
-            )
-            lm(
-                messages=[{"role": "user", "content": "Reply with a JSON object."}],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "probe",
-                        "schema": {
-                            "type": "object",
-                            "properties": {"answer": {"type": "string"}},
-                            "required": ["answer"],
-                        },
+    def send_both() -> None:
+        lm(
+            messages=[{"role": "user", "content": "Reply with a JSON object."}],
+            response_format=JSON_OBJECT_RESPONSE_FORMAT,
+        )
+        lm(
+            messages=[{"role": "user", "content": "Reply with a JSON object."}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "probe",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
                     },
                 },
-            )
-    except BaseException as exc:
-        lm_calls = len(lm.history) - lm_calls_start
-        outcome, error_class = classify(exc, lm_calls)
-        note = f"{type(exc).__name__}: {exc}"
-        return ReproRow(
-            part="live_probe",
-            adapter="probe_1871_live",
-            adapter_config=adapter_config,
-            response_format_sent=recorder.last(),
-            outcome=outcome,
-            error_class=error_class,
-            lm_calls=lm_calls,
-            note=note,
+            },
         )
 
-    lm_calls = len(lm.history) - lm_calls_start
+    obs = _observe(lm, send_both)
     note = (
         'not_reproducible: endpoint accepted both {"type":"json_object"} and {"type":"json_schema"}'
+        if obs.exc is None
+        else f"{type(obs.exc).__name__}: {obs.exc}"
     )
     return ReproRow(
         part="live_probe",
         adapter="probe_1871_live",
-        adapter_config=adapter_config,
-        response_format_sent=recorder.last(),
-        outcome=Outcome.OK,
-        error_class="",
-        lm_calls=lm_calls,
+        adapter_config="probe_1871_live",
+        response_format_sent=obs.response_format_sent,
+        outcome=obs.outcome,
+        error_class=obs.error_class,
+        lm_calls=obs.lm_calls,
         note=note,
     )

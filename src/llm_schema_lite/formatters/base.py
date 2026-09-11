@@ -180,21 +180,8 @@ class BaseFormatter(ABC):
     """
     Abstract base class for schema formatters.
 
-    All schema formatters must inherit from this class and implement
-    the required methods.
-
-    Usage:
-        There are two common patterns for implementing formatters:
-
-        Pattern A (TypeScript/YAML formatters):
-            Subclasses may call process_schema() and use its return value,
-            then implement transform_schema() to format the processed data.
-            This pattern leverages the shared processing logic in the base class.
-
-        Pattern B (JSONish formatter):
-            Subclasses may ignore process_schema() and implement transform_schema()
-            entirely with their own logic. This pattern is useful when the formatter
-            requires fundamentally different processing approach.
+    All schema formatters must inherit from this class, set ``TYPE_MAP`` and
+    ``comment_prefix``, and implement the abstract methods.
     """
 
     # Common regex pattern for $ref processing
@@ -232,6 +219,18 @@ class BaseFormatter(ABC):
         "additionalItems": lambda v: f"additionalItems: {v}" if isinstance(v, dict) else "",
     }
 
+    # Type mapping dictionary for the formatter.
+    TYPE_MAP: dict[str, str]
+    # Comment prefix for the formatter (e.g. "//" for JSONish/TypeScript, "#" for YAML).
+    comment_prefix: str
+    # Whitespace between a rendered token and its hoisted comment marker. A single space
+    # is also what JSONish's spacing normalization leaves behind; YAML uses two to match
+    # its "  # ..." convention.
+    deferred_comment_gap: str = " "
+    # Whitespace between ``comment_prefix`` and the text of a
+    # ``process_additional_properties`` comment (JSONish: none, "//no additional ...").
+    additional_properties_gap: str = ""
+
     def __init__(
         self,
         schema: dict[str, Any],
@@ -260,16 +259,10 @@ class BaseFormatter(ABC):
         # Backward compatibility: expose include_metadata as instance attribute
         self.include_metadata = self.config.include_metadata
 
-        # Metadata inclusion configuration for fine-grained control
-        self._metadata_inclusion = self.config.metadata_inclusion
-
         self.defs = schema.get("$defs", schema.get("definitions", {}))
         self.properties = schema.get("properties", {})
         self.required_fields = set(schema.get("required", []))
         self._ref_cache: dict[str, str] = {}
-        # Optional cache of processed schema data; may be set by subclasses in
-        # transform_schema() for reuse. TypeScript/YAML check this before re-processing.
-        self._processed_data: dict[str, Any] | None = None
 
         # Unconditional safety net; also tiers anyOf/oneOf member caps.
         self._global_expansion_budget = 150  # Max total $ref expansions across entire schema
@@ -371,155 +364,6 @@ class BaseFormatter(ABC):
         self._global_expansion_count = 0
         self._truncation_epoch = 0
 
-    def process_schema(self) -> dict[str, Any]:
-        """
-        Process the schema and return the appropriate data structure.
-
-        This method handles schema processing logic. It determines the appropriate
-        processing method based on the schema structure.
-
-        Returns:
-            Dictionary containing processed schema data.
-        """
-        # Handle different top-level schema types
-        if "$ref" in self.schema and not self.schema.get("properties"):
-            # Handle $ref at top level
-            ref_result = self.process_ref(self.schema)
-            if ref_result == "object" or not ref_result:
-                # Fallback for failed ref resolution
-                ref_path = self.schema.get("$ref", "")
-                if ref_path:
-                    ref_match = self.REF_PATTERN.search(ref_path)
-                    if ref_match:
-                        ref_key = ref_match.group(1)
-                        ref_def = self.defs.get(ref_key)
-                        if ref_def and isinstance(ref_def, dict):
-                            if "properties" in ref_def:
-                                # Process properties from resolved definition
-                                processed_props = self.process_properties(ref_def["properties"])
-                                return {"schema": self.dict_to_string(processed_props, indent=0)}
-                            elif "enum" in ref_def:
-                                # Handle enum in resolved definition
-                                return {"schema": self.process_enum(ref_def)}
-                            elif "oneOf" in ref_def:
-                                return {"schema": self.process_oneof(ref_def)}
-                            elif "anyOf" in ref_def:
-                                return {"schema": self.process_anyof(ref_def)}
-                            elif "allOf" in ref_def:
-                                return {"schema": self.process_allof(ref_def)}
-                            elif "type" in ref_def:
-                                return {"schema": self.process_type_value(ref_def)}
-                        return {"schema": f"object  {self.comment_prefix}$ref: {ref_path}"}
-                    return {"schema": f"object  {self.comment_prefix}$ref resolution failed"}
-                return {"schema": "object"}
-            else:
-                return {"schema": ref_result}
-        elif "properties" in self.schema and self.schema.get("properties"):
-            # Handle object schemas with properties
-            schema_type = self.schema.get("type")
-            if schema_type in ("array", "string", "number", "integer", "boolean", "null"):
-                # Let type handling take precedence for non-object types
-                return {"schema": self.process_type_value(self.schema)}
-            else:
-                # Check if we have schema-level features that need to be included
-                has_schema_features = any(
-                    key in self.schema
-                    for key in [
-                        "dependencies",
-                        "if",
-                        "then",
-                        "else",
-                        "patternProperties",
-                        "propertyNames",
-                        "unevaluatedProperties",
-                    ]
-                )
-
-                if has_schema_features:
-                    # Use transform_schema() to include schema-level features
-                    return {"schema": self.transform_schema()}
-                else:
-                    # Return processed properties dict for internal use
-                    return self.process_properties(self.schema.get("properties", {}))
-        elif "type" in self.schema:
-            # Handle schemas with type but no properties
-            if self.schema.get("type") == "object":
-                return {"schema": self.transform_schema()}
-            else:
-                return {"schema": self.process_type_value(self.schema)}
-        elif "oneOf" in self.schema:
-            return {"schema": self.process_oneof(self.schema)}
-        elif "anyOf" in self.schema:
-            return {"schema": self.process_anyof(self.schema)}
-        elif "allOf" in self.schema:
-            return {"schema": self.process_allof(self.schema)}
-        else:
-            # Fallback for unknown schema types
-            return {"schema": "object"}
-
-    def _is_problematic_schema(self, schema: dict[str, Any]) -> bool:
-        """Detect schemas that are likely to cause issues."""
-        # Check for very large schemas
-        if len(str(schema)) > 50000:  # Very large schemas
-            return True
-
-        # Check for schemas with many definitions
-        defs = schema.get("$defs", schema.get("definitions", {}))
-        if len(defs) > 100:  # Too many definitions
-            return True
-
-        # Check for schemas with deep nesting
-        def _check_depth(obj: Any, current_depth: int = 0, max_depth: int = 10) -> bool:
-            if current_depth > max_depth:
-                return True
-            if isinstance(obj, dict):
-                for value in obj.values():
-                    if _check_depth(value, current_depth + 1, max_depth):
-                        return True
-            elif isinstance(obj, list):
-                for item in obj:
-                    if _check_depth(item, current_depth + 1, max_depth):
-                        return True
-            return False
-
-        return _check_depth(schema)
-
-    def _resolve_nested_definition_path(self, ref_path: str) -> dict[str, Any] | None:
-        """
-        Priority 2: Resolve nested definition paths like #/definitions/636d/full.
-
-        Args:
-            ref_path: The $ref path (e.g., "#/definitions/636d/full")
-
-        Returns:
-            The resolved definition or None if not found
-        """
-        # Remove the leading #/ if present
-        if ref_path.startswith("#/"):
-            ref_path = ref_path[2:]
-
-        # Split the path into parts
-        parts = ref_path.split("/")
-
-        # Start with the root definitions
-        current = None
-        if parts[0] in ("definitions", "$defs"):
-            current = self.defs
-            parts = parts[1:]  # Skip the definitions/$defs part
-        else:
-            return None
-
-        # Navigate through the path
-        for part in parts:
-            if current is None:
-                return None
-            if isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-
-        return current if isinstance(current, dict) else None
-
     def get_available_metadata(self, value: dict[str, Any]) -> list[str]:
         """
         Get available metadata keys for a property.
@@ -563,7 +407,7 @@ class BaseFormatter(ABC):
 
         # Filter available metadata based on metadata_inclusion config
         filtered_metadata = [
-            k for k in available_metadata if self._should_include_metadata(k) and k not in exclude
+            k for k in available_metadata if self.config.includes(k) and k not in exclude
         ]
 
         formatted_parts = []
@@ -643,24 +487,6 @@ class BaseFormatter(ABC):
             return f"{field_name}{self.config.required_marker}"
         return f"{field_name}{self.config.optional_marker}"
 
-    def _should_include_metadata(self, key: str) -> bool:
-        """
-        Check if a metadata key should be included in output.
-
-        This method respects the metadata_inclusion configuration to provide
-        fine-grained control over which metadata keywords appear in the output.
-        The decision itself lives in :meth:`FormatterConfig.includes`, which applies
-        the three narrowing gates (``include_metadata``, the category flag, then
-        ``metadata_inclusion``); this method is the formatter-side entry point to it.
-
-        Args:
-            key: The metadata key to check (e.g., "pattern", "format", "examples").
-
-        Returns:
-            True if the metadata key should be included, False otherwise.
-        """
-        return self.config.includes(key)
-
     def effective_root_schema(self) -> dict[str, Any]:
         """The schema whose ``title`` / ``description`` / ``required`` describe the ROOT.
 
@@ -718,13 +544,13 @@ class BaseFormatter(ABC):
         comments = []
         schema = self.effective_root_schema()
 
-        if "title" in schema and schema["title"] and self._should_include_metadata("title"):
+        if "title" in schema and schema["title"] and self.config.includes("title"):
             comments.append(f"Title: {schema['title']}")
 
         if (
             "description" in schema
             and schema["description"]
-            and self._should_include_metadata("description")
+            and self.config.includes("description")
         ):
             comments.append(f"Description: {schema['description']}")
 
@@ -732,17 +558,21 @@ class BaseFormatter(ABC):
             return f"{self.comment_prefix} {', '.join(comments)}"
         return ""
 
-    @property
-    @abstractmethod
-    def TYPE_MAP(self) -> dict[str, str]:
-        """Type mapping dictionary for the formatter."""
-        pass
+    def _get_fields_dependencies(self, schema: dict[str, Any], field_name: str) -> str:
+        """Extract dependencies for a field from schema."""
+        if "dependencies" in schema and schema["dependencies"]:
+            if field_name in schema["dependencies"]:
+                dependencies = schema["dependencies"][field_name]
+                if isinstance(dependencies, list):
+                    return f"(DEPENDS ON: {', '.join(dependencies)})"
+                return f"(DEPENDS ON: {dependencies})"
+        return ""
 
-    @property
-    @abstractmethod
-    def comment_prefix(self) -> str:
-        """Comment prefix for the formatter (e.g., '//' for JSONish/TypeScript, '#' for YAML)."""
-        pass
+    def _add_prefix(self, output_string: str) -> str:
+        """Add prefix to output if configured."""
+        if self.config.prefix:
+            return self.config.prefix + output_string
+        return output_string
 
     def _reentry_truncated(self, ref_key: str) -> bool:
         """The one truncation contract: same-key re-entries on the active expansion path.
@@ -794,13 +624,13 @@ class BaseFormatter(ABC):
         self._ref_expansion_path.append(ref_key)
 
         try:
-            # Priority 2: Try to resolve nested definition paths first
+            # A nested definition path like "#/definitions/636d/full" walks self.defs first.
             ref_def = None
             if "/" in ref_key:
-                # This might be a nested path like "636d/full"
-                ref_def = self._resolve_nested_definition_path(f"definitions/{ref_key}")
-                if not ref_def:
-                    ref_def = self._resolve_nested_definition_path(f"$defs/{ref_key}")
+                node: Any = self.defs
+                for part in ref_key.split("/"):
+                    node = node.get(part) if isinstance(node, dict) else None
+                ref_def = node if isinstance(node, dict) else None
 
             # Fallback to simple lookup
             if not ref_def:
@@ -875,17 +705,6 @@ class BaseFormatter(ABC):
         finally:
             if self._ref_expansion_path and self._ref_expansion_path[-1] == ref_key:
                 self._ref_expansion_path.pop()
-
-    @property
-    def deferred_comment_gap(self) -> str:
-        """Whitespace between a rendered token and its hoisted comment marker.
-
-        Returns:
-            A single space -- which is also what JSONish's ``.replace("  ", " ")`` pass
-            leaves behind. ``YAMLFormatter`` overrides this to two spaces to match its
-            existing ``"  # ..."`` convention.
-        """
-        return " "
 
     def defer_comment(self, body: str) -> str:
         """Register ``body`` in the slot table and return the marker token for it.
@@ -1037,14 +856,12 @@ class BaseFormatter(ABC):
         """
         if not isinstance(representation, str):
             return str(representation)
-        bodies: list[str] = []
-        seen: set[str] = set()
-        for match in self._deferred_pattern.finditer(representation):
-            body = self._deferred_bodies[int(match.group(1))]
-            if body in seen:
-                continue
-            seen.add(body)
-            bodies.append(body)
+        bodies = list(
+            dict.fromkeys(
+                self._deferred_bodies[int(match.group(1))]
+                for match in self._deferred_pattern.finditer(representation)
+            )
+        )
         head = self._deferred_pattern.sub("", representation)
         return "\n".join([head, *bodies]) if bodies else head
 
@@ -1079,14 +896,7 @@ class BaseFormatter(ABC):
             return line
 
         # 1-2. Collect every slot body in source order, dropping exact duplicates.
-        bodies: list[str] = []
-        seen: set[str] = set()
-        for match in matches:
-            body = self._deferred_bodies[int(match.group(1))]
-            if body in seen:
-                continue
-            seen.add(body)
-            bodies.append(body)
+        bodies = list(dict.fromkeys(self._deferred_bodies[int(m.group(1))] for m in matches))
 
         # 3-4. Join survivors, then strip every token out of the line.
         frag = "; ".join(bodies)
@@ -1189,9 +999,9 @@ class BaseFormatter(ABC):
             and/or alias list folded in.
         """
         descriptions, aliases = self._extract_enum_metadata(node)
-        if not self._should_include_metadata("x-enum-descriptions"):
+        if not self.config.includes("x-enum-descriptions"):
             descriptions = {}
-        if not self._should_include_metadata("x-enum-aliases"):
+        if not self.config.includes("x-enum-aliases"):
             aliases = {}
         parts: list[str] = []
         for value in values:
@@ -1216,7 +1026,7 @@ class BaseFormatter(ABC):
     ) -> tuple[str, str, str, str]:
         """Extract the title / description / default / example fragments of a schema node.
 
-        Every fragment is gated through :meth:`_should_include_metadata`, so a fragment whose
+        Every fragment is gated through :meth:`FormatterConfig.includes`, so a fragment whose
         keyword has been narrowed away by ``include_metadata``, its category flag, or
         ``metadata_inclusion`` comes back as the empty string. Each returned fragment is
         already rendered with its own leading space and punctuation, ready to be concatenated
@@ -1235,13 +1045,9 @@ class BaseFormatter(ABC):
         description = ""
         default_value = ""
         example = ""
-        if (
-            "title" in value
-            and value["title"] is not None
-            and self._should_include_metadata("title")
-        ):
+        if "title" in value and value["title"] is not None and self.config.includes("title"):
             title = f" {value['title']}:"
-        if self._should_include_metadata("description"):
+        if self.config.includes("description"):
             if "description" in value and value["description"] is not None:
                 description = f" {self.sanitize_comment_text(value['description'])}"
             if "id" in value and value["id"] is not None and value["id"] != "":
@@ -1254,7 +1060,7 @@ class BaseFormatter(ABC):
                 if isinstance(comment, str):
                     comment = f"'{comment}'"
                 description += f" (COMMENT: {comment})"
-        if "default" in value and self._should_include_metadata("default"):
+        if "default" in value and self.config.includes("default"):
             default = value["default"]
             if default is None:
                 default = "null"
@@ -1263,7 +1069,7 @@ class BaseFormatter(ABC):
             elif isinstance(default, bool):
                 default = "true" if default else "false"
             default_value = f" (default={default})"
-        if self._should_include_metadata("examples"):
+        if self.config.includes("examples"):
             if "example" in value and value["example"] is not None:
                 example = f" (EXAMPLE: {value['example']})"
             elif "examples" in value and value["examples"] is not None:
@@ -1425,7 +1231,7 @@ class BaseFormatter(ABC):
 
         # Validation constraints below are already gated by the producers themselves
         # (pattern_token / format_token / length_range_token / numeric_range_token each
-        # call `_should_include_metadata`, which is False whenever `include_metadata` is
+        # call `config.includes`, which is False whenever `include_metadata` is
         # False); this method must not re-gate.
         if type_name == "string":
             pattern_frag = self.pattern_token(type_value)
@@ -1451,11 +1257,8 @@ class BaseFormatter(ABC):
 
             # Safely handle array items (list-only from here on)
             items = type_value.get("items")
-            if not items:
-                type_str = "array"  # Fallback for array without items
-            elif isinstance(items, bool):
-                # Handle boolean items (true means any type, false means no items)
-                type_str = "array" if items else "array"
+            if not items or isinstance(items, bool):
+                type_str = "array"  # No items, or boolean items
             elif isinstance(items, dict) and "type" in items:
                 # For object items, process the full structure
                 if items["type"] == "object" and "properties" in items:
@@ -1484,71 +1287,21 @@ class BaseFormatter(ABC):
 
             if "contains" in type_value:
                 type_str += self.process_contains(type_value)
-            # process_unique_items is no longer called from any array path (orphaned;
-            # kept for API stability per R4).
 
         return type_str  # type: ignore[no-any-return]
 
+    @abstractmethod
     def process_anyof(self, anyof: dict[str, Any]) -> str:
+        """Process an anyOf field (union types); every formatter spells unions its own way."""
+
+    def _union_cap(self) -> int:
+        """Most anyOf members rendered before collapsing to ``"anyOf: N options"``.
+
+        Tightens as the global ``$ref`` expansion count grows, to stop recursive unions
+        exploding; oneOf allows one more member than this.
         """
-        Process an anyOf field (union types).
-
-        Args:
-            anyof: Dictionary containing anyOf definition.
-
-        Returns:
-            Formatted union type representation.
-        """
-        # Safely get anyOf list
-        anyof_list = anyof.get("anyOf", [])
-        if not anyof_list:
-            return "string"  # Fallback for empty anyOf
-
-        item_types = []
-        array_found = False
-        for item in anyof_list:
-            # Skip non-dictionary items (like booleans)
-            if not isinstance(item, dict):
-                continue
-
-            if "enum" in item:
-                item_types.append(self.process_enum(item))
-            elif "const" in item:
-                item_types.append(self.process_const(item))
-            elif "$ref" in item:
-                item_types.append(self.process_ref(item))
-            elif "type" in item:
-                if item["type"] == "array":
-                    array_found = True
-
-                if array_found and item["type"] == "null":
-                    item_types.append("[]")
-                else:
-                    item_types.append(self.process_type_value(item))
-            elif "properties" in item:
-                # Handle object schemas in anyOf
-                processed_props = self.process_properties(item["properties"])
-                items_structure = self.dict_to_string(processed_props, indent=2)
-                item_types.append(f"{{\n{items_structure}\n}}")
-            else:
-                # Unknown anyOf item, skip it
-                continue
-
-        # Limit the number of union types to prevent excessive expansion
-        # Be very aggressive to prevent recursive anyOf explosion
-        if self._global_expansion_count > 100:
-            max_items = 2  # Very aggressive for deep recursion
-        elif self._global_expansion_count > 30:
-            max_items = 3  # Aggressive (lowered threshold from 50)
-        elif self._global_expansion_count > 10:
-            max_items = 4  # Moderate (new tier)
-        else:
-            max_items = 5  # Conservative start (reduced from 6)
-
-        if len(item_types) > max_items:
-            return f"anyOf: {len(item_types)} options"
-        else:
-            return self.config.union_separator.join(item_types) if item_types else "string"
+        count = self._global_expansion_count
+        return 2 if count > 100 else 3 if count > 30 else 4 if count > 10 else 5
 
     def process_oneof(self, oneof: dict[str, Any]) -> str:
         """Process oneOf (exclusive choice) schemas."""
@@ -1584,17 +1337,7 @@ class BaseFormatter(ABC):
                 item_types.append(self.process_const(item))
 
         # Preserve oneOf structure but limit to reasonable number of options
-        # Be very aggressive to prevent recursive oneOf explosion
-        if self._global_expansion_count > 100:
-            max_items = 3  # Very aggressive for deep recursion
-        elif self._global_expansion_count > 30:
-            max_items = 4  # Aggressive (lowered threshold from 50)
-        elif self._global_expansion_count > 10:
-            max_items = 5  # Moderate (new tier)
-        else:
-            max_items = 6  # Conservative start (reduced from 8)
-
-        if len(item_types) > max_items:
+        if len(item_types) > self._union_cap() + 1:
             return f"oneOf: {len(item_types)} options"
         elif item_types:
             return f"oneOf: {self.config.union_separator.join(item_types)}"
@@ -1801,11 +1544,13 @@ class BaseFormatter(ABC):
             show_structure: If False, return simpler comment (structure shown elsewhere)
 
         Returns:
-            Formatted additionalProperties comment.
+            Formatted additionalProperties comment, led by ``" "``, ``comment_prefix`` and
+            ``additional_properties_gap``.
         """
+        lead = f" {self.comment_prefix}{self.additional_properties_gap}"
         additional_props = schema.get("additionalProperties")
         if additional_props is False:
-            return " //no additional properties"
+            return f"{lead}no additional properties"
         elif isinstance(additional_props, dict) and additional_props:
             if not schema.get("properties"):
                 # Pure mapping (classify_container rule 6/C1): the value type is rendered
@@ -1813,7 +1558,7 @@ class BaseFormatter(ABC):
                 return ""
             if not show_structure:
                 # Structure shown via placeholder key, just indicate it's allowed
-                return " //any properties allowed"
+                return f"{lead}any properties allowed"
 
             type_str = self.process_type_value(additional_props)
             required = additional_props.get("required", [])
@@ -1829,11 +1574,27 @@ class BaseFormatter(ABC):
                         prop_details.append(f"{prop_name}* (required): {prop_type}")
                     else:
                         prop_details.append(f"{prop_name}: {prop_type}")
-                return f" //additional: {type_str} with {', '.join(prop_details)}"
+                return f"{lead}additional: {type_str} with {', '.join(prop_details)}"
             if required:
-                return f" //additional: {type_str} with required {', '.join(required)}"
-            return f" //additional: {type_str}"
+                return f"{lead}additional: {type_str} with required {', '.join(required)}"
+            return f"{lead}additional: {type_str}"
         return ""
+
+    def _schema_level_features(self) -> str:
+        """Every schema-level constraint comment of the root, concatenated in fixed order."""
+        schema = self.schema
+        features = ""
+        if "patternProperties" in schema:
+            features += self.process_pattern_properties(schema)
+        if "dependencies" in schema:
+            features += self.process_dependencies(schema)
+        if "if" in schema or "then" in schema or "else" in schema:
+            features += self.process_conditional(schema)
+        if "propertyNames" in schema:
+            features += self.process_property_names(schema)
+        if "unevaluatedProperties" in schema:
+            features += self.process_unevaluated_properties(schema)
+        return features + self.process_additional_properties(schema)
 
     def process_pattern_properties(self, schema: dict[str, Any]) -> str:
         """Process patternProperties constraint."""
@@ -1897,21 +1658,14 @@ class BaseFormatter(ABC):
             return f" //contains: {self._format_contains(contains)}"
         return ""
 
-    def process_unique_items(self, schema: dict[str, Any]) -> str:
-        """Process uniqueItems constraint."""
-        unique = schema.get("uniqueItems")
-        if unique:
-            return " //unique items"
-        return ""
-
     def pattern_token(self, schema: dict[str, Any]) -> str:
         """Already-gated `pattern` fragment for the type-token channel.
 
         Returns ``"PATTERN: <re>"`` or ``""``. Already filtered through
-        `_should_include_metadata`; callers must not re-gate.
+        `config.includes`; callers must not re-gate.
         """
         pattern = schema.get("pattern")
-        if pattern and self._should_include_metadata("pattern"):
+        if pattern and self.config.includes("pattern"):
             return f"PATTERN: {pattern}"
         return ""
 
@@ -1920,23 +1674,23 @@ class BaseFormatter(ABC):
 
         Returns ``"FORMAT: <v>"`` (reading `format` then the underscore-prefixed
         `_format` fallback) or ``""``. Already filtered through
-        `_should_include_metadata`; callers must not re-gate.
+        `config.includes`; callers must not re-gate.
         """
-        if not self._should_include_metadata("format"):
+        if not self.config.includes("format"):
             return ""
         value = schema.get("format") or schema.get("_format")
         return f"FORMAT: {value}" if value else ""
 
     def length_range_token(self, schema: dict[str, Any]) -> str:
         """Already-gated `minLength`/`maxLength` fragment: `"1-5 chars"` / `">= 1 chars"` /
-        `"<= 5 chars"` / `""`. Already filtered through `_should_include_metadata`; callers
+        `"<= 5 chars"` / `""`. Already filtered through `config.includes`; callers
         must not re-gate.
         """
         return self._bounded_range_token(schema, "minLength", "maxLength", unit=" chars")
 
     def numeric_range_token(self, schema: dict[str, Any]) -> str:
         """Already-gated `minimum`/`maximum` fragment: `"1 to 10"` / `">= 1"` / `"<= 10"` /
-        `""`. Already filtered through `_should_include_metadata`; callers must not re-gate.
+        `""`. Already filtered through `config.includes`; callers must not re-gate.
         """
         return self._bounded_range_token(schema, "minimum", "maximum", joiner=" to ")
 
@@ -1952,12 +1706,12 @@ class BaseFormatter(ABC):
         """Shared three-branch assembler for the two bounded-range families.
 
         Each bound is resolved independently (`is not None` presence AND
-        `_should_include_metadata`), never combined with `or` — that independence is the
+        `config.includes`), never combined with `or` — that independence is the
         fix for the TypeScript defect this ticket closes. Branches on the *gated* pair,
         never on the raw schema.
         """
-        has_min = schema.get(min_key) is not None and self._should_include_metadata(min_key)
-        has_max = schema.get(max_key) is not None and self._should_include_metadata(max_key)
+        has_min = schema.get(min_key) is not None and self.config.includes(min_key)
+        has_max = schema.get(max_key) is not None and self.config.includes(max_key)
         if has_min and has_max:
             return f"{schema[min_key]}{joiner}{schema[max_key]}{unit}"
         if has_min:
@@ -1970,17 +1724,17 @@ class BaseFormatter(ABC):
         """Ordered, already-gated constraint words for an array-ish schema.
 
         Order is fixed: uniqueness first, then the length range. Every token is already
-        filtered through ``_should_include_metadata`` (itself False whenever
+        filtered through ``config.includes`` (itself False whenever
         ``include_metadata`` is False), so callers must not re-gate.
         """
         tokens: list[str] = []
 
         is_unique = schema.get("uniqueItems") or schema.get("_uniqueItems")
-        if is_unique and self._should_include_metadata("uniqueItems"):
+        if is_unique and self.config.includes("uniqueItems"):
             tokens.append("unique")
 
-        has_min = "minItems" in schema and self._should_include_metadata("minItems")
-        has_max = "maxItems" in schema and self._should_include_metadata("maxItems")
+        has_min = "minItems" in schema and self.config.includes("minItems")
+        has_max = "maxItems" in schema and self.config.includes("maxItems")
         if has_min and has_max:
             tokens.append(f"{schema['minItems']}-{schema['maxItems']} items")
         elif has_min:

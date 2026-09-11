@@ -153,7 +153,7 @@ llm-schema-lite does not generate output; it **validates** with `jsonschema` (Dr
    - Consider surfacing **if-then-else**, **propertyNames**, **contains** (for arrays), and **unevaluatedProperties** in JSONish as comments or suffixes when present, for parity with TypeScript/YAML.
 
 6. **Benchmarking**
-   - Use existing `benchmarking/jsonschemabench/` (e.g. `coverage.py`, `analyze_schema_feature_coverage`) to measure how many JSONSchemaBench schemas are **ingestible** (simplify without error) and how many **use only supported keywords** in the simplified output. Optionally add a small script that runs `simplify_schema` on a sample of the dataset and reports errors or fallbacks.
+   - Measure how many JSONSchemaBench schemas are **ingestible** (simplify without error) and how many **use only supported keywords** in the simplified output: `benchmarking/fetch_dataset.py` downloads the dataset and `benchmarking/format_jsonschembench_schema.py` formats one schema from it, so a small script that runs `simplify_schema` over a sample and reports errors or fallbacks is all that is missing.
 
 ---
 

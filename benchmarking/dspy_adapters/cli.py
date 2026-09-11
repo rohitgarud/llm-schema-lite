@@ -40,15 +40,29 @@ import argparse
 import dataclasses
 import os
 import sys
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from .adapters import ADAPTERS, LIVE_DEFAULT_ADAPTER_IDS, resolve_adapter_ids
+from .adapters import ADAPTERS, LIVE_DEFAULT_ADAPTER_IDS
 from .external import CORPORA
-from .outcomes import ReproRow, UnknownCellError
+from .outcomes import ReproRow, UnknownCellError, resolve_ids
 from .provenance import PROG, invocation_command
-from .signatures import SIGNATURES, resolve_signature_ids
+from .signatures import SIGNATURE_IDS, SIGNATURES
+
+if TYPE_CHECKING:
+    from .config import BenchConfig
+    from .report import RunMeta
 
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "results"
+
+_ADAPTER_ERROR = "Unknown adapter id {!r}. Valid adapter ids: {}"
+_SIGNATURE_ERROR = "Unknown signature id {!r}. Valid ids are: {}"
+
+REPRO_COLUMNS = (
+    "| part | adapter | adapter_config | response_format_sent | outcome "
+    "| error_class | lm_calls | note |"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -153,14 +167,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _render_repro_table(rows: list[ReproRow]) -> str:
     """Render #1871 reproduction rows as a markdown table (stdout only, never a file)."""
-    header = (
-        "| part | adapter | adapter_config | response_format_sent | outcome "
-        "| error_class | lm_calls | note |"
-    )
-    sep = "|" + "|".join(["---"] * 8) + "|"
-    lines = [header, sep]
-    for row in rows:
-        cells = [
+    from .report import _md_table
+
+    cells = (
+        [
             row.part,
             row.adapter,
             row.adapter_config,
@@ -170,8 +180,21 @@ def _render_repro_table(rows: list[ReproRow]) -> str:
             str(row.lm_calls),
             row.note,
         ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)
+        for row in rows
+    )
+    return "\n".join(_md_table(REPRO_COLUMNS, cells))
+
+
+def _write_results(write: Callable[[], tuple[Path, Path]], out: Path) -> bool:
+    """Run one report writer and print both paths; on `OSError` say why and return False."""
+    try:
+        md_path, csv_path = write()
+    except OSError as exc:
+        print(f"error: could not write results to {out}: {exc}", file=sys.stderr)
+        return False
+    print(f"wrote {md_path}")
+    print(f"wrote {csv_path}")
+    return True
 
 
 def _run_list() -> int:
@@ -231,8 +254,8 @@ def _run_offline(args: argparse.Namespace) -> int:
 
     seed_tiktoken_cache()
 
-    adapter_ids = resolve_adapter_ids(args.adapters, tuple(ADAPTERS))
-    signature_ids = resolve_signature_ids(args.signatures)
+    adapter_ids = resolve_ids(args.adapters, ADAPTERS, ADAPTERS, _ADAPTER_ERROR)
+    signature_ids = resolve_ids(args.signatures, SIGNATURES, SIGNATURE_IDS, _SIGNATURE_ERROR)
 
     rows = run_offline_arm(adapter_ids, signature_ids)
     available = encoding_available()
@@ -250,16 +273,50 @@ def _run_offline(args: argparse.Namespace) -> int:
         git_head=report_module.git_head(),
         encoding=ENCODING_NAME if available else f"{ENCODING_NAME} (unavailable)",
     )
-    try:
-        md_path, csv_path = report_module.write_offline_report(rows, args.out, meta=meta)
-    except OSError as exc:
-        print(f"error: could not write results to {args.out}: {exc}", file=sys.stderr)
+    if not _write_results(
+        lambda: report_module.write_offline_report(rows, args.out, meta=meta), args.out
+    ):
         return 1
-
-    print(f"wrote {md_path}")
-    print(f"wrote {csv_path}")
     print(_render_repro_table(run_repro_1871_offline()))
     return 0
+
+
+def _finish_live_arm(
+    arm: str,
+    rows: Sequence[Any],
+    cfg: BenchConfig,
+    lm: object,
+    out: Path,
+    write: Callable[[RunMeta], tuple[Path, Path]],
+    **provenance: object,
+) -> int:
+    """The shared tail of the two live arms: transport check, `RunMeta`, write, exit code.
+
+    Exit 1 when the results could not be written, or when at least one cell ran and every
+    row's `error_class` is exactly `"LMTransportError"`; otherwise 0. `provenance` is
+    recorded in `lm_kwargs` after the effective LM kwargs.
+    """
+    from . import config as config_module
+    from . import report as report_module
+
+    harness_failed = bool(rows) and all(row.error_class == "LMTransportError" for row in rows)
+    if harness_failed:
+        print(f"error: no {arm} cell reached the endpoint; is {cfg.api_base} up?", file=sys.stderr)
+
+    meta = dataclasses.replace(
+        report_module.RunMeta.minimal(arm),
+        command=invocation_command(),
+        git_head=report_module.git_head(),
+        model=cfg.model,
+        api_base=cfg.api_base,
+        lm_kwargs={**config_module.BASELINE_LM_KWARGS, **cfg.lm_kwargs, **provenance},
+        supports_response_schema=getattr(lm, "supports_response_schema", None),
+        supports_function_calling=getattr(lm, "supports_function_calling", None),
+        integrity_overridden=cfg.integrity_overridden,
+    )
+    if not _write_results(lambda: write(meta), out):
+        return 1
+    return 1 if harness_failed else 0
 
 
 def _run_live(args: argparse.Namespace) -> int:
@@ -268,8 +325,8 @@ def _run_live(args: argparse.Namespace) -> int:
     from . import report as report_module
     from .runner import run_live_arm
 
-    adapter_ids = resolve_adapter_ids(args.adapters, LIVE_DEFAULT_ADAPTER_IDS)
-    signature_ids = resolve_signature_ids(args.signatures)
+    adapter_ids = resolve_ids(args.adapters, ADAPTERS, LIVE_DEFAULT_ADAPTER_IDS, _ADAPTER_ERROR)
+    signature_ids = resolve_ids(args.signatures, SIGNATURES, SIGNATURE_IDS, _SIGNATURE_ERROR)
 
     cfg = config_module.load_config()  # exits 2 itself when not configured
     lm = config_module.build_lm(cfg)
@@ -280,34 +337,14 @@ def _run_live(args: argparse.Namespace) -> int:
         signature_ids=signature_ids,
         trials=args.trials,
     )
-
-    harness_failed = bool(rows) and all(row.error_class == "LMTransportError" for row in rows)
-    if harness_failed:
-        print(
-            f"error: no live cell reached the endpoint; is {cfg.api_base} up?",
-            file=sys.stderr,
-        )
-
-    meta = dataclasses.replace(
-        report_module.RunMeta.minimal("live"),
-        command=invocation_command(),
-        git_head=report_module.git_head(),
-        model=cfg.model,
-        api_base=cfg.api_base,
-        lm_kwargs={**config_module.BASELINE_LM_KWARGS, **cfg.lm_kwargs},
-        supports_response_schema=getattr(lm, "supports_response_schema", None),
-        supports_function_calling=getattr(lm, "supports_function_calling", None),
-        integrity_overridden=cfg.integrity_overridden,
+    return _finish_live_arm(
+        "live",
+        rows,
+        cfg,
+        lm,
+        args.out,
+        lambda meta: report_module.write_live_report(rows, args.out, meta=meta),
     )
-    try:
-        md_path, csv_path = report_module.write_live_report(rows, args.out, meta=meta)
-    except OSError as exc:
-        print(f"error: could not write results to {args.out}: {exc}", file=sys.stderr)
-        return 1
-
-    print(f"wrote {md_path}")
-    print(f"wrote {csv_path}")
-    return 1 if harness_failed else 0
 
 
 def _run_accuracy(args: argparse.Namespace) -> int:
@@ -318,7 +355,7 @@ def _run_accuracy(args: argparse.Namespace) -> int:
     from .cases import generate
     from .runner import run_accuracy_arm
 
-    adapter_ids = resolve_adapter_ids(args.adapters, LIVE_DEFAULT_ADAPTER_IDS)
+    adapter_ids = resolve_ids(args.adapters, ADAPTERS, LIVE_DEFAULT_ADAPTER_IDS, _ADAPTER_ERROR)
 
     cfg = config_module.load_config()  # exits 2 itself when not configured
     lm = config_module.build_lm(cfg)
@@ -334,45 +371,23 @@ def _run_accuracy(args: argparse.Namespace) -> int:
         source = CORPORA[args.corpus]
         corpus_meta = {"corpus": f"{source.repo}@{source.revision}", "cases": len(cases)}
     rows = run_accuracy_arm(lambda _adapter: lm, cases, adapter_ids=adapter_ids)
-
-    harness_failed = bool(rows) and all(row.error_class == "LMTransportError" for row in rows)
-    if harness_failed:
-        print(
-            f"error: no accuracy cell reached the endpoint; is {cfg.api_base} up?", file=sys.stderr
-        )
-
-    meta = dataclasses.replace(
-        report_module.RunMeta.minimal("accuracy"),
-        command=invocation_command(),
-        git_head=report_module.git_head(),
-        model=cfg.model,
-        api_base=cfg.api_base,
-        lm_kwargs={
-            **config_module.BASELINE_LM_KWARGS,
-            **cfg.lm_kwargs,
-            # Corpus identity belongs in provenance: two accuracy runs are only comparable
-            # if they scored the same cases, and (n, seed) or (repo@revision, n) fixes that.
-            **corpus_meta,
-        },
-        supports_response_schema=getattr(lm, "supports_response_schema", None),
-        supports_function_calling=getattr(lm, "supports_function_calling", None),
-        integrity_overridden=cfg.integrity_overridden,
-    )
-    try:
-        md_path, csv_path = report_module.write_accuracy_report(
+    return _finish_live_arm(
+        "accuracy",
+        rows,
+        cfg,
+        lm,
+        args.out,
+        lambda meta: report_module.write_accuracy_report(
             rows,
             args.out,
             meta=meta,
             corpus=None if args.corpus == "synthetic" else args.corpus,
             null_floor=null_floor(cases),
-        )
-    except OSError as exc:
-        print(f"error: could not write results to {args.out}: {exc}", file=sys.stderr)
-        return 1
-
-    print(f"wrote {md_path}")
-    print(f"wrote {csv_path}")
-    return 1 if harness_failed else 0
+        ),
+        # Corpus identity belongs in provenance: two accuracy runs are only comparable if
+        # they scored the same cases, and (n, seed) or (repo@revision, n) fixes that.
+        **corpus_meta,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

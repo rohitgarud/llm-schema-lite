@@ -583,11 +583,6 @@ def test_seed_tiktoken_cache_leaves_a_working_cache_alone(tmp_path: Path) -> Non
     assert environ == {"TIKTOKEN_CACHE_DIR": str(warm)}
 
 
-def test_encoding_name_constants_agree() -> None:
-    """`runner.py` keeps its own `cl100k_base` literal; this pins it to `encoding.py`'s."""
-    assert runner_module.ENCODING_NAME == encoding_module.ENCODING_NAME
-
-
 def test_invocation_command_drops_the_interpreter_path() -> None:
     """`argv[0]` (an absolute, machine-specific `__main__.py` path) is never in the output."""
     argv = ["/home/u/repo/benchmarking/dspy_adapters/__main__.py", "--offline"]

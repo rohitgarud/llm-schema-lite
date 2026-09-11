@@ -1,5 +1,5 @@
 .PHONY: help install sync install-dev install-dspy install-pre-commit pre-commit-run
-.PHONY: test test-cov test-cov-full test-parallel test-fast test-slow test-dspy test-benchmarking bench-dspy
+.PHONY: test test-cov test-cov-full test-dspy test-benchmarking bench-dspy
 .PHONY: lint check format clean build changelog release_notes
 .PHONY: publish-test publish update venv setup
 
@@ -46,15 +46,6 @@ test-dspy:  ## Run only DSPy integration tests
 
 test-benchmarking:  ## Run benchmarking tests
 	pytest benchmarking/tests/ --cov=benchmarking --cov-report=term-missing
-
-test-parallel:  ## Run tests in parallel (alias for test)
-	pytest -rP -n auto
-
-test-fast:  ## Run tests excluding slow ones
-	pytest -m "not slow" -rP -n auto
-
-test-slow:  ## Run only slow tests
-	pytest -m slow -rP
 
 # Benchmarking
 bench-dspy:  ## Run the DSPy adapter benchmark (see benchmarking/dspy_adapters/README.md)

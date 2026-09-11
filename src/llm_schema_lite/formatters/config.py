@@ -112,14 +112,11 @@ class FormatterConfig:
         """Post-initialization to handle metadata_inclusion defaults."""
         if self.max_recursion_depth < 0:
             raise ValueError(f"max_recursion_depth must be >= 0, got {self.max_recursion_depth}")
-        if self.metadata_inclusion is None:
-            # Use default metadata inclusion if not specified
-            self.metadata_inclusion = DEFAULT_METADATA_INCLUSION.copy()
-        else:
-            # Merge user-provided dict with defaults (user values override defaults)
-            merged = DEFAULT_METADATA_INCLUSION.copy()
+        # Merge any user-provided dict over the defaults (user values win).
+        merged = DEFAULT_METADATA_INCLUSION.copy()
+        if self.metadata_inclusion is not None:
             merged.update(self.metadata_inclusion)
-            self.metadata_inclusion = merged
+        self.metadata_inclusion = merged
 
 
 def with_format_default_separator(

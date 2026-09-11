@@ -4,13 +4,10 @@ import json
 import re
 from typing import Any
 
-try:
-    import json_repair
-except ImportError:
-    json_repair = None  # type: ignore[assignment, unused-ignore]
+import json_repair
 
 from ..exceptions import ConversionError
-from .base import BaseParser, _smart_extract_content
+from .base import BaseParser, _extract_from_markdown
 
 
 class JSONParser(BaseParser):
@@ -35,14 +32,12 @@ class JSONParser(BaseParser):
         Raises:
             ConversionError: If parsing fails and repair is disabled or unsuccessful
         """
-        # Extract content using shared strategies
-        extracted_text = _smart_extract_content(text, "json")
+        # Prefer a markdown code block
+        extracted_text = _extract_from_markdown(text, "json")
 
-        # Try JSON-specific extraction if needed
+        # No block found: try JSON-specific extraction
         if extracted_text == text:
-            direct_json = _extract_json_content(extracted_text)
-            if direct_json != extracted_text:
-                extracted_text = direct_json
+            extracted_text = _extract_json_content(extracted_text)
 
         # Clean and parse
         extracted_text = extracted_text.strip()
@@ -171,7 +166,7 @@ def _parse_json(text: str, repair: bool) -> dict[str, Any]:
         # Try standard JSON parsing first
         return json.loads(text)  # type: ignore[no-any-return]
     except json.JSONDecodeError as e:
-        if not repair or json_repair is None:
+        if not repair:
             raise ConversionError(f"Failed to parse JSON: {text[:100]}...") from e
 
         try:

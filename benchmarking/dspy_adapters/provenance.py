@@ -74,8 +74,8 @@ def invocation_command(argv: Sequence[str] | None = None) -> str:
 
     `argv[0]` is dropped -- `python -m` sets it to an absolute `__main__.py` path -- and
     replaced by `PROG`; the remaining arguments are appended `shlex.quote`d, so
-    `--adapters "json, baml"` round-trips (legal input: `resolve_adapter_ids` strips
-    whitespace, adapters.py:158). `argv=None` reads `sys.argv`.
+    `--adapters "json, baml"` round-trips (legal input: `outcomes.resolve_ids` strips
+    whitespace). `argv=None` reads `sys.argv`.
 
     `invocation_command(["/abs/.../__main__.py", "--offline"])`
         -> `"python -m benchmarking.dspy_adapters --offline"`

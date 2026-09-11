@@ -3,52 +3,7 @@
 from typing import Any
 
 
-def build_alias_map(schema: dict[str, Any]) -> dict[str, str]:
-    """
-    Build a flat alias -> canonical value map from schema's x-enum-aliases.
-
-    Traverses the schema (including $defs) and collects all x-enum-aliases.
-    When the same alias maps to different canonicals, last one wins.
-
-    Returns:
-        Dict mapping each alias string to its canonical enum value.
-    """
-    result: dict[str, str] = {}
-
-    def visit(node: Any) -> None:
-        if not isinstance(node, dict):
-            return
-        if "enum" in node and "x-enum-aliases" in node:
-            aliases = node["x-enum-aliases"]
-            if isinstance(aliases, dict):
-                for canonical, alias_list in aliases.items():
-                    if isinstance(alias_list, list):
-                        for a in alias_list:
-                            if a is not None:
-                                result[str(a)] = str(canonical)
-        for key in ("properties", "items", "additionalProperties", "oneOf", "anyOf", "allOf"):
-            if key not in node:
-                continue
-            val = node[key]
-            if isinstance(val, dict):
-                visit(val)
-            elif isinstance(val, list):
-                for item in val:
-                    visit(item)
-        if "$ref" in node:
-            # Caller must resolve $ref when doing schema-aware normalization
-            pass
-        return
-
-    visit(schema)
-    defs = schema.get("$defs", schema.get("definitions", {}))
-    if isinstance(defs, dict):
-        for _name, def_schema in defs.items():
-            visit(def_schema)
-    return result
-
-
-def _resolve_ref(schema: dict[str, Any], ref: str, defs: dict[str, Any]) -> dict[str, Any] | None:
+def _resolve_ref(ref: str, defs: dict[str, Any]) -> dict[str, Any] | None:
     """Resolve #/$defs/Name or #/definitions/Name to the definition."""
     if not ref.startswith("#/"):
         return None
@@ -86,7 +41,7 @@ def normalize_enum_aliases(
 
     # Resolve $ref
     if isinstance(schema, dict) and "$ref" in schema and schema["$ref"]:
-        resolved = _resolve_ref(schema, schema["$ref"], defs)
+        resolved = _resolve_ref(schema["$ref"], defs)
         if resolved is not None:
             schema = resolved
 
@@ -111,7 +66,7 @@ def normalize_enum_aliases(
         for k, v in data.items():
             sub_schema = props.get(k)
             if isinstance(sub_schema, dict) and "$ref" in sub_schema:
-                resolved = _resolve_ref(sub_schema, sub_schema["$ref"], defs)
+                resolved = _resolve_ref(sub_schema["$ref"], defs)
                 sub_schema = resolved if resolved is not None else sub_schema
             if not isinstance(sub_schema, dict):
                 sub_schema = {}

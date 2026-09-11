@@ -5,17 +5,14 @@ import re
 from collections.abc import Iterable
 from typing import Any, cast
 
+from jsonschema import Draft202012Validator, FormatChecker
+from pydantic import BaseModel
+
 from ..coercion import ParseConfig, coerce_to_schema
 from ..exceptions import ConversionError
 from ..schema_enrichment import enrich_schema_with_enum_metadata
 from .base import BaseParser
 from .json_parser import JSONParser
-
-try:
-    from pydantic import BaseModel
-except ImportError:
-    BaseModel = None  # type: ignore[assignment, misc]
-
 
 # =============================================================================
 # Module-level helper functions (for internal use and re-export)
@@ -24,7 +21,7 @@ except ImportError:
 
 def _get_json_schema(schema: "type[BaseModel] | dict[str, Any] | str") -> dict[str, Any]:
     """Convert schema input to JSON schema dict."""
-    if BaseModel is not None and isinstance(schema, type) and issubclass(schema, BaseModel):
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
         json_schema = schema.model_json_schema()
         enrich_schema_with_enum_metadata(schema, json_schema)
         return json_schema
@@ -42,12 +39,6 @@ def _get_json_schema(schema: "type[BaseModel] | dict[str, Any] | str") -> dict[s
 
 def _validate_field(value: Any, field_schema: dict[str, Any]) -> tuple[bool, list[str]]:
     """Validate a single field against its schema."""
-    try:
-        from jsonschema import Draft202012Validator, FormatChecker
-    except ImportError:
-        # If jsonschema not available, assume valid
-        return True, []
-
     try:
         format_checker = FormatChecker()
         validator = Draft202012Validator(field_schema, format_checker=format_checker)
@@ -76,8 +67,8 @@ def _marker_object_nodes(
     `from ..validators.enum_aliases import _resolve_ref` is a measured circular import
     (parsers/__init__ -> schema_parser -> validators/__init__ -> yaml_validators ->
     parsers). This mirrors the file's own convention -- `from ..validators import
-    JSONValidator` is already function-local in parse_with_schema and SchemaParser.parse,
-    with the same "Local import to avoid circular import" reason.
+    JSONValidator` is already function-local in SchemaParser.parse, for the same
+    circular-import reason.
 
     Args:
         node: A JSON-schema node -- typically a `properties` value, an `items` value, or
@@ -99,7 +90,7 @@ def _marker_object_nodes(
     if isinstance(ref, str):
         if ref in _seen:
             return []
-        resolved = _resolve_ref(node, ref, defs)
+        resolved = _resolve_ref(ref, defs)
         if resolved is None:
             return []
         return _marker_object_nodes(resolved, defs, _seen | {ref})
@@ -237,7 +228,7 @@ def normalize_marker_keys(
     """Map trailing-marker keys in ONE dict onto the known names they denote.
 
     Pure, single-marker, single-object-level. This is the extraction of the three-rule
-    algorithm that used to live only inside SchemaParser._normalize_marker_keys, with
+    algorithm that used to live only inside SchemaParser, with
     `properties` generalised to `known_keys` so both SchemaParser and
     StructuredOutputAdapter can call it with their own key universe (JSON-schema
     properties vs. signature.output_fields).
@@ -316,7 +307,7 @@ def _build_result(
         ConversionError: only when `validate` is True and `schema.model_validate` raises
             pydantic.ValidationError.
     """
-    if BaseModel is not None and isinstance(schema, type) and issubclass(schema, BaseModel):
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
         if validate:
             from pydantic import ValidationError
 
@@ -358,9 +349,6 @@ def parse_with_schema(
     Raises:
         ConversionError: If partial=False and parsing fails, or if required fields fail
     """
-    # Local import to avoid circular import
-    from ..validators import JSONValidator
-
     # Create SchemaParser with the schema
     schema_parser = SchemaParser(schema=schema, parse_config=parse_config)
 
@@ -370,15 +358,8 @@ def parse_with_schema(
         final_result = schema_parser.build_result(result_dict)
         return final_result, {"failed_fields": failed_fields}
     else:
-        # Full validation mode: parse and validate
+        # Full validation mode: SchemaParser.parse already validated against the schema
         result_dict = schema_parser.parse(text, repair=True)
-
-        # Validate against full schema
-        is_valid, errors = JSONValidator(schema).validate(result_dict, return_all_errors=True)
-        if not is_valid:
-            error_list = errors if errors else []
-            raise ConversionError(f"Validation failed: {'; '.join(error_list)}")
-
         final_result = schema_parser.build_result(result_dict, validate=True)
         return final_result, {}
 
@@ -414,9 +395,11 @@ class SchemaParser(BaseParser):
         """Sole text->dict entry point for both SchemaParser routes.
 
         Parses via self._json_parser, optionally rescues embedded JSON on failure, then
-        normalizes required-marker keys via _normalize_marker_keys exactly once. That
-        single call is now a RECURSIVE walk of data and schema in parallel, not a flat
-        top-level remap: it strips markers at every reachable nested object level.
+        normalizes required-marker keys via normalize_marker_keys_recursive exactly once,
+        walking self._json_schema with self._parse_config.strip_required_marker (an empty
+        marker is a no-op). That single call is a RECURSIVE walk of data and schema in
+        parallel, not a flat top-level remap: it strips markers at every reachable nested
+        object level.
 
         `rescue_embedded` PRESERVES an existing asymmetry between SchemaParser.parse's
         non-partial branch and _parse_partial rather than introducing a new one: the
@@ -437,7 +420,7 @@ class SchemaParser(BaseParser):
 
         Returns:
             Whatever self._json_parser.parse (or the embedded-JSON rescue) produced, run
-            through _normalize_marker_keys if it is a dict. Non-dict results are
+            through normalize_marker_keys_recursive if it is a dict. Non-dict results are
             returned unchanged -- both callers have their own non-dict handling.
 
         Raises:
@@ -454,34 +437,9 @@ class SchemaParser(BaseParser):
             parsed = self._json_parser.parse(text, repair)
 
         if isinstance(parsed, dict):
-            return self._normalize_marker_keys(parsed)
+            marker = self._parse_config.strip_required_marker
+            return normalize_marker_keys_recursive(parsed, self._json_schema, marker)
         return parsed
-
-    def _normalize_marker_keys(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Map trailing-marker reply keys onto their schema property names, recursively.
-
-        Delegates to the module-level normalize_marker_keys_recursive, walking
-        self._json_schema in parallel with `data`. Descends properties, $ref, items,
-        prefixItems, additionalProperties values, and merged anyOf/oneOf/allOf branches;
-        depth-capped at MARKER_WALK_MAX_DEPTH (8, counted in data depth). Never rewrites
-        the keys of an open-ended mapping (dict[str, X] fields) -- only their values are
-        walked -- and never disturbs a property genuinely named "name*", which the
-        verbatim-first rule protects.
-
-        Uses self._parse_config.strip_required_marker as the marker; an empty marker is a
-        no-op, matching the pre-existing escape hatch.
-
-        Args:
-            data: The parsed (dict) reply, pre-filtering, in whatever key order the LM or
-                self._json_parser produced.
-
-        Returns:
-            A new dict (or nested structure) with remapped keys at every reachable object
-            level. Never mutates `data`.
-        """
-        marker = self._parse_config.strip_required_marker
-        result = normalize_marker_keys_recursive(data, self._json_schema, marker)
-        return cast(dict[str, Any], result)
 
     def parse(self, text: str, repair: bool = True) -> dict[str, Any]:
         """
@@ -578,7 +536,7 @@ class SchemaParser(BaseParser):
                     field_value = value
 
                 # Validate the field
-                is_valid, errors = self._validate_field(field_value, field_schema)
+                is_valid, errors = _validate_field(field_value, field_schema)
                 if is_valid:
                     result_dict[field_name] = field_value
                 else:
@@ -604,11 +562,6 @@ class SchemaParser(BaseParser):
                 failed_fields[field_name] = value
 
         return result_dict, failed_fields
-
-    def _validate_field(self, value: Any, field_schema: dict[str, Any]) -> tuple[bool, list[str]]:
-        """Validate a single field against its schema."""
-        # Delegate to module-level function
-        return _validate_field(value, field_schema)
 
     def _extract_json_from_text(self, text: str) -> dict[str, Any]:
         """Extract JSON object from text that may contain extra content."""

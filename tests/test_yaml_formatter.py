@@ -174,8 +174,6 @@ def test_yaml_formatter_caching():
     result2 = formatter.transform_schema()
 
     assert result1 == result2
-    assert hasattr(formatter, "_processed_data")
-    assert formatter._processed_data is not None
 
 
 # ============================================================================

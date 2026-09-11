@@ -192,22 +192,17 @@ def assert_schema_info_comment_presence(
     comment whenever the schema has required fields, even when include_metadata=False.
     So this helper only checks schema *info* (e.g. `//Title:`), not required-field comments.
 
-    When `schema` is provided, the expected title-comment presence is computed from
-    its *normalized* title (auto-generated titles stripped) combined with
-    `include_metadata`, matching `assert_schema_title_comment_consistent`. When
-    `schema` is omitted, behaviour is byte-identical to before this parameter existed.
+    When `schema` is provided, this delegates to `assert_schema_title_comment_consistent`
+    (the expected presence comes from the *normalized* title combined with
+    `include_metadata`). When `schema` is omitted, behaviour is byte-identical to before
+    this parameter existed.
     """
 
-    has_title_comment = "//Title:" in result
     if schema is not None:
-        normalized_schema = normalize_schema_titles(schema)
-        expected = bool(include_metadata and normalized_schema.get("title"))
-        assert has_title_comment == expected, (
-            f"Title comment presence mismatch: expected={expected} actual={has_title_comment}. "
-            f"Snippet: {result[:200]!r}"
-        )
+        assert_schema_title_comment_consistent(result, schema, include_metadata, "//")
         return
 
+    has_title_comment = "//Title:" in result
     if include_metadata:
         assert has_title_comment, (
             "Expected schema title comment when include_metadata=True. "

@@ -45,7 +45,7 @@ _SCANNED_DOCS: tuple[str, ...] = (
 )
 """Doc files scanned for fenced python blocks, repo-root-relative. An explicit
 tuple, never a ``**/*.md`` glob, so a parallel ticket's untracked markdown
-(e.g. ``benchmarking/tests/README.md``) is never swept in."""
+is never swept in."""
 
 _EXAMPLE_SCRIPTS: tuple[str, ...] = ("examples/basic_usage.py",)
 """Tracked example scripts executed as subprocesses, repo-root-relative.
