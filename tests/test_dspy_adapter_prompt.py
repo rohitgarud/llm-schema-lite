@@ -731,3 +731,31 @@ class TestOutputSchemaIsBoundToItsFieldName:
         )
         assert '"answer": {answer}' in out
         assert '\n"answer":' not in out
+
+
+class TestFieldConstraintRendering:
+    """Constraints passed as InputField/OutputField kwargs reach the prompt (dspy#10195).
+
+    They live in FieldInfo.metadata, not the annotation, so a bare `float` output used to
+    render only "must be a single float value" and the bound never reached the model.
+    """
+
+    @pytest.mark.parametrize(
+        ("mode", "bound", "length"),
+        [
+            (OutputMode.JSONISH, "float (0.0 to 1.0)", "string (<= 50 chars)"),
+            (OutputMode.YAML, "float (0.0 to 1.0)", "string (<= 50 chars)"),
+            (OutputMode.JSON, '"maximum": 1.0, "minimum": 0.0', '"maxLength": 50'),
+        ],
+    )
+    def test_field_kwarg_constraints_render_in_every_mode(self, mode, bound, length):
+        sig = dspy.Signature(
+            {
+                "text": (str, dspy.InputField(max_length=50)),
+                "score": (float, dspy.OutputField(ge=0.0, le=1.0)),
+            }
+        )
+        out = make_adapter(mode).format_field_structure(sig)
+        output_block = out.split("Outputs will be", 1)[1]
+        assert bound in output_block
+        assert length in out.split("Outputs will be", 1)[0]

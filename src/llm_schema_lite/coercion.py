@@ -138,7 +138,7 @@ _TYPE_COERCERS: dict[str, Callable[[Any], tuple[Any, CoercionMetadata | None]]] 
 
 
 def _coerce_to_enum(value: Any, enum_values: list[Any]) -> tuple[Any, CoercionMetadata | None]:
-    """Coerce to enum value (case-insensitive matching for strings)."""
+    """Coerce to enum value (case-insensitive matching for strings, numeric text for numbers)."""
     # If already a valid enum value, return as-is
     if value in enum_values:
         return value, None
@@ -153,6 +153,20 @@ def _coerce_to_enum(value: Any, enum_values: list[Any]) -> tuple[Any, CoercionMe
                     target_type="enum",
                     coerced_value=enum_val,
                     coercion_type="enum_case_insensitive",
+                )
+
+        # "2" for the integer enum [1, 2]; bool members are never matched
+        try:
+            number: float | None = float(value)
+        except ValueError:
+            number = None
+        for enum_val in enum_values:
+            if type(enum_val) in (int, float) and number == enum_val:
+                return enum_val, CoercionMetadata(
+                    original_value=value,
+                    target_type="enum",
+                    coerced_value=enum_val,
+                    coercion_type="enum_from_string",
                 )
 
     return value, None
@@ -185,7 +199,7 @@ def coerce_value(
     if enum_values is not None:
         result, metadata = _coerce_to_enum(value, enum_values)
         if metadata is not None:
-            logger.debug(f"Coerced value {value!r} to enum {result!r} (case-insensitive)")
+            logger.debug(f"Coerced value {value!r} to enum {result!r} ({metadata.coercion_type})")
             return result, metadata
         # If no enum match, return original value without coercion
         # (don't fall through to type coercion when enum is specified)

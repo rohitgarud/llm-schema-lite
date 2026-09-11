@@ -381,6 +381,45 @@ def _move_strays(item: dict[str, Any], annotations: dict[str, Any]) -> dict[str,
     return out
 
 
+def _unwrap_envelope(item: dict[str, Any], annotations: dict[str, Any]) -> dict[str, Any]:
+    """The dict a reply wrapped its fields in under one extra key, else ``item`` itself.
+
+    ``{"json_input": {...}}`` or ``{"json": "<JSON text>"}`` (stanfordnlp/dspy#8539): one
+    key, none an annotation names, and a value that is (or parses to) a dict holding one.
+    """
+    if len(item) != 1 or item.keys() & annotations.keys():
+        return item
+    (inner,) = item.values()
+    if isinstance(inner, str):
+        try:
+            inner = loads(inner, mode="json", repair=True)
+        except ConversionError:
+            return item
+    return inner if isinstance(inner, dict) and inner.keys() & annotations.keys() else item
+
+
+def _rename_near_misses(item: dict[str, Any], annotations: dict[str, Any]) -> dict[str, Any]:
+    """Rename each unknown key to the absent field it nearly names (stanfordnlp/dspy#8377).
+
+    Near: equal once case, ``_``, ``-`` and spaces are dropped, or one is the other with
+    whole ``_`` words added only at the front or only at the back (``tool_args`` for
+    ``next_tool_args``). Only a one-to-one match renames: ``name`` against both
+    ``first_name`` and ``last_name`` stays put. Returns ``item`` itself when nothing moved.
+    """
+
+    def near(a: str, b: str) -> bool:
+        if re.sub(r"[\s_-]", "", a.lower()) == re.sub(r"[\s_-]", "", b.lower()):
+            return True
+        short, long = sorted((a.split("_"), b.split("_")), key=len)
+        return long[: len(short)] == short or long[-len(short) :] == short
+
+    absent = [name for name in annotations if name not in item]
+    pairs = [(k, n) for k in item if k not in annotations for n in absent if near(k, n)]
+    keys, names = [k for k, _ in pairs], [n for _, n in pairs]
+    renames = {k: n for k, n in pairs if keys.count(k) == 1 and names.count(n) == 1}
+    return {renames.get(k, k): v for k, v in item.items()} if renames else item
+
+
 def _renest_hoisted_fields(value: Any, annotation: Any) -> Any:
     """Move a nested object's fields back under it when the model hoisted them a level up.
 
@@ -891,6 +930,13 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
 
         voice = "the value you produce " if role == "output" else "this value "
 
+        # Constraints passed as InputField/OutputField kwargs (ge=, max_length=, ...) live
+        # in FieldInfo.metadata, not the annotation (stanfordnlp/dspy#10195). Folding them
+        # back in lets the schema chain render them; a constrained scalar thereby skips the
+        # note-only branches below. Tuple form because `*` in a subscript needs 3.11.
+        if field_info.metadata:
+            field_type = Annotated[(field_type, *field_info.metadata)]  # type: ignore[assignment]
+
         # 3. Scalar / enum / literal branches - note only, never a schema block.
         if field_type is str:
             return _FieldBlock(name=name, note_text=None, schema_text=None)
@@ -1331,8 +1377,10 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         (_strip_nested_markers), then _unwrap_single_item_lists, _merge_record_lists,
         _renest_hoisted_fields, _null_empty_objects, _wrap_scalars_in_lists and
         _prune_null_list_items -- plus one fallback before the missing-field error: an
-        output field sent without its key is moved under it and the reply parsed once
-        more. With parse_config.partial, a field still rejected is offered to
+        output field sent without its key is moved under it (_move_strays), fields wrapped
+        under one extra key are unwrapped (_unwrap_envelope), or a near-miss key is
+        renamed (_rename_near_misses), and the reply parsed once more. With
+        parse_config.partial, a field still rejected is offered to
         _salvage_leaves before it is dropped. parse funnels every mode through it after
         the mode-specific extraction.
 
@@ -1440,18 +1488,20 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         out = apply_output_field_defaults(signature, out)
 
         if out.keys() != signature.output_fields.keys():
-            # A reply that sent a field's contents without its key -- the PII fields bare
-            # at the top instead of under `pii` -- fails here. Move them under it and parse
-            # once more; a second pass has nothing left to move, so this cannot loop. A
-            # retry that still fails raises THIS error: a rescue never changes how a reply
-            # fails.
+            # A reply that sent a field's contents without its key (the PII fields bare at
+            # the top instead of under `pii`), wrapped every field under one extra key, or
+            # misnamed a field fails here. The first repair that changes the reply is
+            # parsed once more. Each retry has less left to repair (fewer unknown keys, or
+            # an envelope gone for good), so this cannot loop. A retry that still fails
+            # raises THIS error: a rescue never changes how a reply fails.
             if self.parse_config is not None and self.parse_config.allow_coercion:
-                moved = _move_strays(raw, output_annotations)
-                if moved is not raw:
-                    try:
-                        return self._build_output_fields(signature, completion, moved)
-                    except (AdapterParseError, pydantic.ValidationError, ValueError):
-                        pass
+                for repair in (_move_strays, _unwrap_envelope, _rename_near_misses):
+                    retry = repair(raw, output_annotations)
+                    if retry is not raw:
+                        try:
+                            return self._build_output_fields(signature, completion, retry)
+                        except (AdapterParseError, pydantic.ValidationError, ValueError):
+                            break
             raise AdapterParseError(
                 adapter_name="StructuredOutputAdapter",
                 signature=signature,
@@ -1476,7 +1526,9 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         The scalar-only predicate below is hand-maintained; WIDENING IT RE-ADMITS THAT
         CORRUPTION. tests/test_dspy_adapter_parse.py::TestParseConfig::
         test_none_value_for_optional_field_survives_parse_config exists specifically to
-        fail if it is widened -- point any future change at that test by name.
+        fail if it is widened -- point any future change at that test by name. An
+        Optional[X] field holding a scalar is rescued against X; null, dicts and lists never
+        are, so none of them is stringified.
 
         Never raises: any failure at any step declines the rescue, logs at DEBUG, and
         returns None. The rescue must never be the reason a parse fails.
@@ -1494,6 +1546,14 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             annotation, non-scalar predicate, or an internal exception) -- the caller
             must treat None exactly like "coercion did not help".
         """
+        members, admits_none = _members(annotation)
+        if admits_none and len(members) == 1 and not isinstance(value, dict | list | None):
+            annotation = members[0]
+            try:
+                # What a bare X field accepts, e.g. an Enum member by name: "RED" for "crimson"
+                return parse_value(value, annotation), []
+            except Exception:
+                pass
         try:
             field_schema = TypeAdapter(annotation).json_schema()
         except Exception as exc:
@@ -1688,6 +1748,25 @@ def _get_structured_outputs_response_format(
     # Remove DSPy-specific metadata
     for prop in schema.get("properties", {}).values():
         prop.pop("json_schema_extra", None)
+
+    def strip_extensions(node: Any) -> None:
+        """Recursively drop Pydantic ``x-*`` vendor keys, which strict-schema providers
+        (e.g. Bedrock) reject with a 400 (stanfordnlp/dspy#9686). The keys of a
+        ``properties``/``$defs`` mapping are names, not keywords, so they are kept."""
+        if isinstance(node, list):
+            for item in node:
+                strip_extensions(item)
+        elif isinstance(node, dict):
+            for key in [k for k in node if k.startswith("x-")]:
+                del node[key]
+            for key, value in node.items():
+                if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
+                    for sub_schema in value.values():
+                        strip_extensions(sub_schema)
+                else:
+                    strip_extensions(value)
+
+    strip_extensions(schema)
 
     def enforce_required(schema_part: dict[str, Any]) -> None:
         """Recursively enforce required fields for OpenAI Structured Outputs."""

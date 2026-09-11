@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import logging
 from typing import Literal
 
@@ -175,6 +176,59 @@ class TestParseConfig:
         with pytest.raises(AdapterParseError) as excinfo:
             adapter.parse(Typed, '{"count":"abc"}')
         assert excinfo.value.parsed_result == {"count": 0, "tier": "a"}
+
+
+class _Rating(enum.Enum):
+    POOR = 1
+    GOOD = 2
+
+
+class _Color(enum.Enum):
+    RED = "crimson"
+
+
+class _Rescued(dspy.Signature):
+    """Rate and describe the laptop."""
+
+    review: str = dspy.InputField()
+    rating: _Rating = dspy.OutputField()
+    color: _Color | None = dspy.OutputField()
+    series_model: str | None = dspy.OutputField()
+
+
+class TestValueRescues:
+    """The coercion rescue reaches Optional[X] fields and int enums sent as text."""
+
+    def test_optional_field_rescued_against_inner_type(self):
+        """14 into `str | None` and "RED" (by name) into `_Color | None` parse as for bare X."""
+        completion = '{"rating": 2, "color": "RED", "series_model": 14}'
+        adapter = make_adapter(OutputMode.JSONISH, parse_config=ParseConfig())
+        assert adapter.parse(_Rescued, completion) == {
+            "rating": _Rating.GOOD,
+            "color": _Color.RED,
+            "series_model": "14",
+        }
+        with pytest.raises(pydantic.ValidationError):
+            make_adapter(OutputMode.JSONISH).parse(_Rescued, completion)
+
+    def test_int_enum_sent_as_text(self):
+        """ "2" for an int-valued enum becomes the member valued 2; null stays null."""
+        completion = '{"rating": "2", "color": null, "series_model": null}'
+        adapter = make_adapter(OutputMode.JSONISH, parse_config=ParseConfig())
+        assert adapter.parse(_Rescued, completion) == {
+            "rating": _Rating.GOOD,
+            "color": None,
+            "series_model": None,
+        }
+        with pytest.raises(ValueError):
+            make_adapter(OutputMode.JSONISH).parse(_Rescued, completion)
+
+    def test_list_into_optional_str_is_not_stringified(self):
+        """["a"] into `str | None` still fails; it never becomes the string "['a']"."""
+        completion = '{"rating": 2, "color": null, "series_model": ["a"]}'
+        adapter = make_adapter(OutputMode.JSONISH, parse_config=ParseConfig())
+        with pytest.raises(pydantic.ValidationError):
+            adapter.parse(_Rescued, completion)
 
 
 ARRAY_VARIANTS = {
@@ -834,3 +888,82 @@ class TestPartialSalvage:
         and refilled by its default, as before."""
         record = self._parse('{"record": {"kind": "fax", "value": "2"}}', _SalContact | None)
         assert record is None
+
+
+class TestReplyKeyRescues:
+    """Fields wrapped under one extra key (dspy#8539) and near-miss keys (dspy#8377)."""
+
+    ACTORS = dspy.Signature(
+        {
+            "text": (str, dspy.InputField()),
+            "reasoning": (str, dspy.OutputField()),
+            "actors": (list[str], dspy.OutputField()),
+            "details": (str, dspy.OutputField()),
+        }
+    )
+    REACT = dspy.Signature(
+        {
+            "q": (str, dspy.InputField()),
+            "next_thought": (str, dspy.OutputField()),
+            "next_tool_name": (str, dspy.OutputField()),
+            "next_tool_args": (dict, dspy.OutputField()),
+        }
+    )
+    NAMES = dspy.Signature(
+        {
+            "text": (str, dspy.InputField()),
+            "first_name": (str, dspy.OutputField()),
+            "last_name": (str, dspy.OutputField()),
+        }
+    )
+    WRAPPED = '{"json_input": {"reasoning": "r", "actors": ["A"], "details": "d"}}'
+    WRAPPED_TEXT = (
+        '{"json": "{\\n \\"reasoning\\": \\"r\\",\\n \\"actors\\": [\\"B\\"],\\n'
+        ' \\"details\\": \\"d\\"\\n}\\n</invoke>"}'
+    )
+    NEAR_MISS = '{"next_thought": "t", "next_tool_name": "search", "tool_args": {"q": "x"}}'
+    AMBIGUOUS = '{"name": "Ada"}'
+
+    @staticmethod
+    def _parse(sig, completion, parse_config=None):
+        adapter = StructuredOutputAdapter(output_mode=OutputMode.JSON, parse_config=parse_config)
+        return adapter.parse(sig, completion)
+
+    def test_unwraps_an_object_envelope(self):
+        out = self._parse(self.ACTORS, self.WRAPPED, ParseConfig())
+        assert out == {"reasoning": "r", "actors": ["A"], "details": "d"}
+
+    def test_unwraps_a_json_text_envelope(self):
+        out = self._parse(self.ACTORS, self.WRAPPED_TEXT, ParseConfig())
+        assert out == {"reasoning": "r", "actors": ["B"], "details": "d"}
+
+    def test_renames_a_near_miss_key(self):
+        out = self._parse(self.REACT, self.NEAR_MISS, ParseConfig())
+        assert out["next_tool_args"] == {"q": "x"}
+
+    def test_renames_a_key_that_differs_only_in_case_and_separators(self):
+        out = self._parse(self.NAMES, '{"First-Name": "Ada", "last_name": "L"}', ParseConfig())
+        assert out == {"first_name": "Ada", "last_name": "L"}
+
+    def test_an_ambiguous_near_miss_still_fails(self):
+        with pytest.raises(AdapterParseError):
+            self._parse(self.NAMES, self.AMBIGUOUS, ParseConfig())
+
+    def test_an_envelope_without_output_fields_still_fails(self):
+        with pytest.raises(AdapterParseError):
+            self._parse(self.ACTORS, '{"json": "{\\"other\\": 1}"}', ParseConfig())
+
+    @pytest.mark.parametrize("case", ["WRAPPED", "WRAPPED_TEXT", "NEAR_MISS", "AMBIGUOUS"])
+    def test_all_are_off_when_parse_config_is_none(self, case):
+        sig = {"WRAPPED": self.ACTORS, "WRAPPED_TEXT": self.ACTORS, "NEAR_MISS": self.REACT}
+        with pytest.raises(AdapterParseError):
+            self._parse(sig.get(case, self.NAMES), getattr(self, case))
+
+
+class TestExtractionFixes:
+    """Reply shapes the shared extraction used to misread."""
+
+    def test_leading_think_block_is_not_parsed_as_the_answer(self):
+        adapter = make_adapter(OutputMode.JSON)
+        completion = '<think>Format is {"answer": ...}</think>\n{"answer": "Paris"}'
+        assert adapter.parse(QA, completion) == {"answer": "Paris"}

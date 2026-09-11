@@ -50,3 +50,16 @@ def _extract_from_markdown(text: str, mode: str) -> str:
             return match.group(1).strip()
 
     return text
+
+
+_LEADING_REASONING = re.compile(r"^\s*<(think|thinking)>.*?</\1>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_leading_reasoning(text: str) -> str:
+    """Drop a leading <think>/<thinking> block so it is not parsed as the answer.
+
+    Reasoning models (Qwen3, DeepSeek-R1) can reason inline before answering, often
+    restating the output format, and that placeholder was extracted first. Only a block
+    at the very start is removed: a field value that merely contains the tag is data.
+    """
+    return _LEADING_REASONING.sub("", text, count=1)

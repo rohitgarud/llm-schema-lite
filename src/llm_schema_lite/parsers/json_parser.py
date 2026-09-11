@@ -7,7 +7,7 @@ from typing import Any
 import json_repair
 
 from ..exceptions import ConversionError
-from .base import BaseParser, _extract_from_markdown
+from .base import BaseParser, _extract_from_markdown, _strip_leading_reasoning
 
 
 class JSONParser(BaseParser):
@@ -32,7 +32,8 @@ class JSONParser(BaseParser):
         Raises:
             ConversionError: If parsing fails and repair is disabled or unsuccessful
         """
-        # Prefer a markdown code block
+        # Skip a leading reasoning block, then prefer a markdown code block
+        text = _strip_leading_reasoning(text)
         extracted_text = _extract_from_markdown(text, "json")
 
         # No block found: try JSON-specific extraction
@@ -59,12 +60,12 @@ def _extract_json_content(text: str) -> str:
         pass
 
     # Strategy 1: Look for complete JSON objects using brace counting
-    json_object = _extract_json_object(text)
+    json_object = _extract_balanced(text, "{", "}")
     if json_object != text:
         return json_object
 
     # Strategy 2: Look for JSON arrays
-    json_array = _extract_json_array(text)
+    json_array = _extract_balanced(text, "[", "]")
     if json_array != text:
         return json_array
 
@@ -77,47 +78,33 @@ def _extract_json_content(text: str) -> str:
     return text
 
 
-def _extract_json_object(text: str) -> str:
-    """Extract JSON object from text using brace counting."""
-    # Look for JSON object pattern - find the first complete JSON object
-    # This handles cases where JSON is embedded in other text
-    # Use a simpler approach: find the first { and then find the matching }
-    start = text.find("{")
+def _extract_balanced(text: str, open_char: str, close_char: str) -> str:
+    """Extract the first balanced open_char..close_char span from text.
+
+    Brackets inside JSON strings are skipped (a `{` in a code-snippet value never
+    balanced, so the whole reply went to json_repair: stanfordnlp/dspy#8759).
+    """
+    start = text.find(open_char)
     if start == -1:
         return text
 
-    # Count braces to find the matching closing brace
-    brace_count = 0
+    depth = 0
+    in_string = escaped = False
     for i, char in enumerate(text[start:], start):
-        if char == "{":
-            brace_count += 1
-        elif char == "}":
-            brace_count -= 1
-            if brace_count == 0:
-                extracted = text[start : i + 1]
-                # If we extracted the entire text, return it
-                # If we extracted a subset, return the subset
-                return extracted
-
-    # If no matching brace found, return the original text
-    return text
-
-
-def _extract_json_array(text: str) -> str:
-    """Extract JSON array from text using bracket counting."""
-    # Look for JSON array pattern - find the first complete JSON array
-    start = text.find("[")
-    if start == -1:
-        return text
-
-    # Count brackets to find the matching closing bracket
-    bracket_count = 0
-    for i, char in enumerate(text[start:], start):
-        if char == "[":
-            bracket_count += 1
-        elif char == "]":
-            bracket_count -= 1
-            if bracket_count == 0:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
                 return text[start : i + 1]
 
     # If no matching bracket found, return the original text

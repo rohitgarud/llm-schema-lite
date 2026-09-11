@@ -54,6 +54,13 @@ class _DictOut(dspy.Signature):
     d: dict[str, str] = dspy.OutputField()
 
 
+class _Tagged(pydantic.BaseModel):
+    """Nested model carrying an `x-*` vendor key, plus a property whose name starts `x-`."""
+
+    label: str = pydantic.Field(json_schema_extra={"x-comparison": "exact"})
+    x_id: str = pydantic.Field(alias="x-id")
+
+
 _SENTINEL_RESPONSE_FORMAT = {"type": "sentinel"}
 _JSON_OBJECT = {"type": "json_object"}
 _SCHEMA_ANSWER = ("DSPyProgramOutputs", ["answer"])
@@ -196,6 +203,17 @@ class TestResponseFormat:
         with pytest.raises(ValueError) as excinfo:
             _get_structured_outputs_response_format(_DictOut)
         assert "open-ended mapping type" in str(excinfo.value)
+
+    def test_structured_outputs_helper_strips_vendor_extension_keys(self):
+        """`x-*` keys never reach the provider, but a property *named* `x-...` survives.
+
+        stanfordnlp/dspy#9686: strict-schema providers (Bedrock) 400 on them, the call
+        falls back to json_object, and the predictions come back empty.
+        """
+        sig = dspy.Signature({"q": (str, dspy.InputField()), "out": (_Tagged, dspy.OutputField())})
+        schema = _get_structured_outputs_response_format(sig).model_json_schema()
+        assert "x-comparison" not in str(schema)
+        assert "x-id" in schema["$defs"]["_Tagged"]["properties"]
 
     def test_response_format_differs_per_output_mode(self):
         """Each output mode should reach the LM with its own response_format."""

@@ -92,6 +92,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Four more rescues in the DSPy adapter, for reply shapes reported on DSPy's tracker.**
+  With `parse_config` set, an `Optional[X]` field holding a scalar is rescued against
+  `X`, so `14` for `Optional[str]` becomes `"14"` and an enum member's name works under
+  `Optional` as it does bare (stanfordnlp/dspy#1962, #9994). A numeric string such as
+  `"2"` now matches an integer or float enum member. With `allow_coercion`, a reply
+  missing output fields is retried once more in two cases:
+  - fields sent under one extra key, as a dict or as JSON text (`{"json_input": {...}}`,
+    #8539), are unwrapped;
+  - a key that unambiguously near-misses an absent field (`tool_args` for
+    `next_tool_args`, #8377) is renamed. `name` against `first_name` and `last_name` is
+    left alone.
+
+  Null, dicts and lists are never stringified, and a retry that fails raises the
+  original error. Not yet measured on the benchmark.
+- **Constraints passed as `InputField`/`OutputField` kwargs reach the prompt.**
+  `OutputField(ge=0.0, le=1.0)` now renders as `float (0.0 to 1.0)` in JSONish and YAML
+  and as `minimum`/`maximum` in JSON mode's schema text. They were dropped because they
+  live in the field's metadata, not its annotation (stanfordnlp/dspy#10195). Nothing is
+  enforced at parse time, and the benchmark's prompts are byte-identical.
 - **List-of-records merge in the DSPy adapter.** With `parse_config` set
   (`allow_coercion`), an output value sent as a list of two or more records, where the
   schema wants one object whose every field is a list, is merged into that object: each
@@ -332,6 +351,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A leading `<think>`/`<thinking>` block is no longer parsed as the answer.** JSON
+  extraction took the first `{`, so a reasoning model that restated the format
+  (`{"answer": ...}`) inside its think block had that placeholder returned as the answer,
+  with no error. JSON and YAML parsing now drop such a block at the very start of the
+  reply; the tag inside a value is untouched.
+- **A `{` or `[` inside a JSON string no longer breaks extraction.** Brace counting
+  ignored strings, so a code snippet such as `"if (user) {"` in a prose-wrapped reply
+  never balanced, and the reply failed where DSPy's `JSONAdapter` parsed it
+  (stanfordnlp/dspy#8759).
+- **JSON mode no longer sends Pydantic `x-*` keys to the provider.**
+  `json_schema_extra={"x-...": ...}` reached `response_format`, which strict-schema
+  providers such as Bedrock reject with a 400 (stanfordnlp/dspy#9686). Field names that
+  start with `x-` are kept.
 - `SchemaLite.compare_tokens()` for TypeScript and YAML cached its first counts and
   returned them for every later call, even with a different `original_schema`,
   `simplified_schema` or `encoding`. Each call now counts afresh.

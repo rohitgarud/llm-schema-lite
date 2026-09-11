@@ -156,6 +156,14 @@ class TestCoerceValue:
         assert result == "critical"
         assert metadata is None
 
+    def test_coerce_enum_numeric_string(self):
+        """Numeric text matches an integer enum member and returns the member itself."""
+        result, metadata = coerce_value("2", "integer", enum_values=[1, 2])
+        assert result == 2
+        assert type(result) is int
+        assert metadata is not None
+        assert metadata.coercion_type == "enum_from_string"
+
     def test_coerce_list_single_item(self):
         """Coerce single item to list when enabled."""
         result, metadata = coerce_value("item", "array", coerce_list_single_item=True)

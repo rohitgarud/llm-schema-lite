@@ -5,7 +5,7 @@ from typing import Any
 import yaml
 
 from ..exceptions import ConversionError
-from .base import BaseParser, _extract_from_markdown
+from .base import BaseParser, _extract_from_markdown, _strip_leading_reasoning
 from .json_parser import _parse_json
 
 
@@ -31,7 +31,8 @@ class YAMLParser(BaseParser):
         Raises:
             ConversionError: If parsing fails and repair is disabled or unsuccessful
         """
-        # Prefer a markdown code block
+        # Skip a leading reasoning block, then prefer a markdown code block
+        text = _strip_leading_reasoning(text)
         extracted_text = _extract_from_markdown(text, "yaml")
 
         # No block found: try YAML-specific extraction

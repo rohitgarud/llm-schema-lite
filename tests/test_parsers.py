@@ -240,3 +240,31 @@ class TestLoadsIntegration:
 
         with pytest.raises(ConversionError):
             loads('{"name": "John", "age": 30,}', repair=False)
+
+
+class TestExtractionFixes:
+    """A leading reasoning block, and brackets inside JSON strings."""
+
+    def test_leading_think_block_is_skipped(self):
+        """Qwen3/DeepSeek-R1 reason inline and restate the format; that placeholder was
+        parsed instead of the answer, in both modes."""
+        reply = '<think>Format is {"reasoning": ..., "answer": ...}</think>\n{"answer": "Paris"}'
+        assert JSONParser().parse(reply) == {"answer": "Paris"}
+        reply = "<THINKING>\nanswer: maybe Lyon\n</THINKING>\nanswer: Paris"
+        assert YAMLParser().parse(reply) == {"answer": "Paris"}
+        # Only a leading block: a value that merely contains the tag is data
+        assert JSONParser().parse('{"a": "<think>x</think>"}') == {"a": "<think>x</think>"}
+
+    def test_brace_inside_a_string_with_prose_around(self):
+        """stanfordnlp/dspy#8759: the `{` never balanced, so json_repair got the whole
+        reply and returned only the inner list."""
+        reply = (
+            'Here it is:\n{"reasoning": "x", "issue_list": '
+            '[{"issue_type": "t", "problem_code_snippet": "if (user) {"}]}\nDone.'
+        )
+        assert JSONParser().parse(reply) == {
+            "reasoning": "x",
+            "issue_list": [{"issue_type": "t", "problem_code_snippet": "if (user) {"}],
+        }
+        assert JSONParser().parse('Result: {"a": "say \\"}\\" now"} ok') == {"a": 'say "}" now'}
+        assert JSONParser().parse('Items: ["a]", "b"] done') == ["a]", "b"]

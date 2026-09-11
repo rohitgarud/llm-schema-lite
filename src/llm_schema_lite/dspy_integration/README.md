@@ -301,15 +301,24 @@ adapter = StructuredOutputAdapter(
 - **parse_config**: `ParseConfig | None`
   - `None` reproduces upstream `JSONAdapter`: a field that fails `parse_value` leaks its
     `ValidationError`
-  - When given, a rejected field is offered to two rescues in order — the coercion
-    rescue, then a structural repair (`allow_coercion`, on by default) that reshapes what
+  - When given, a rejected field is offered to two rescues in order. First comes the
+    coercion rescue: an `Optional[X]` field holding a scalar is tried against `X`, so
+    `14` for `Optional[str]`, or an enum member's name under `Optional`, parses as it
+    would bare. Then comes a structural repair (`allow_coercion`, on by default) that reshapes what
     the model sent and never adds a value: it strips a copied `*` marker from nested keys,
     unwraps one-item lists where the schema wants an object, merges a list of records
     into one object where the schema wants an object whose every field is a list, moves
     fields the model hoisted out of a nested object back under it, nulls an optional
     object whose every field is null, wraps a lone value in a list where the schema wants
-    a list of values, and drops all-null list items. A reply that sends an output field's
-    contents without its key has them moved under it before the missing-field error
+    a list of values, and drops all-null list items. A reply missing output fields is
+    reshaped once more before the missing-field error, in three cases:
+    - a field's contents sent without its key are moved under it;
+    - fields wrapped under one extra key (`{"json_input": {...}}`, as a dict or as JSON
+      text) are unwrapped;
+    - a key that unambiguously near-misses an absent field (`tool_args` for
+      `next_tool_args`) is renamed.
+
+    If that retry fails, the original error is raised.
   - `parse_config.partial=True` keeps the valid part of a field that is still rejected:
     each invalid value is nulled — an invalid list item is dropped instead, and a value
     that may not be null takes its parent with it — and the rest is kept. Only a field
