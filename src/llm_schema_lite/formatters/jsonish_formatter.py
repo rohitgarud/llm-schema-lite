@@ -121,7 +121,7 @@ class JSONishFormatter(BaseFormatter):
             return f" {self.comment_prefix} {self.sanitize_comment_text(schema['description'])}"
         return ""
 
-    def _defer_comment_body(self, representation: str, has_description: bool) -> str:
+    def _defer_comment_body(self, head: str, tail: str, has_description: bool) -> str:
         """Route the trailing comment body of a scalar representation into the deferred slot.
 
         Called only on the string-returning branches of ``process_types`` /
@@ -141,27 +141,32 @@ class JSONishFormatter(BaseFormatter):
         BEFORE the comment marker in every f-string, so they are excluded by construction
         and keep their current escaped spelling.
 
+        The split is searched for in ``tail`` only. ``head`` may already hold rendered
+        text with comments of its own -- a union's members, a pattern containing
+        ``" // "`` -- and splitting there would turn the rest of it into comment lines.
+
         Args:
-            representation: A fully-built field representation string, e.g.
-                ``'string // say "hi" now'``, about to be stored as a dict value.
+            head: The representation up to this node's own comment, e.g. ``'string'``
+                or a union's joined members.
+            tail: This node's own comment run, e.g. ``' // say "hi" now'``.
             has_description: Whether a non-empty description fragment was actually
                 produced for this node. Only then is anything routed, so every
                 description-free field stays on the literal path with its golden intact.
 
         Returns:
-            ``representation`` unchanged when ``has_description`` is false, when it
-            carries no ``f" {self.comment_prefix} "`` occurrence, or when it already
-            carries a deferred marker. Otherwise ``representation`` split at its FIRST
-            ``f" {self.comment_prefix} "`` occurrence into ``head`` and ``body``,
-            returned as ``head + self.defer_comment(body)``.
+            ``head + tail`` unchanged when ``has_description`` is false, when ``tail``
+            carries no ``f" {self.comment_prefix} "`` occurrence, or when either already
+            carries a deferred marker. Otherwise ``tail`` split at its FIRST such
+            occurrence into ``before`` and ``body``, returned as
+            ``head + before + self.defer_comment(body)``.
         """
+        representation = head + tail
         if not has_description or self.carries_deferred_comment(representation):
             return representation
-        marker = f" {self.comment_prefix} "
-        head, sep, body = representation.partition(marker)
+        before, sep, body = tail.partition(f" {self.comment_prefix} ")
         if not sep:
             return representation
-        return head + self.defer_comment(body)
+        return head + before + self.defer_comment(body)
 
     def _get_options_format_pattern(self, value: dict[str, Any]) -> tuple[str, str]:
         """Extract format and pattern from schema value.
@@ -262,7 +267,7 @@ class JSONishFormatter(BaseFormatter):
                 # The result of this arm becomes a dict value and therefore meets
                 # `json.dumps`; route the comment body through the deferred channel so a
                 # quoted or multi-line definition description is not re-escaped.
-                output = self._defer_comment_body(str(output) + def_description, True)
+                output = self._defer_comment_body(str(output), def_description, True)
             elif isinstance(output, dict | list) and key is not None:
                 self.pending_prefix[key] = def_description.strip()
 
@@ -282,7 +287,7 @@ class JSONishFormatter(BaseFormatter):
             elif isinstance(output, str):
                 fragment = f" {self.comment_prefix} {prop_description}"
                 if fragment not in output:
-                    output = self._defer_comment_body(str(output) + fragment, True)
+                    output = self._defer_comment_body(str(output), fragment, True)
             elif isinstance(output, dict | list) and key is not None:
                 # MERGE, never overwrite: `pending_postfix[key]` may already hold an
                 # `OR null ...` fragment from `process_anyof` or a `default` fragment, and
@@ -365,7 +370,7 @@ class JSONishFormatter(BaseFormatter):
             for item in items
         ]
         output = label + joiner.join(str_items) if len(str_items) > 1 else str_items[0]
-        return self._defer_comment_body(f"{output}{tail}", bool(description))
+        return self._defer_comment_body(output, tail, bool(description))
 
     def process_anyof(  # type: ignore[override]
         self, value: dict[str, Any], key: str | None = None
@@ -440,7 +445,8 @@ class JSONishFormatter(BaseFormatter):
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
                 return self._defer_comment_body(
-                    f"{type_name}{pattern}{format_}{length_range}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                    f"{type_name}{pattern}{format_}{length_range}",
+                    f"{comment}{title}{description}{default_value}{example}",
                     bool(description),
                 )
             elif value["type"] in ["number", "integer"]:
@@ -450,7 +456,8 @@ class JSONishFormatter(BaseFormatter):
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
                 return self._defer_comment_body(
-                    f"{type_name}{format_}{pattern}{value_range}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                    f"{type_name}{format_}{pattern}{value_range}",
+                    f"{comment}{title}{description}{default_value}{example}",
                     bool(description),
                 )
             elif value["type"] == "boolean":
@@ -458,7 +465,8 @@ class JSONishFormatter(BaseFormatter):
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
                 return self._defer_comment_body(
-                    f"{type_name}{comment}{title}{description}{default_value}{example}",
+                    type_name,
+                    f"{comment}{title}{description}{default_value}{example}",
                     bool(description),
                 )
             elif value["type"] == "array":
@@ -506,7 +514,8 @@ class JSONishFormatter(BaseFormatter):
                         else ""
                     )
                     return self._defer_comment_body(
-                        f"{items} []{items_range}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                        f"{items} []{items_range}",
+                        f"{comment}{title}{description}{default_value}{example}",
                         bool(description),
                     )
                 else:
@@ -516,7 +525,8 @@ class JSONishFormatter(BaseFormatter):
                         else ""
                     )
                     return self._defer_comment_body(
-                        f"[]{items_range}{comment}{title}{description}{default_value}{example}",
+                        f"[]{items_range}",
+                        f"{comment}{title}{description}{default_value}{example}",
                         bool(description),
                     )
             elif value["type"] == "object":
@@ -536,7 +546,8 @@ class JSONishFormatter(BaseFormatter):
 
                 if len(value["type"]) == 1:
                     return self._defer_comment_body(
-                        f"{value['type'][0]} {format_}{pattern}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                        f"{value['type'][0]} {format_}{pattern}",
+                        f"{comment}{title}{description}{default_value}{example}",
                         bool(description),
                     )
                 elif len(value["type"]) == 2 and "null" in value["type"]:
@@ -558,12 +569,14 @@ class JSONishFormatter(BaseFormatter):
                         elif isinstance(array_items, str | int | float | bool):
                             return f"{array_items} []"
                     return self._defer_comment_body(
-                        f"{value['type'][0]} {format_}{pattern} or null {comment}{title}{description}{default_value}{example}",  # noqa: E501
+                        f"{value['type'][0]} {format_}{pattern} or null ",
+                        f"{comment}{title}{description}{default_value}{example}",
                         bool(description),
                     )
                 else:
                     return self._defer_comment_body(
-                        f"{', '.join(value['type'])} {format_}{pattern}{comment}{title}{description}{default_value}{example}",  # noqa: E501
+                        f"{', '.join(value['type'])} {format_}{pattern}",
+                        f"{comment}{title}{description}{default_value}{example}",
                         bool(description),
                     )
 

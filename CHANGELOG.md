@@ -306,6 +306,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SchemaLite.compare_tokens()` for TypeScript and YAML cached its first counts and
   returned them for every later call, even with a different `original_schema`,
   `simplified_schema` or `encoding`. Each call now counts afresh.
+- **JSONish no longer turns a described union's members into comments.** For
+  `u: A | B = Field(description="either")` where `A` has a field with a default, the
+  union's comment was split at the first `" // "` in the whole rendering, which was
+  `A`'s `(default=1)`. The rest of `A` and all of `B` came out as `//` comment lines, so
+  the model never saw those fields, and internal `⟪lslid…⟫` tokens leaked into the
+  prompt. The split now happens only inside the node's own comment, which also stops a
+  `pattern` containing `" // "` from being cut. Output that was already correct is
+  unchanged.
 - **Output-field envelope: a schema is now bound to the key it must be emitted under.**
   In SECTIONS layout an output schema opened a brace at column 0 on its own line, so a
   small model read it as the response *envelope* and emitted the record bare —

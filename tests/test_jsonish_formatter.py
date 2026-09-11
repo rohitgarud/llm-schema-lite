@@ -2722,6 +2722,33 @@ def test_jsonish_pending_maps_fully_applied_and_no_token_leak_corpus(
     assert orphans == [], f"pending entries never applied to any line: {orphans}"
 
 
+def test_jsonish_described_union_keeps_member_fields_out_of_its_comment() -> None:
+    """A described union's comment is split where its own comment starts.
+
+    It used to be split at the first ``" // "`` anywhere, which here is the member's
+    ``(default=1)``: the rest of ``A`` and all of ``B`` became comment lines and leaked
+    identity tokens.
+    """
+
+    class A(BaseModel):
+        x: int = 1
+        y: str
+
+    class B(BaseModel):
+        z: str
+
+    class M(BaseModel):
+        u: A | B = Field(description="either")
+
+    result = JSONishFormatter(M.model_json_schema()).transform_schema()
+
+    assert DEFERRED_OPEN not in result and DEFERRED_CLOSE not in result
+    commented = [line for line in result.split("\n") if line.lstrip().startswith("//")]
+    assert not [line for line in commented if "y*" in line or "z*" in line], result
+    assert "y*: string" in result and "z*: string" in result and "either" in result
+    assert ",," not in result
+
+
 class Item(BaseModel):
     name: str = Field(description="Item name")
     qty: int = Field(default=1, description="Quantity")
