@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Literal
+
 import pydantic
 import pytest
 
@@ -13,6 +16,7 @@ from dspy.utils.exceptions import AdapterParseError  # noqa: E402
 from llm_schema_lite import FormatterConfig, ParseConfig  # noqa: E402
 from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter  # noqa: E402
 from llm_schema_lite.dspy_integration.adapters.structured_output_adapter import (
+    _merge_record_lists,
     _null_empty_objects,
     _prune_null_list_items,
     _renest_hoisted_fields,
@@ -732,3 +736,101 @@ class TestWrapScalarsInListsRescue:
         assert _wrap_scalars_in_lists({"Company": "Apple Inc"}, _WrapRec) == {
             "Company": ["Apple Inc"]
         }
+
+
+class _MergeEntities(pydantic.BaseModel):
+    Company: list[str] | None = None
+    Date: list[str] | None = None
+
+
+class TestMergeRecordListsRescue:
+    """An object of lists answered as one record per entity (llama3.2:1b, financial-NER)."""
+
+    RECORDS = '{"entities": [{"Company": "Apple", "Date": "2021"}, {"Company": ["Intel"]}]}'
+
+    @staticmethod
+    def _sig():
+        return dspy.Signature(
+            {"text": (str, dspy.InputField()), "entities": (_MergeEntities, dspy.OutputField())}
+        )
+
+    def test_rescue_concatenates_each_field(self):
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSON, parse_config=ParseConfig()
+        ).parse(self._sig(), self.RECORDS)
+        assert out["entities"] == _MergeEntities(Company=["Apple", "Intel"], Date=["2021"])
+
+    def test_is_off_when_parse_config_is_none(self):
+        with pytest.raises((pydantic.ValidationError, AdapterParseError, ValueError)):
+            StructuredOutputAdapter(output_mode=OutputMode.JSON).parse(self._sig(), self.RECORDS)
+
+    def test_runs_before_the_null_item_prune(self):
+        """Pruning first would leave one record, after the unwrap has already run."""
+        both = '{"entities": [{"Company": "Apple"}, {"Company": null, "Date": null}]}'
+        out = StructuredOutputAdapter(
+            output_mode=OutputMode.JSON, parse_config=ParseConfig()
+        ).parse(self._sig(), both)
+        assert out["entities"] == _MergeEntities(Company=["Apple"], Date=None)
+
+    def test_only_where_every_field_is_a_list(self):
+        value = [{"family": "A"}, {"family": "B"}]
+        assert _merge_record_lists(value, _UnwrapName) is value
+
+    def test_never_where_the_slot_also_admits_a_list(self):
+        value = [{"Company": ["A"]}, {"Company": ["B"]}]
+        assert _merge_record_lists(value, _MergeEntities | list[_MergeEntities]) is value
+
+
+class _SalClaim(pydantic.BaseModel):
+    kind: Literal["auto", "home"] | None = None
+    amount: int
+
+
+class _SalContact(pydantic.BaseModel):
+    kind: Literal["home", "work"]
+    value: str
+
+
+class _SalRec(pydantic.BaseModel):
+    name: str
+    claim: _SalClaim | None = None
+    contacts: list[_SalContact] = pydantic.Field(default_factory=list)
+
+
+class TestPartialSalvage:
+    """`partial=True` keeps the valid part of a rejected field instead of dropping it all."""
+
+    BAD_ENUM = '{"record": {"name": "Ada", "claim": {"kind": "boat", "amount": 3}}}'
+
+    @staticmethod
+    def _parse(completion, annotation=_SalRec, partial=True):
+        sig = dspy.Signature(
+            {"text": (str, dspy.InputField()), "record": (annotation, dspy.OutputField())}
+        )
+        adapter = StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH, parse_config=ParseConfig(partial=partial)
+        )
+        return adapter.parse(sig, completion)["record"]
+
+    def test_nulls_an_invalid_nested_enum_and_keeps_the_rest(self, caplog):
+        with caplog.at_level(logging.DEBUG):
+            record = self._parse(self.BAD_ENUM)
+        assert record == _SalRec(name="Ada", claim=_SalClaim(kind=None, amount=3))
+        assert "null claim.kind" in caplog.text
+
+    def test_is_off_without_partial(self):
+        with pytest.raises(pydantic.ValidationError):
+            self._parse(self.BAD_ENUM, partial=False)
+
+    def test_drops_a_list_item_whose_required_value_is_invalid(self):
+        record = self._parse(
+            '{"record": {"name": "Ada", "contacts": '
+            '[{"kind": "home", "value": "1"}, {"kind": "fax", "value": "2"}]}}'
+        )
+        assert record.contacts == [_SalContact(kind="home", value="1")]
+
+    def test_nothing_valid_left_drops_the_field(self):
+        """A required enum at the field's top level cannot be nulled: the field is dropped
+        and refilled by its default, as before."""
+        record = self._parse('{"record": {"kind": "fax", "value": "2"}}', _SalContact | None)
+        assert record is None

@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import enum
 import inspect
@@ -58,6 +59,11 @@ _YAML_PARSE_ERROR_MESSAGE = "LM response cannot be parsed as YAML or JSON."
 # FormatterConfig.max_recursion_depth (a render-side cap) and from MARKER_WALK_MAX_DEPTH
 # (parsers/schema_parser.py) -- each bounds a different walk.
 _ARRAY_UNWRAP_MAX_DEPTH = 8
+
+# Bound on _salvage_leaves: one validation per nulled or dropped node, so a reply with
+# more invalid leaves than this is dropped whole, as it was before partial salvaged. The
+# longest salvage over the captured small-model replies took 142 steps.
+_SALVAGE_MAX_STEPS = 256
 
 # Names the offending mode and both escape hatches; asserted on by
 # tests/test_dspy_adapter_streaming.py (must contain "YAML" and "streaming").
@@ -281,6 +287,54 @@ def _unwrap_single_item_lists(value: Any, annotation: Any) -> Any:
     return _walk(value, model, _unwrap_single_item_lists)
 
 
+def _merge_record_lists(value: Any, annotation: Any) -> Any:
+    """Merge a list of records into one object where the schema wants an object of lists.
+
+    Rescue-only; the several-item twin of :func:`_unwrap_single_item_lists`. Asked for one
+    object whose every field is a list -- financial-NER's ``entities`` -- small models send
+    one record per entity instead::
+
+        {"entities": [{"Company": "Apple", "Date": "2021"}, {"Company": "Intel"}]}
+        {"entities": {"Company": ["Apple", "Intel"], "Date": ["2021"]}}
+
+    Replaying 1,350 captured completions (three small models x five corpora x three modes,
+    ``ParseConfig()``) with and without it: financial-NER went from 126 to 216 of 270
+    parsed and recall on non-null gold 0.232 -> 0.407 (``llama3.2:1b`` JSON 0.016 ->
+    0.422); no other corpus changed and no case got worse. The rescued records bring their
+    inventions too: categories filled where the gold is empty rose 217 -> 543 of 1,323,
+    half of the new ones placeholder strings ("not explicitly mentioned") of the kind
+    replies that parse unrepaired carry as well. It runs before the prune, which could cut
+    two records to one after the unwrap ran.
+
+    **Why this repair is safe.** When every field is a list, the records have one reading:
+    each field is the concatenation of that field across them, in order. A lone value is
+    appended whole, a null adds nothing (a field null in every record stays null), and a
+    slot that also admits a list is left alone -- there the list may be the answer. It
+    keeps exactly what the model wrote, right or wrong; without it the reply raises.
+
+    Returns ``value`` itself (identity-comparable) when nothing changed.
+    """
+    model = _object_model(annotation)
+    if (
+        model is not None
+        and model.model_fields
+        and _list_item_type(annotation) is None
+        and isinstance(value, list)
+        and len(value) > 1
+        and all(isinstance(item, dict) for item in value)
+        and all(_list_item_type(f.annotation) is not None for f in model.model_fields.values())
+    ):
+        merged: dict[str, Any] = {}
+        for record in value:
+            for k, x in record.items():
+                if x is None:
+                    merged.setdefault(k, None)
+                else:
+                    merged[k] = (merged.get(k) or []) + (x if isinstance(x, list) else [x])
+        value = merged
+    return _walk(value, annotation, _merge_record_lists)
+
+
 def _object_model(annotation: Any) -> type[pydantic.BaseModel] | None:
     """The pydantic model an annotation admits as an object (through Optional/Annotated)."""
     members, _ = _members(annotation)
@@ -425,6 +479,70 @@ def _strip_nested_markers(value: Any, annotation: Any, markers: list[str]) -> An
     return value if stripped == value else stripped
 
 
+def _salvage_leaves(value: Any, annotation: Any) -> tuple[Any, list[str]] | None:
+    """Null what fails validation and keep the rest -- ``ParseConfig(partial=True)`` only.
+
+    Validates ``value`` with ``parse_value``; on error, follows the first error's ``loc``
+    through the data (skipping segments that do not index it -- union and validator tags)
+    and nulls the node it reaches, adding a ``missing`` key as null. A node inside a list
+    is dropped from it instead, and a node null does not satisfy is retried one level up.
+    Repeats until the value validates, the failure climbs to the root, or
+    ``_SALVAGE_MAX_STEPS`` runs out -- the last two return None.
+
+    **Why opt-in.** The structural repairs only reshape what the model sent; this deletes
+    part of it, so the caller gets a record the model did not write, and it keeps every
+    value that validated, right or wrong, so a record rescued from one bad enum also
+    brings back whatever the model invented beside it. Replaying 1,350 captured
+    completions (three small models x five corpora x three modes) with it: recall on
+    non-null gold insurance-claims 0.259 -> 0.455, patient-notes 0.038 -> 0.323, synthetic
+    0.603 -> 0.705, no case worse -- but values where the gold is null rose with it,
+    patient-notes 0.022 -> 0.369 of null-gold fields.
+
+    Returns ``(parsed, steps)`` -- the ``parse_value`` result and each ``null <path>`` /
+    ``drop <path>`` taken -- or None. Never mutates ``value``.
+    """
+    value = copy.deepcopy(value)
+    steps: list[str] = []
+    tried: set[tuple[Any, ...]] = set()
+    for _ in range(_SALVAGE_MAX_STEPS):
+        try:
+            return parse_value(value, annotation), steps
+        except pydantic.ValidationError as exc:
+            error = exc.errors()[0]
+        except ValueError:
+            return None
+        path: list[Any] = []
+        node, loc = value, error["loc"]
+        for i, seg in enumerate(loc):
+            indexes = (isinstance(node, dict) and seg in node) or (
+                isinstance(node, list) and isinstance(seg, int) and seg < len(node)
+            )
+            if indexes:
+                path.append(seg)
+                node = node[seg]
+            elif error["type"] == "missing" and i == len(loc) - 1 and isinstance(node, dict):
+                path.append(seg)
+        while path and tuple(path) in tried:
+            path.pop()
+        if not path:
+            return None
+        tried.add(tuple(path))
+        *head, last = path
+        parent = value
+        for seg in head:
+            parent = parent[seg]
+        where = "".join(f"[{s}]" if isinstance(s, int) else f".{s}" for s in path).lstrip(".")
+        if isinstance(parent, list):
+            del parent[last]
+            # Indices past the dropped item shifted: forget what was tried under this list.
+            tried = {t for t in tried if t[: len(head)] != tuple(head)}
+            steps.append(f"drop {where}")
+        else:
+            parent[last] = None
+            steps.append(f"null {where}")
+    return None
+
+
 class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
     """
     Unified adapter for structured output with multiple format support.
@@ -468,9 +586,11 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         parse_config: Optional ParseConfig. When None (default), parsing is
             upstream-JSONAdapter-equivalent: a field that fails parse_value leaks its
             ValidationError. When supplied, a field that parse_value rejects is first
-            offered to the coercion rescue (see _coerce_field_value); if that also
-            fails and parse_config.partial is True, the field is dropped and refilled
-            by apply_output_field_defaults. Coercion/drop events are logged at DEBUG
+            offered to the coercion rescue (see _coerce_field_value), then to the
+            structural repairs; if those also fail and parse_config.partial is True, its
+            invalid values are nulled and the rest kept (see _salvage_leaves), and only a
+            field with nothing valid left is dropped and refilled by
+            apply_output_field_defaults. Coercion/salvage/drop events are logged at DEBUG
             only; the Prediction shape is unchanged.
             parse_config no longer gates whether marker stripping happens -- that is
             unconditional and sourced from _effective_formatter_config().required_marker.
@@ -1208,11 +1328,13 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         Mirrors upstream JSONAdapter.parse (DSPy 3.3.1) with two rescues as the only
         insertions -- _coerce_field_value, then the structural repair: reply-level strays
         moved into the field (_move_strays), nested markers stripped
-        (_strip_nested_markers), then _unwrap_single_item_lists, _renest_hoisted_fields,
-        _null_empty_objects, _wrap_scalars_in_lists and _prune_null_list_items -- plus one
-        fallback before the missing-field error: an output field sent without its key is
-        moved under it and the reply parsed once more. parse funnels every mode through
-        it after the mode-specific extraction.
+        (_strip_nested_markers), then _unwrap_single_item_lists, _merge_record_lists,
+        _renest_hoisted_fields, _null_empty_objects, _wrap_scalars_in_lists and
+        _prune_null_list_items -- plus one fallback before the missing-field error: an
+        output field sent without its key is moved under it and the reply parsed once
+        more. With parse_config.partial, a field still rejected is offered to
+        _salvage_leaves before it is dropped. parse funnels every mode through it after
+        the mode-specific extraction.
 
         Invariants that any change to this method must preserve:
           - self.parse_config is None => structurally upstream-equivalent. The first
@@ -1278,6 +1400,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                     else:
                         logger.debug(f"Coercion rescued output field {k!r}: {metadata}")
                         continue
+                best = v
                 if self.parse_config.allow_coercion:
                     # Unwrap first: pruning first would turn `[{"family": null}]` under an
                     # object-typed field into `[]`, which no longer has anything to unwrap.
@@ -1289,10 +1412,12 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                         self._marker_candidates(),
                     )
                     repaired = _unwrap_single_item_lists(rooted, annotation)
+                    repaired = _merge_record_lists(repaired, annotation)
                     repaired = _renest_hoisted_fields(repaired, annotation)
                     repaired = _null_empty_objects(repaired, annotation)
                     repaired = _wrap_scalars_in_lists(repaired, annotation)
                     repaired = _prune_null_list_items(repaired)
+                    best = repaired
                     if repaired is not v:
                         try:
                             out[k] = parse_value(repaired, annotation)
@@ -1302,6 +1427,12 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                             logger.debug(f"Structural rescue repaired output field {k!r}")
                             continue
                 if self.parse_config.partial:
+                    salvaged = _salvage_leaves(best, annotation)
+                    if salvaged is not None:
+                        out[k], steps = salvaged
+                        if self.parse_config.log_coercions:
+                            logger.debug(f"Partial salvage kept output field {k!r}: {steps}")
+                        continue
                     logger.debug(f"Dropping unparseable output field {k!r} (partial=True)")
                     continue
                 raise

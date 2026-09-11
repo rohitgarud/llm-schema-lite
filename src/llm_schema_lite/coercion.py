@@ -32,7 +32,9 @@ class ParseConfig:
     allow_coercion: bool = True  # Try coercion before rejecting type mismatch
     coerce_list_single_item: bool = False  # Wrap single item in list
     log_coercions: bool = True  # Log coercion events for debugging
-    partial: bool = False  # Enable partial extraction (extract valid fields even if some fail)
+    # Keep what validates instead of failing: loads(schema=...) drops a failing optional
+    # field; StructuredOutputAdapter first nulls just the invalid values inside a field.
+    partial: bool = False
     strip_required_marker: str = "*"  # Trailing marker stripped from reply keys
 
 

@@ -92,6 +92,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **List-of-records merge in the DSPy adapter.** With `parse_config` set
+  (`allow_coercion`), an output value sent as a list of two or more records, where the
+  schema wants one object whose every field is a list, is merged into that object: each
+  field becomes the concatenation across the records, a lone value appended whole, a null
+  adding nothing. A slot that also admits a list is never touched. Parsing 1,350 captured
+  completions (3 models x 5 corpora x 3 modes) with and without it: financial-NER went
+  from 126 to 216 of 270 parsed and recall on non-null gold from 0.232 to 0.407
+  (`llama3.2:1b` JSON 0.016 -> 0.422, 2/30 -> 29/30); no other corpus changed and no case
+  got worse. The rescued records keep what the model invented: categories filled where
+  the gold is empty rose 217 -> 543 of 1,323, half of the new ones placeholder strings
+  ("not explicitly mentioned") that unrepaired replies carry too.
 - **Extraction-accuracy benchmark arm.** `benchmarking/dspy_adapters/{cases,accuracy}.py`
   generate labeled extraction cases and score a reply field-by-field against ground truth,
   with `--accuracy --cases N --cases-seed S` on the benchmark CLI and a third results file
@@ -205,6 +216,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ParseConfig(partial=True)` now keeps the valid part of a field in the DSPy adapter.**
+  A field still rejected after the rescues used to be dropped whole, which recovers nothing
+  for a single-output signature. Now its invalid values are nulled (an invalid list item is
+  dropped, and a value that may not be null takes its parent with it) and the rest is
+  kept; only a field with nothing valid left is dropped as before. The steps are logged at
+  DEBUG when `log_coercions` is on. On the same replay, recall on non-null gold rose:
+  insurance-claims 0.259 -> 0.455, patient-notes 0.038 -> 0.323, synthetic 0.603 -> 0.705,
+  no case worse. Values where the gold is null rose with it (patient-notes 0.022 -> 0.369
+  of null-gold fields), which is why it stays opt-in. `partial=False`, `parse_config=None`
+  and `loads(schema=..., partial=True)` are unchanged.
 - Documentation: the top-level README gains Installation, Quick Start and DSPy Integration
   sections; the DSPy integration README is corrected against the shipped adapter; and
   every runnable code block in both, plus `examples/basic_usage.py`, is now executed by
