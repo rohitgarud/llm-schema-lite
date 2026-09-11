@@ -42,6 +42,7 @@ configured.
 from __future__ import annotations
 
 import functools
+import json
 import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
@@ -61,7 +62,7 @@ from .adapters import (
 )
 from .cases import Case
 from .encoding import ENCODING_NAME
-from .fakes import JSON_OBJECT_RESPONSE_FORMAT, Issue1871LM, JsonObjectOnlyLM
+from .fakes import JSON_OBJECT_RESPONSE_FORMAT, Issue1871LM, JsonObjectOnlyLM, RawTextLM
 from .outcomes import Outcome, PromptRow, ReproRow, TrialRow, classify
 from .signatures import SIGNATURE_IDS, SIGNATURES
 
@@ -167,6 +168,16 @@ class _Observed(NamedTuple):
     lm_calls: int
     response_format_sent: str
     tokens: tuple[int | None, int | None, int | None]  # total, prompt, completion
+    replies: tuple[str, ...]  # the reply text of each call the cell added, in call order
+
+
+def _replies(lm: BaseLM, n0: int) -> tuple[str, ...]:
+    """The reply text of every call added to `lm.history` since index `n0`, in call order."""
+    return tuple(
+        output if isinstance(output, str) else output.get("text") or ""
+        for entry in lm.history[n0:]
+        for output in entry["outputs"]
+    )
 
 
 def _observe(lm: BaseLM, call: Callable[[], Any], /, **context: Any) -> _Observed:
@@ -200,6 +211,7 @@ def _observe(lm: BaseLM, call: Callable[[], Any], /, **context: Any) -> _Observe
         lm_calls,
         recorder.last(),
         _reported_tokens(lm, n0, lm_calls),
+        _replies(lm, n0),
     )
 
 
@@ -450,7 +462,29 @@ def run_one_case(
         recall_matched=field_score.recall_matched,
         recall_total=field_score.recall_total,
         invented=field_score.invented,
+        replies=obs.replies,
     )
+
+
+def replay_accuracy(recorded: list[dict[str, str]], cases: list[Case]) -> list[AccuracyRow]:
+    """Re-score the replies an accuracy CSV recorded, with today's adapter code. No model.
+
+    Each row's `replies` (a JSON list) are fed back in order by a `RawTextLM`, so a row goes
+    through `run_one_case` exactly as it did live - the same adapter, parse, rescues and
+    scoring. Valid only while the adapter's prompt is unchanged: a reply answers the prompt
+    it was sent. A replay that makes more calls than were recorded gets DummyLM's "No more
+    responses" and fails to parse; wall time and tokens are not measurements here.
+    """
+    by_id = {case.case_id: case for case in cases}
+    rows: list[AccuracyRow] = []
+    for rec in recorded:
+        cell = ADAPTERS[rec["adapter"]]
+        adapter = cell.factory()
+        lm = RawTextLM(json.loads(rec["replies"]), adapter=adapter)
+        rows.append(
+            run_one_case(adapter, rec["adapter"], cell.config_repr, by_id[rec["case_id"]], lm)
+        )
+    return rows
 
 
 def run_repro_1871_offline() -> list[ReproRow]:

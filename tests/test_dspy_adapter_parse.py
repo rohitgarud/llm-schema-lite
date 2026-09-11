@@ -230,6 +230,40 @@ class TestValueRescues:
         with pytest.raises(pydantic.ValidationError):
             adapter.parse(_Rescued, completion)
 
+    def test_enum_named_in_another_case(self):
+        """ "good" for GOOD = 2 and "red" for RED = "crimson", bare or Optional."""
+        completion = '{"rating": "good", "color": "red", "series_model": null}'
+        adapter = make_adapter(OutputMode.JSONISH, parse_config=ParseConfig())
+        assert adapter.parse(_Rescued, completion) == {
+            "rating": _Rating.GOOD,
+            "color": _Color.RED,
+            "series_model": None,
+        }
+        with pytest.raises(ValueError):
+            make_adapter(OutputMode.JSONISH).parse(_Rescued, completion)
+
+    def test_scalar_rescued_against_one_member_of_a_union(self):
+        """A union of several types, not just Optional[X], is tried member by member."""
+        sig = dspy.Signature(
+            {"q": (str, dspy.InputField()), "a": (int | _Color | None, dspy.OutputField())}
+        )
+        adapter = make_adapter(OutputMode.JSON, parse_config=ParseConfig())
+        assert adapter.parse(sig, '{"a": "RED"}') == {"a": _Color.RED}
+        assert adapter.parse(sig, '{"a": "red"}') == {"a": _Color.RED}
+        with pytest.raises(pydantic.ValidationError):
+            make_adapter(OutputMode.JSON).parse(sig, '{"a": "RED"}')
+
+    def test_output_field_constraints_are_checked(self):
+        """le=1.0 passed as an OutputField kwarg rejects 7.0 (dspy#10195); upstream takes it."""
+        sig = dspy.Signature(
+            {"q": (str, dspy.InputField()), "score": (float, dspy.OutputField(ge=0.0, le=1.0))}
+        )
+        adapter = make_adapter(OutputMode.JSON, parse_config=ParseConfig())
+        assert adapter.parse(sig, '{"score": 0.5}') == {"score": 0.5}
+        with pytest.raises(pydantic.ValidationError):
+            adapter.parse(sig, '{"score": 7.0}')
+        assert make_adapter(OutputMode.JSON).parse(sig, '{"score": 7.0}') == {"score": 7.0}
+
 
 ARRAY_VARIANTS = {
     "plain": '[{"answer": "x"}]',
@@ -967,3 +1001,27 @@ class TestExtractionFixes:
         adapter = make_adapter(OutputMode.JSON)
         completion = '<think>Format is {"answer": ...}</think>\n{"answer": "Paris"}'
         assert adapter.parse(QA, completion) == {"answer": "Paris"}
+
+    CUT = dspy.Signature(
+        {
+            "q": (str, dspy.InputField()),
+            "reasoning": (str, dspy.OutputField()),
+            "answer": (str, dspy.OutputField()),
+        }
+    )
+
+    def test_a_reply_cut_mid_string_loses_the_cut_value(self):
+        """dspy#1727: cut off at max_tokens, "bl" passed as the answer."""
+        cut = '{"reasoning": "the sky is blue because", "answer": "bl'
+        with pytest.raises(AdapterParseError):
+            make_adapter(OutputMode.JSON, parse_config=ParseConfig()).parse(self.CUT, cut)
+        assert make_adapter(OutputMode.JSON).parse(self.CUT, cut)["answer"] == "bl"
+
+    def test_only_the_cut_leaf_is_dropped(self):
+        sig = dspy.Signature(
+            {"q": (str, dspy.InputField()), "names": (list[str], dspy.OutputField())}
+        )
+        adapter = make_adapter(OutputMode.JSON, parse_config=ParseConfig())
+        assert adapter.parse(sig, '{"names": ["Ada", "Gra') == {"names": ["Ada"]}
+        # The object closed, so a stray quote after it is not a cut
+        assert adapter.parse(sig, '{"names": ["Ada"]} and "more') == {"names": ["Ada"]}

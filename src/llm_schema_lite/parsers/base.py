@@ -53,6 +53,11 @@ def _extract_from_markdown(text: str, mode: str) -> str:
 
 
 _LEADING_REASONING = re.compile(r"^\s*<(think|thinking)>.*?</\1>", re.DOTALL | re.IGNORECASE)
+# A close tag starting a line, with no open tag before it: the chat template supplied the
+# open tag, so the reply begins mid-reasoning.
+_UNOPENED_REASONING = re.compile(
+    r"\A(?:(?!<think).)*?^</think(?:ing)?>", re.DOTALL | re.IGNORECASE | re.MULTILINE
+)
 
 
 def _strip_leading_reasoning(text: str) -> str:
@@ -61,5 +66,9 @@ def _strip_leading_reasoning(text: str) -> str:
     Reasoning models (Qwen3, DeepSeek-R1) can reason inline before answering, often
     restating the output format, and that placeholder was extracted first. Only a block
     at the very start is removed: a field value that merely contains the tag is data.
+    When the template opened the block, only its close tag is in the reply; that is
+    removed with everything before it only at the start of a line, where no JSON string
+    can hold it.
     """
-    return _LEADING_REASONING.sub("", text, count=1)
+    text = _LEADING_REASONING.sub("", text, count=1)
+    return _UNOPENED_REASONING.sub("", text, count=1)

@@ -109,8 +109,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Constraints passed as `InputField`/`OutputField` kwargs reach the prompt.**
   `OutputField(ge=0.0, le=1.0)` now renders as `float (0.0 to 1.0)` in JSONish and YAML
   and as `minimum`/`maximum` in JSON mode's schema text. They were dropped because they
-  live in the field's metadata, not its annotation (stanfordnlp/dspy#10195). Nothing is
-  enforced at parse time, and the benchmark's prompts are byte-identical.
+  live in the field's metadata, not its annotation (stanfordnlp/dspy#10195). The
+  benchmark's prompts are byte-identical.
+- **With `parse_config` set, the DSPy adapter checks more and rescues more.**
+  - Constraints passed as `OutputField` kwargs are enforced at parse time, so `7.0` for
+    `OutputField(le=1.0)` fails like any invalid value (#10195). Upstream checks only the
+    annotation, so `parse_config=None` still accepts it.
+  - A JSON reply cut off mid-string, as at `max_tokens`, loses the value it was writing:
+    the repair closed the string, so `"answer": "bl` passed as a complete answer
+    (#1727). The field then fails as missing. A cut mid-number is not detected.
+  - The coercion rescue tries a scalar against each member of any union, not only
+    `Optional[X]`, and matches an enum member named or valued in another case (`"red"`
+    for `RED = "crimson"`).
+
+  Not yet measured on the benchmark.
+- **The accuracy benchmark records each raw reply, and `--replay CSV` re-scores them.**
+  Every accuracy CSV row gains a `replies` column, a JSON list with one reply text per LM
+  call. `--replay` feeds them back through the current adapter code with no model and no
+  environment, so a parser change can be checked against recorded replies in seconds.
+  It is valid while the adapters' prompts are unchanged.
 - **List-of-records merge in the DSPy adapter.** With `parse_config` set
   (`allow_coercion`), an output value sent as a list of two or more records, where the
   schema wants one object whose every field is a list, is merged into that object: each
@@ -355,7 +372,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extraction took the first `{`, so a reasoning model that restated the format
   (`{"answer": ...}`) inside its think block had that placeholder returned as the answer,
   with no error. JSON and YAML parsing now drop such a block at the very start of the
-  reply; the tag inside a value is untouched.
+  reply; the tag inside a value is untouched. When the chat template supplied the opening
+  tag, so the reply holds only `</think>`, everything up to that tag is dropped if it
+  starts a line.
 - **A `{` or `[` inside a JSON string no longer breaks extraction.** Brace counting
   ignored strings, so a code snippet such as `"if (user) {"` in a prose-wrapped reply
   never balanced, and the reply failed where DSPy's `JSONAdapter` parsed it

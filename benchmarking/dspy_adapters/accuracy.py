@@ -218,6 +218,7 @@ class AccuracyRow:
     recall_matched: int
     recall_total: int
     invented: int
+    replies: tuple[str, ...] = ()  # each LM call's reply text, in call order (for --replay)
 
     @property
     def ratio(self) -> float:

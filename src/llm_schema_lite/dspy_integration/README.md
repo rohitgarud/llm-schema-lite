@@ -301,10 +301,15 @@ adapter = StructuredOutputAdapter(
 - **parse_config**: `ParseConfig | None`
   - `None` reproduces upstream `JSONAdapter`: a field that fails `parse_value` leaks its
     `ValidationError`
+  - When given, a field's constraints passed as `OutputField` kwargs (`le=1.0`,
+    `max_length=`) are checked, which upstream does not do, and a JSON reply cut off
+    mid-string (at `max_tokens`) loses the value it was writing, so that field fails as
+    missing instead of passing truncated.
   - When given, a rejected field is offered to two rescues in order. First comes the
-    coercion rescue: an `Optional[X]` field holding a scalar is tried against `X`, so
-    `14` for `Optional[str]`, or an enum member's name under `Optional`, parses as it
-    would bare. Then comes a structural repair (`allow_coercion`, on by default) that reshapes what
+    coercion rescue: a scalar in a union field (`Optional[X]`, `int | Color | None`) is
+    tried against each member, so `14` for `Optional[str]`, or an enum member's name under
+    `Optional`, parses as it would bare, and an enum member named or valued in another
+    case (`"red"` for `RED`) is matched. Then comes a structural repair (`allow_coercion`, on by default) that reshapes what
     the model sent and never adds a value: it strips a copied `*` marker from nested keys,
     unwraps one-item lists where the schema wants an object, merges a list of records
     into one object where the schema wants an object whose every field is a list, moves

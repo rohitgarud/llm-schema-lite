@@ -123,6 +123,7 @@ exposes twelve flags:
 | `--offline` | `store_true` | `False` | Offline prompt-cost arm **plus** the synthetic #1871 reproduction. No `dspy.LM`; no network required — token counts degrade to `—` if `cl100k_base` cannot be loaded. Sets `TIKTOKEN_CACHE_DIR` only when doing so is what makes an offline count possible. Sub-second. |
 | `--live` | `store_true` | `False` | Live outcomes arm only. Requires the two env vars. |
 | `--accuracy` | `store_true` | `False` | Live accuracy arm **only**, and never run by default. Requires the same two env vars. |
+| `--replay` | `Path` | — | Re-score the `replies` an accuracy CSV recorded with the current adapter code, and write a new accuracy report (model `replay`). No model and no env. Pass the `--corpus`/`--cases`/`--cases-seed` the recorded run used. Valid only while the adapters' prompts are unchanged, because a reply answers the prompt it was sent. Exit 2 for a CSV without `replies` or a case id the corpus slice lacks. |
 | `--cases` | `int` | `30` | Accuracy-arm case count. Ignored by every other arm. |
 | `--cases-seed` | `int` | `0` | Synthetic-corpus seed. Recorded in the report's provenance block, because two accuracy runs are comparable only if they scored the same cases. |
 | `--corpus` | choice | `synthetic` | Accuracy-arm corpus: `synthetic`, or the third-party `pii`, `financial-ner`, `insurance-claims`, `patient-notes` (first `--cases` rows at a pinned revision — Hugging Face, which needs the `benchmark` extra, or GitHub for `patient-notes`). Recorded in provenance and named in the file stem. See §12. |
@@ -212,6 +213,10 @@ sibling, at the top of that file, before any table.
 The live aggregate's `parse rate` and `validation rate` columns are markdown-only for the
 same reason in reverse: they are per-`(adapter, signature)` derived values, and the CSV is
 strictly per-trial, so `LIVE_CSV_HEADER` is unchanged.
+The accuracy CSV's last column, `replies`, is a JSON list holding the raw text of each LM
+call the row made, in call order. `--replay` reads it back, so the same replies can be
+parsed and scored again after a parser change without running the model. CSVs written
+before this column existed cannot be replayed.
 
 ## 9. The #1871 status
 

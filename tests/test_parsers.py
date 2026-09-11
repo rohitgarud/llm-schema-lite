@@ -255,6 +255,16 @@ class TestExtractionFixes:
         # Only a leading block: a value that merely contains the tag is data
         assert JSONParser().parse('{"a": "<think>x</think>"}') == {"a": "<think>x</think>"}
 
+    def test_unopened_think_block_is_skipped(self):
+        """The chat template can supply `<think>`, so the reply holds only the close tag."""
+        reply = 'Format is {"answer": "wrong"}\n</think>\n{"answer": "Paris"}'
+        assert JSONParser().parse(reply) == {"answer": "Paris"}
+        assert YAMLParser().parse("answer: maybe Lyon\n</think>\nanswer: Paris") == {
+            "answer": "Paris"
+        }
+        # Not at the start of a line, so inside a value: data
+        assert JSONParser().parse('{"a": "x </think> y"}') == {"a": "x </think> y"}
+
     def test_brace_inside_a_string_with_prose_around(self):
         """stanfordnlp/dspy#8759: the `{` never balanced, so json_repair got the whole
         reply and returned only the inner list."""

@@ -42,6 +42,7 @@ from llm_schema_lite import (
     simplify_schema,
 )
 from llm_schema_lite.parsers import normalize_marker_keys
+from llm_schema_lite.parsers.base import _strip_leading_reasoning
 from llm_schema_lite.parsers.schema_parser import normalize_marker_keys_recursive
 
 logger = logging.getLogger(__name__)
@@ -1244,6 +1245,10 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             raw = self._extract_yaml(signature, completion)
         else:
             raw = self._extract_json(signature, completion)
+            # A reply cut off mid-string at max_tokens (stanfordnlp/dspy#1727) is closed by
+            # the repair, so the value it was writing would pass as complete. Drop it.
+            if self.parse_config is not None and _cut_mid_string(completion):
+                raw = _drop_last_leaf(raw)
         return self._build_output_fields(signature, completion, raw)
 
     def _extract_json(self, signature: type[Signature], completion: str) -> Any:
@@ -1427,11 +1432,18 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         raw = self._normalize_reply_keys(signature, raw)
 
         fields = {k: v for k, v in raw.items() if k in signature.output_fields}
-        output_annotations = {name: f.annotation for name, f in signature.output_fields.items()}
+        # With parse_config, constraints passed as OutputField kwargs (le=1.0, max_length=)
+        # are checked too (stanfordnlp/dspy#10195); upstream checks only the annotation.
+        output_annotations = {
+            name: Annotated[(f.annotation, *f.metadata)]
+            if self.parse_config is not None and f.metadata
+            else f.annotation
+            for name, f in signature.output_fields.items()
+        }
 
         out: dict[str, Any] = {}
         for k, v in fields.items():
-            annotation = signature.output_fields[k].annotation
+            annotation = output_annotations[k]
             try:
                 out[k] = parse_value(v, annotation)
                 continue
@@ -1547,13 +1559,29 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             must treat None exactly like "coercion did not help".
         """
         members, admits_none = _members(annotation)
-        if admits_none and len(members) == 1 and not isinstance(value, dict | list | None):
-            annotation = members[0]
-            try:
-                # What a bare X field accepts, e.g. an Enum member by name: "RED" for "crimson"
-                return parse_value(value, annotation), []
-            except Exception:
-                pass
+        if not isinstance(value, dict | list | None):
+            # What one member of a union accepts bare, e.g. an Enum member by name: "RED"
+            # for "crimson". A plain X already failed exactly this, so it is not retried.
+            for member in members if admits_none or len(members) > 1 else []:
+                try:
+                    return parse_value(value, member), []
+                except Exception:
+                    pass
+            # An Enum member named or valued in another case: "red" for RED = "crimson". Its
+            # value, not the member, is returned: a bare Enum re-parses by value or name.
+            enums = [m for m in members if inspect.isclass(m) and issubclass(m, enum.Enum)]
+            if isinstance(value, str) and enums:
+                key = value.strip().casefold()
+                hits = {
+                    m
+                    for e in enums
+                    for m in e
+                    if key in (m.name.casefold(), str(m.value).casefold())
+                }
+                if len(hits) == 1:
+                    return hits.pop().value, []
+            if admits_none and len(members) == 1:
+                annotation = members[0]
         try:
             field_schema = TypeAdapter(annotation).json_schema()
         except Exception as exc:
@@ -1651,6 +1679,57 @@ def _unwrap_array_reply(raw: Any, _depth: int = 0) -> Any:
             if isinstance(inner, dict):
                 return inner
     return raw
+
+
+def _cut_mid_string(completion: str) -> bool:
+    """Whether a JSON reply stops inside a string before its first object or array closes.
+
+    That is a reply cut off at max_tokens mid-value (stanfordnlp/dspy#1727). A reply that
+    closes its structure is never cut, whatever follows it.
+    """
+    # ponytail: a reply cut mid-number or between values is not detected; it parses as
+    # before. A finish_reason check would catch those, but parse() never sees one.
+    text = _strip_leading_reasoning(completion)
+    starts = [i for i in (text.find("{"), text.find("[")) if i != -1]
+    if not starts:
+        return False
+    depth = 0
+    in_string = escaped = False
+    for char in text[min(starts) :]:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+            if depth == 0:
+                return False
+    return in_string
+
+
+def _drop_last_leaf(value: Any) -> Any:
+    """``value`` without its last leaf in document order: the one a cut reply was writing.
+
+    The key (or list item) is removed rather than nulled, so a required field goes missing
+    and fails as missing instead of reading as ``"None"``. Never mutates ``value``.
+    """
+    if isinstance(value, dict) and value:
+        *_, key = value
+        if isinstance(value[key], dict | list) and value[key]:
+            return {**value, key: _drop_last_leaf(value[key])}
+        return {k: v for k, v in value.items() if k != key}
+    if isinstance(value, list) and value:
+        if isinstance(value[-1], dict | list) and value[-1]:
+            return [*value[:-1], _drop_last_leaf(value[-1])]
+        return value[:-1]
+    return value
 
 
 def _has_open_ended_mapping(signature: SignatureMeta) -> bool:

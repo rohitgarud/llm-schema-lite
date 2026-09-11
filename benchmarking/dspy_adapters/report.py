@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import json
 import statistics
 import subprocess
 from collections.abc import Iterable, Sequence
@@ -157,6 +158,7 @@ ACCURACY_CSV_HEADER: tuple[str, ...] = (
     "recall_total",
     "recall",
     "invented",
+    "replies",  # JSON list of the raw reply texts, one per LM call; read by --replay
 )
 
 ACCURACY_AGGREGATE_COLUMNS = (
@@ -697,6 +699,7 @@ def write_accuracy_report(
             row.recall_total,
             None if row.recall is None else round(row.recall, 4),
             row.invented,
+            json.dumps(list(row.replies), ensure_ascii=False),
         ]
         for row in rows
     )

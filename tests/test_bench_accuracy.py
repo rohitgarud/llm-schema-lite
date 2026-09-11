@@ -297,6 +297,25 @@ class TestRunAccuracyArm:
             (r.case_id, r.outcome, r.wrong, r.missing) for r in rows
         ]
 
+    def test_replies_are_recorded_and_replay_reproduces_the_rows(self, tmp_path):
+        """The CSV keeps each raw reply, and re-parsing it offline gives the live row back."""
+        import csv
+        import json
+
+        from benchmarking.dspy_adapters.report import write_accuracy_report
+        from benchmarking.dspy_adapters.runner import replay_accuracy
+
+        cases = generate(2, seed=4)
+        rows = self._perfect_arm(["sola-json-sections", "sola-yaml-rescue"], cases)
+        _, csv_path = write_accuracy_report(rows, tmp_path)
+        with csv_path.open(encoding="utf-8", newline="") as handle:
+            recorded = list(csv.DictReader(handle))
+        assert [json.loads(rec["replies"]) for rec in recorded] == [list(r.replies) for r in rows]
+        assert all(len(r.replies) == 1 for r in rows)
+        replayed = replay_accuracy(recorded, cases)
+        keys = [(r.adapter, r.case_id, r.outcome, r.matched, r.replies) for r in rows]
+        assert [(r.adapter, r.case_id, r.outcome, r.matched, r.replies) for r in replayed] == keys
+
     def test_a_failed_cell_scores_zero_against_its_full_denominator(self):
         """The whole point of routing failures through `score` rather than dropping them."""
         from dspy.utils.dummies import DummyLM

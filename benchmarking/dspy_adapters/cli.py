@@ -51,6 +51,7 @@ from .provenance import PROG, invocation_command
 from .signatures import SIGNATURE_IDS, SIGNATURES
 
 if TYPE_CHECKING:
+    from .cases import Case
     from .config import BenchConfig
     from .report import RunMeta
 
@@ -96,6 +97,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Run the live extraction-accuracy arm only: N labeled cases (see --corpus) "
             "scored field-by-field against ground truth. Requires the same live environment "
             "as --live. Never combined with the other arms into one score."
+        ),
+    )
+    parser.add_argument(
+        "--replay",
+        type=Path,
+        default=None,
+        metavar="CSV",
+        help=(
+            "Re-score the replies an accuracy CSV recorded, with the current adapter code: "
+            "no model and no env. Pass the --corpus/--cases/--cases-seed that run used. "
+            "Valid only while the adapters' prompts are unchanged."
         ),
     )
     parser.add_argument(
@@ -352,7 +364,6 @@ def _run_accuracy(args: argparse.Namespace) -> int:
     from . import config as config_module
     from . import report as report_module
     from .accuracy import null_floor
-    from .cases import generate
     from .runner import run_accuracy_arm
 
     adapter_ids = resolve_ids(args.adapters, ADAPTERS, LIVE_DEFAULT_ADAPTER_IDS, _ADAPTER_ERROR)
@@ -360,16 +371,7 @@ def _run_accuracy(args: argparse.Namespace) -> int:
     cfg = config_module.load_config()  # exits 2 itself when not configured
     lm = config_module.build_lm(cfg)
 
-    corpus_meta: dict[str, object]
-    if args.corpus == "synthetic":
-        cases = generate(args.cases, seed=args.cases_seed)
-        corpus_meta = {"cases": args.cases, "cases_seed": args.cases_seed}
-    else:
-        from .external import load as load_corpus
-
-        cases = load_corpus(args.corpus, args.cases)
-        source = CORPORA[args.corpus]
-        corpus_meta = {"corpus": f"{source.repo}@{source.revision}", "cases": len(cases)}
+    cases, corpus_meta = _load_cases(args)
     rows = run_accuracy_arm(lambda _adapter: lm, cases, adapter_ids=adapter_ids)
     return _finish_live_arm(
         "accuracy",
@@ -388,6 +390,74 @@ def _run_accuracy(args: argparse.Namespace) -> int:
         # they scored the same cases, and (n, seed) or (repo@revision, n) fixes that.
         **corpus_meta,
     )
+
+
+def _load_cases(args: argparse.Namespace) -> tuple[list[Case], dict[str, object]]:
+    """The accuracy corpus `--corpus`/`--cases`/`--cases-seed` select, and its provenance.
+
+    Corpus identity belongs in provenance: two accuracy runs are only comparable if they
+    scored the same cases, and (n, seed) or (repo@revision, n) fixes that.
+    """
+    from .cases import generate
+
+    if args.corpus == "synthetic":
+        return generate(args.cases, seed=args.cases_seed), {
+            "cases": args.cases,
+            "cases_seed": args.cases_seed,
+        }
+    from .external import load as load_corpus
+
+    cases = load_corpus(args.corpus, args.cases)
+    source = CORPORA[args.corpus]
+    return cases, {"corpus": f"{source.repo}@{source.revision}", "cases": len(cases)}
+
+
+def _run_replay(args: argparse.Namespace) -> int:
+    """Re-score the replies an accuracy CSV recorded with today's code; no LM, no env.
+
+    `--corpus`/`--cases`/`--cases-seed` must name the cases the recorded run scored. Exit 2
+    when the CSV has no `replies` column (recorded before it existed) or names a case the
+    selected corpus lacks.
+    """
+    import csv
+
+    from . import report as report_module
+    from .accuracy import null_floor
+    from .runner import replay_accuracy
+
+    with args.replay.open(encoding="utf-8", newline="") as handle:
+        recorded = list(csv.DictReader(handle))
+    cases, corpus_meta = _load_cases(args)
+    if recorded and "replies" not in recorded[0]:
+        print(f"error: {args.replay} has no replies column to replay", file=sys.stderr)
+        return 2
+    unknown = {rec["case_id"] for rec in recorded} - {case.case_id for case in cases}
+    if unknown:
+        print(
+            f"error: {len(unknown)} recorded case ids are not in this corpus slice; pass the "
+            "--corpus/--cases/--cases-seed the recorded run used",
+            file=sys.stderr,
+        )
+        return 2
+    rows = replay_accuracy(recorded, cases)
+    meta = dataclasses.replace(
+        report_module.RunMeta.minimal("accuracy"),
+        command=invocation_command(),
+        git_head=report_module.git_head(),
+        model="replay",
+        lm_kwargs={"replay": str(args.replay), **corpus_meta},
+    )
+    written = _write_results(
+        lambda: report_module.write_accuracy_report(
+            rows,
+            args.out,
+            meta=meta,
+            corpus=None if args.corpus == "synthetic" else args.corpus,
+            null_floor=null_floor(cases),
+        ),
+        args.out,
+    )
+    return 0 if written else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -410,6 +480,8 @@ def main(argv: list[str] | None = None) -> int:
         # Explicit opt-in, and never part of the "neither flag runs both" default: the
         # accuracy arm costs N_adapters x N_cases live calls, so it must never start
         # because someone ran the benchmark with no flags at all.
+        if args.replay:
+            return _run_replay(args)
         if args.accuracy:
             return _run_accuracy(args)
 
