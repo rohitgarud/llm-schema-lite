@@ -11,7 +11,14 @@ import random
 
 import pytest
 
-from benchmarking.dspy_adapters.accuracy import FieldScore, flatten, normalize, score
+from benchmarking.dspy_adapters.accuracy import (
+    AccuracyRow,
+    FieldScore,
+    aggregate_accuracy,
+    flatten,
+    normalize,
+    score,
+)
 from benchmarking.dspy_adapters.cases import (
     Address,
     Contact,
@@ -20,6 +27,8 @@ from benchmarking.dspy_adapters.cases import (
     generate,
     render,
 )
+from benchmarking.dspy_adapters.external import align_entity_lists
+from benchmarking.dspy_adapters.outcomes import Outcome
 
 
 def _record(**overrides) -> PersonRecord:
@@ -108,6 +117,95 @@ class TestScore:
 
     def test_empty_expected_does_not_divide_by_zero(self):
         assert FieldScore(matched=0, total=0).ratio == 1.0
+
+
+class TestRecallAndInvented:
+    """A correct None is a match, so field accuracy pays for extracting nothing; these don't."""
+
+    def test_splits_the_expected_fields_by_gold_value(self):
+        expected = {"name": "Ada", "age": 36, "city": "London", "email": None, "phone": None}
+        produced = {"name": "Ada", "age": 37, "email": "ada@x.org", "phone": None}
+        result = score(expected, produced)
+        # name right, age wrong, city missing; phone rightly null, email filled against gold.
+        assert (result.matched, result.total) == (2, 5)
+        assert (result.recall_matched, result.recall_total) == (1, 3)
+        assert result.invented == 1
+
+    def test_extracting_nothing_scores_zero_recall(self):
+        expected = {"name": "Ada", "email": None, "phone": None, "fax": None}
+        result = score(expected, dict.fromkeys(expected))
+        assert result.ratio == 0.75
+        assert (result.recall_matched, result.recall_total, result.invented) == (0, 1, 0)
+
+    def test_list_items_score_per_index_and_an_invented_list_counts_once(self):
+        result = score(
+            {"tags": ["a", "b"], "aliases": None}, {"tags": ["a", "x"], "aliases": ["y", "z"]}
+        )
+        assert (result.recall_matched, result.recall_total) == (1, 2)
+        assert result.missing == ("aliases",)
+        assert result.spurious == ("aliases[0]", "aliases[1]")
+        assert result.invented == 1
+
+    def test_an_object_where_the_gold_has_none_is_invented(self):
+        result = score(_record(employment=None), _record())
+        assert "employment" in result.missing
+        assert result.invented == 1
+
+    def test_goes_through_an_align_callable(self):
+        expected = {"Company": ["A", "B"], "Person": None, "Date": []}
+        produced = {"Company": ["B", "C"], "Person": ["X"], "Date": None}
+        result = score(*align_entity_lists(expected, produced))
+        # Company aligns to [None, "B", "C"]; Person is filled against a null gold; Date's
+        # [] and None are both "nothing" and match.
+        assert (result.matched, result.total) == (2, 4)
+        assert (result.recall_matched, result.recall_total) == (1, 2)
+        assert result.invented == 1
+
+    def test_a_raised_cell_scores_zero_against_the_non_null_denominator(self):
+        result = score({"name": "Ada", "age": 36, "email": None}, None)
+        assert (result.recall_matched, result.recall_total, result.invented) == (0, 2, 0)
+
+    def test_aggregate_ranks_the_empty_reply_last_on_recall(self, tmp_path):
+        from benchmarking.dspy_adapters.report import write_accuracy_report
+
+        def row(adapter, produced):
+            s = score({"name": "Ada", "email": None, "phone": None, "fax": None}, produced)
+            return AccuracyRow(
+                adapter=adapter,
+                adapter_config="",
+                case_id="c",
+                outcome=Outcome.OK if produced is not None else Outcome.PARSE_ERROR,
+                error_class="",
+                wall_s=0.0,
+                lm_calls=1,
+                response_format_sent="none",
+                matched=s.matched,
+                total=s.total,
+                wrong=s.wrong,
+                missing=s.missing,
+                spurious=s.spurious,
+                total_tokens=None,
+                recall_matched=s.recall_matched,
+                recall_total=s.recall_total,
+                invented=s.invented,
+            )
+
+        empty = dict.fromkeys(["name", "email", "phone", "fax"])
+        rows = [
+            row("nothing", empty),
+            row("nothing", empty),
+            row("extracts", {**empty, "name": "Ada", "email": "x"}),
+            row("extracts", None),
+        ]
+        nothing, extracts = aggregate_accuracy(rows)
+        assert nothing["field_accuracy"] > extracts["field_accuracy"]  # 6/8 vs 3/8
+        assert (nothing["recall"], extracts["recall"]) == (0.0, 0.5)
+        assert (extracts["invented"], extracts["null_total"]) == (1, 6)
+
+        md_path, _ = write_accuracy_report(rows, tmp_path)
+        lines = md_path.read_text().splitlines()
+        assert any(line.endswith("| 0.000 (0/2) | 0.000 (0/6) |") for line in lines)
+        assert any(line.endswith("| 0.500 (1/2) | 0.167 (1/6) |") for line in lines)
 
 
 class TestGenerate:
@@ -220,9 +318,12 @@ class TestRunAccuracyArm:
         assert rows[0].matched == 0
         assert rows[0].total == len(flatten(cases[0].expected))
         assert rows[0].ratio == 0.0
+        non_null = [v for v in flatten(cases[0].expected).values() if v is not None]
+        assert (rows[0].recall_total, rows[0].recall, rows[0].invented) == (len(non_null), 0.0, 0)
 
     def test_report_writes_both_files_and_aggregates_micro(self, tmp_path):
-        from benchmarking.dspy_adapters.accuracy import aggregate_accuracy
+        import csv
+
         from benchmarking.dspy_adapters.report import write_accuracy_report
 
         cases = generate(3, seed=6)
@@ -236,15 +337,20 @@ class TestRunAccuracyArm:
             assert record["field_accuracy"] == sum(g.matched for g in group) / sum(
                 g.total for g in group
             )
+            assert (record["recall"], record["invented"]) == (1.0, 0)
 
         md_path, csv_path = write_accuracy_report(rows, tmp_path)
         assert md_path.exists() and csv_path.exists()
         text = md_path.read_text()
         assert "## Extraction accuracy — aggregate" in text
         assert "sola-json-sections" in text
+        assert "| recall (non-null gold) | invented (null gold) |" in text
         # The two live arms must never share a file stem.
         assert md_path.name.startswith("accuracy-")
         assert csv_path.read_text().splitlines()[0].startswith("adapter,adapter_config,case_id")
+        first = next(csv.DictReader(csv_path.read_text().splitlines()))
+        assert (first["recall"], first["invented"]) == ("1.0", "0")
+        assert first["recall_matched"] == first["recall_total"] != "0"
 
 
 @pytest.mark.parametrize(

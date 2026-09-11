@@ -103,6 +103,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   got worse. The rescued records keep what the model invented: categories filled where
   the gold is empty rose 217 -> 543 of 1,323, half of the new ones placeholder strings
   ("not explicitly mentioned") that unrepaired replies carry too.
+- **The accuracy arm reports recall on non-null gold and invented values on null gold.**
+  Field accuracy counts a correct `None` as a match, so a reply that extracts nothing
+  already scores 0.949 on `pii` and 0.590 on `financial-ner`. `score()` now also counts, in
+  the same pass and under the same matching rules, the matches among fields whose gold is
+  not `None` (recall, whose all-null floor is 0) and the gold-`None` fields the reply
+  filled, with a scalar or a whole list or object. Both are new aggregate-table and
+  per-case CSV columns (`recall_matched`, `recall_total`, `recall`, `invented`), appended
+  after the existing ones; the report names recall as the extraction-quality headline.
 - **Extraction-accuracy benchmark arm.** `benchmarking/dspy_adapters/{cases,accuracy}.py`
   generate labeled extraction cases and score a reply field-by-field against ground truth,
   with `--accuracy --cases N --cases-seed S` on the benchmark CLI and a third results file

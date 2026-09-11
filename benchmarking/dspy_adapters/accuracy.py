@@ -21,6 +21,14 @@ Extra fields the model invents are counted in :attr:`FieldScore.spurious` and re
 they do not inflate or deflate the ratio - a field that should not exist has no expected
 value to match, and folding it into the denominator would double-penalise a reply that also
 got a real field wrong.
+
+Because a correct ``None`` is a match, field accuracy pays a reply for extracting nothing
+wherever the gold is sparse (0.949 on the first 30 PII cases, see :func:`null_floor`). Two
+counts split the expected fields by their gold value so that cannot hide:
+:attr:`FieldScore.recall_matched` / :attr:`FieldScore.recall_total` are ``matched`` and
+``total`` restricted to fields whose gold is not ``None`` - recall, whose all-null floor is 0
+- and :attr:`FieldScore.invented` counts fields whose gold is ``None`` that the reply filled
+anyway.
 """
 
 from __future__ import annotations
@@ -58,6 +66,9 @@ class FieldScore:
     missing: tuple[str, ...] = ()
     wrong: tuple[str, ...] = ()
     spurious: tuple[str, ...] = ()
+    recall_matched: int = 0  # `matched`, counting only fields whose gold is not None
+    recall_total: int = 0  # `total`, counting only fields whose gold is not None
+    invented: int = 0  # fields whose gold is None that the reply gave a value
 
     @property
     def ratio(self) -> float:
@@ -110,19 +121,26 @@ def score(expected: Any, produced: Any | None) -> FieldScore:
 
     ``produced=None`` means the cell raised before yielding a value; it scores 0 against the
     full expected denominator rather than being skipped.
+
+    A gold-``None`` field is ``invented`` when the reply puts a value at its path: a scalar
+    (scored ``wrong``) or a whole subtree, which leaves the path ``missing`` and its children
+    ``spurious`` - an entity list for a category the gold says is empty, or an object where
+    the gold has none.
     """
     expected_flat = {k: normalize(v) for k, v in flatten(expected).items()}
+    recall_total = sum(want is not None for want in expected_flat.values())
 
     if produced is None:
         return FieldScore(
             matched=0,
             total=len(expected_flat),
             missing=tuple(sorted(expected_flat)),
+            recall_total=recall_total,
         )
 
     produced_flat = {k: normalize(v) for k, v in flatten(produced).items()}
 
-    matched = 0
+    matched = recall_matched = 0
     missing: list[str] = []
     wrong: list[str] = []
     for path, want in expected_flat.items():
@@ -130,16 +148,28 @@ def score(expected: Any, produced: Any | None) -> FieldScore:
             missing.append(path)
         elif produced_flat[path] == want:
             matched += 1
+            recall_matched += want is not None
         else:
             wrong.append(path)
 
     spurious = sorted(set(produced_flat) - set(expected_flat))
+    invented = sum(
+        want is None
+        and (
+            produced_flat.get(path) is not None
+            or any(p.startswith((f"{path}.", f"{path}[")) for p in spurious)
+        )
+        for path, want in expected_flat.items()
+    )
     return FieldScore(
         matched=matched,
         total=len(expected_flat),
         missing=tuple(missing),
         wrong=tuple(wrong),
         spurious=tuple(spurious),
+        recall_matched=recall_matched,
+        recall_total=recall_total,
+        invented=invented,
     )
 
 
@@ -185,11 +215,19 @@ class AccuracyRow:
     missing: tuple[str, ...]
     spurious: tuple[str, ...]
     total_tokens: int | None
+    recall_matched: int
+    recall_total: int
+    invented: int
 
     @property
     def ratio(self) -> float:
         """This cell's field-match fraction; 1.0 for an empty expected record."""
         return 1.0 if self.total == 0 else self.matched / self.total
+
+    @property
+    def recall(self) -> float | None:
+        """Matched fraction of the fields whose gold is not None; None when there are none."""
+        return None if self.recall_total == 0 else self.recall_matched / self.recall_total
 
     @property
     def exact(self) -> bool:
@@ -203,7 +241,8 @@ def aggregate_accuracy(rows: list[AccuracyRow]) -> list[dict[str, Any]]:
     ``field_accuracy`` is **micro**-averaged - summed matches over summed expected fields,
     not the mean of per-case ratios. That is the quantity the reference benchmarks report,
     and it stops a case with few expected fields (an unemployed person with no contacts)
-    from carrying the same weight as a fully-populated one.
+    from carrying the same weight as a fully-populated one. ``recall`` (over gold non-null
+    fields) and ``invented_rate`` (over gold-``None`` fields) are micro-averaged the same way.
     """
     groups: dict[str, list[AccuracyRow]] = {}
     for row in rows:
@@ -213,6 +252,10 @@ def aggregate_accuracy(rows: list[AccuracyRow]) -> list[dict[str, Any]]:
     for adapter, group in groups.items():
         matched = sum(row.matched for row in group)
         total = sum(row.total for row in group)
+        recall_matched = sum(row.recall_matched for row in group)
+        recall_total = sum(row.recall_total for row in group)
+        invented = sum(row.invented for row in group)
+        null_total = total - recall_total
         exact = sum(1 for row in group if row.exact)
         token_totals = [row.total_tokens for row in group if row.total_tokens is not None]
         formats = {row.response_format_sent for row in group}
@@ -230,6 +273,12 @@ def aggregate_accuracy(rows: list[AccuracyRow]) -> list[dict[str, Any]]:
                 "median_wall_s": statistics.median([row.wall_s for row in group]),
                 "median_total_tokens": (statistics.median(token_totals) if token_totals else None),
                 "response_format": next(iter(formats)) if len(formats) == 1 else "mixed",
+                "recall_matched": recall_matched,
+                "recall_total": recall_total,
+                "recall": (recall_matched / recall_total) if recall_total else None,
+                "invented": invented,
+                "null_total": null_total,
+                "invented_rate": (invented / null_total) if null_total else None,
             }
         )
     return records

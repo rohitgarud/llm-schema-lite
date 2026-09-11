@@ -311,7 +311,10 @@ Field-level exact-match accuracy against ground truth — the metric the two pub
 comparisons this arm is modelled on report ([DSPy PR #8614][pr] and
 [thedataquarry/structured-outputs][dq]). Every case is an extraction task: prose in,
 one `PersonRecord` out. The record is flattened to `dotted.path -> scalar` (lists
-indexed, `contacts[0].email`), and the reply is scored path by path.
+indexed, `contacts[0].email`), and the reply is scored path by path. Three numbers come out
+of that pass: **field accuracy** over every expected path, **recall** over the paths whose
+gold value is not `None`, and **invented**, the gold-`None` paths the reply filled anyway
+(see [below](#recall-on-non-null-gold-and-invented-fields)).
 
 [pr]: https://github.com/stanfordnlp/dspy/pull/8614
 [dq]: https://github.com/thedataquarry/structured-outputs
@@ -372,7 +375,8 @@ clinical notes:
   and only counts immunizations.
 - **Read every score against its floor.** A correct `None` is a match, so a reply that
   extracts nothing already scores 0.949 on `pii`. Every report prints its own all-null
-  floor under the aggregate table.
+  floor under the aggregate table. Recall on non-null gold has no such floor —
+  extracting nothing scores 0 — which is why the report carries it.
 - **`baml` cannot run `patient-notes` at all.** DSPy's `BAMLAdapter` rejects any schema
   that uses one model in two places as "recursive": its `seen_models` set is shared
   across sibling fields and never popped, so it is a visited set, not a recursion stack.
@@ -415,9 +419,34 @@ Aggregate `field accuracy` is **micro**-averaged (pooled matches over pooled exp
 fields), not the mean of per-case ratios, so a sparse case does not carry the same
 weight as a fully-populated one.
 
+### Recall on non-null gold, and invented fields
+
+Field accuracy counts a correct `None` as a match, and on a sparse corpus most gold values
+are `None`. On the first 30 cases a reply that extracts nothing scores 0.949 on `pii`,
+0.590 on `financial-ner`, 0.356 on `patient-notes` and 0.018 on `insurance-claims`.
+That hides what a small-model comparison needs to know — which adapter extracts more
+real content — and it pays a parse rescue for turning a failure into a parsed but empty
+record. So `score()` also splits the expected fields by gold value, in the same pass and
+under the same rules (each case's `align`, `flatten`, `normalize`, indexed lists):
+
+- **recall (non-null gold)** — `matched` restricted to fields whose gold is not `None`,
+  over the number of such fields. A cell that raised scores 0 against that full count.
+  Extracting nothing scores exactly 0, so this is the headline for extraction quality.
+- **invented (null gold)** — fields whose gold is `None` that the reply filled anyway:
+  a scalar where the gold has none, or a whole subtree (an entity list for a category the
+  gold says is empty, an object where the gold has `None`), which counts once. The
+  aggregate reports it as a rate over the gold-`None` fields.
+
+Recall pays for extracting and invented charges for making values up; field accuracy stays
+in the table so reports remain comparable with earlier ones. Both new measures are
+micro-averaged and shown as `rate (count/denominator)` in the aggregate table, and per case
+in the CSV as `recall_matched`, `recall_total`, `recall` (empty when a case has no non-null
+gold) and `invented`.
+
 ### Reading the report
 
-`accuracy-<model-slug>-<date>.md` carries two tables. The aggregate answers *who won*;
+`accuracy-<model-slug>-<date>.md` carries two tables. The aggregate answers *who won* —
+on recall (non-null gold), with invented beside it and field accuracy for continuity;
 **Most-missed fields** answers *where they lost*, per adapter, with list indices
 collapsed (`contacts[].email`) so a path counts once instead of fragmenting across
 positions. Per-case detail — including the exact `wrong` / `missing` / `spurious` paths
@@ -425,7 +454,9 @@ positions. Per-case detail — including the exact `wrong` / `missing` / `spurio
 
 ### What the sweep found
 
-Six sub-1.2B models across five families, 30 labeled cases each, field accuracy:
+Six sub-1.2B models across five families, 30 labeled cases each, field accuracy. The
+committed `2026-09-10` artefacts predate the recall and invented columns, so these tables
+and the third-party ones below report field accuracy only:
 
 | adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
 |---|---|---|---|---|---|---|

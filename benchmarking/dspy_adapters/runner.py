@@ -447,6 +447,9 @@ def run_one_case(
         missing=field_score.missing,
         spurious=field_score.spurious,
         total_tokens=obs.tokens[0],
+        recall_matched=field_score.recall_matched,
+        recall_total=field_score.recall_total,
+        invented=field_score.invented,
     )
 
 

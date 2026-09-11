@@ -153,11 +153,16 @@ ACCURACY_CSV_HEADER: tuple[str, ...] = (
     "missing",
     "spurious",
     "total_tokens",
+    "recall_matched",
+    "recall_total",
+    "recall",
+    "invented",
 )
 
 ACCURACY_AGGREGATE_COLUMNS = (
     "| adapter | cases | field accuracy | exact records | ok | parse | validation | empty "
-    "| transport | format | median wall_s | median total_tokens | response_format |"
+    "| transport | format | median wall_s | median total_tokens | response_format "
+    "| recall (non-null gold) | invented (null gold) |"
 )
 
 ACCURACY_FIELDS_COLUMNS = "| field | wrong | missing |"
@@ -167,7 +172,13 @@ ACCURACY_EXTRA_CAVEAT = (
     "field accuracy is micro-averaged over the **expected** fields of every case: a cell "
     "that raised scores 0 against its full denominator rather than being excluded, and "
     "emitting fewer fields can never raise the score. Fields the model invents are "
-    "reported under `spurious` and break `exact`, but do not enter the denominator."
+    "reported under `spurious` and break `exact`, but do not enter the denominator. "
+    "A correct `None` also counts as a match, so on a sparse corpus field accuracy pays a "
+    "reply for extracting nothing. **recall (non-null gold)** is the extraction-quality "
+    "headline: matches over only the fields whose gold value is not `None`, a cell that "
+    "raised scoring 0 against them, so extracting nothing scores 0. **invented (null "
+    "gold)** is the other half: of the fields whose gold is `None`, how many the reply "
+    "filled anyway."
 )
 
 SYNTHETIC_GROUND_TRUTH_NOTE = (
@@ -569,6 +580,10 @@ def _render_accuracy_aggregate(rows: list[AccuracyRow]) -> list[str]:
                 f"{record['median_wall_s']:.3f}",
                 _dash(record["median_total_tokens"]),
                 record["response_format"],
+                f"{_dash(record['recall'], '.3f')} "
+                f"({record['recall_matched']}/{record['recall_total']})",
+                f"{_dash(record['invented_rate'], '.3f')} "
+                f"({record['invented']}/{record['null_total']})",
             ]
             for record in aggregate_accuracy(rows)
         ),
@@ -626,7 +641,9 @@ def _render_accuracy_markdown(
         lines.append(
             f"**All-null floor: {null_floor:.3f}** — the field accuracy of a reply that "
             "extracts nothing (every output field `None`) on these same cases. A correct "
-            "`None` counts as a match, so read every score above as a distance from this."
+            "`None` counts as a match, so field accuracy is only a distance from this "
+            "floor, and an adapter near it may simply have extracted nothing. Recall "
+            "(non-null gold) has a floor of 0 by construction: compare adapters on that."
         )
     lines.append("")
     lines.append("## Most-missed fields")
@@ -676,6 +693,10 @@ def write_accuracy_report(
             ";".join(row.missing),
             ";".join(row.spurious),
             row.total_tokens,
+            row.recall_matched,
+            row.recall_total,
+            None if row.recall is None else round(row.recall, 4),
+            row.invented,
         ]
         for row in rows
     )
