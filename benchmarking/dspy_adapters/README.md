@@ -116,7 +116,7 @@ probe configured) never touch `os.environ` at all.
 ## 4. CLI flags and exit codes
 
 `python -m benchmarking.dspy_adapters` (equivalently `make bench-dspy BENCH_ARGS=...`)
-exposes twelve flags:
+exposes thirteen flags:
 
 | flag | `argparse` type | default | meaning |
 |---|---|---|---|
@@ -126,6 +126,7 @@ exposes twelve flags:
 | `--replay` | `Path` | — | Re-score the `replies` an accuracy CSV recorded with the current adapter code, and write a new accuracy report (model `replay`). No model and no env. Pass the `--corpus`/`--cases`/`--cases-seed` the recorded run used. Valid only while the adapters' prompts are unchanged, because a reply answers the prompt it was sent. Exit 2 for a CSV without `replies` or a case id the corpus slice lacks. |
 | `--cases` | `int` | `30` | Accuracy-arm case count. Ignored by every other arm. |
 | `--cases-seed` | `int` | `0` | Synthetic-corpus seed. Recorded in the report's provenance block, because two accuracy runs are comparable only if they scored the same cases. |
+| `--cases-offset` | `int` | `0` | Skip this many cases before taking `--cases`, on any corpus. Every repair in `ParseConfig()` was found by reading failures in the first 30 cases, so `--cases-offset 30` is the held-out check that it generalises. Case ids keep their corpus index; recorded in provenance when non-zero. `insurance-claims` has only 30 rows, so it has no held-out slice. |
 | `--corpus` | choice | `synthetic` | Accuracy-arm corpus: `synthetic`, or the third-party `pii`, `financial-ner`, `insurance-claims`, `patient-notes` (first `--cases` rows at a pinned revision — Hugging Face, which needs the `benchmark` extra, or GitHub for `patient-notes`). Recorded in provenance and named in the file stem. See §12. |
 | `--adapters` | `str` (comma-separated) | offline: all 12 · live: the 8 in `LIVE_DEFAULT_ADAPTER_IDS` | Filter by adapter id. Unknown id → stderr listing valid ids, exit 2. |
 | `--signatures` | `str` (comma-separated) | all 6 | Filter by signature id. Unknown id → same treatment. |
@@ -447,6 +448,16 @@ in the table so reports remain comparable with earlier ones. Both new measures a
 micro-averaged and shown as `rate (count/denominator)` in the aggregate table, and per case
 in the CSV as `recall_matched`, `recall_total`, `recall` (empty when a case has no non-null
 gold) and `invented`.
+
+### Is a difference real?
+
+Thirty cases is a small sample, so a lead of a few records can be luck.
+`python -m benchmarking.dspy_adapters.paired results/accuracy-<corpus>-*.csv --baseline json`
+prints, for every other adapter in each CSV, its difference from the baseline with a
+paired bootstrap 95% interval (resampling cases, so each case's two scores stay together;
+`--metric recall|field|invented`). `tie` means the interval contains zero. It covers
+which cases were drawn, not Ollama's run-to-run drift below, and across dozens of
+comparisons about one in twenty clears zero by chance.
 
 ### Reading the report
 

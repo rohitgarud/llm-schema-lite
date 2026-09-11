@@ -128,6 +128,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call. `--replay` feeds them back through the current adapter code with no model and no
   environment, so a parser change can be checked against recorded replies in seconds.
   It is valid while the adapters' prompts are unchanged.
+- **Held-out cases and paired intervals for the benchmark.** `--cases-offset N` skips
+  the first N cases of any accuracy corpus, so the `ParseConfig()` repairs, all found by
+  reading failures in the first 30 cases, can be scored on cases they were not tuned on.
+  `python -m benchmarking.dspy_adapters.paired` reads per-case accuracy CSVs and gives
+  each adapter's difference from a baseline (`--baseline json`) a paired bootstrap 95%
+  interval on recall, field accuracy or invented values.
 - **List-of-records merge in the DSPy adapter.** With `parse_config` set
   (`allow_coercion`), an output value sent as a list of two or more records, where the
   schema wants one object whose every field is a list, is merged into that object: each

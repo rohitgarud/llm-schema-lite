@@ -230,6 +230,22 @@ class TestGenerate:
         cases = generate(40, seed=3)
         assert len({c.case_id for c in cases}) == 40
 
+    def test_cases_offset_scores_a_held_out_slice_and_records_it(self, monkeypatch):
+        from benchmarking.dspy_adapters import cli, config, runner
+
+        seen: dict = {}
+        monkeypatch.setattr(config, "load_config", lambda: None)
+        monkeypatch.setattr(config, "build_lm", lambda cfg: None)
+        monkeypatch.setattr(
+            runner, "run_accuracy_arm", lambda lm, cases, **kw: seen.setdefault("loaded", cases)
+        )
+        monkeypatch.setattr(
+            cli, "_finish_live_arm", lambda *a, **provenance: seen.update(provenance) or 0
+        )
+        assert cli.main(["--accuracy", "--cases", "3", "--cases-offset", "2"]) == 0
+        assert [c.case_id for c in seen["loaded"]] == ["case-0002", "case-0003", "case-0004"]
+        assert (seen["cases"], seen["cases_offset"]) == (3, 2)
+
     def test_covers_both_branches_of_every_optional(self):
         """If the corpus never omits an optional, it never tests the hard half of the schema."""
         cases = generate(60, seed=11)

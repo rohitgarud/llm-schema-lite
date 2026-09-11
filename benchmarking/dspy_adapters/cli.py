@@ -123,6 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Synthetic accuracy-corpus seed; recorded in the report. Default: 0.",
     )
     parser.add_argument(
+        "--cases-offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip this many cases before taking --cases, for a held-out slice (--cases-offset "
+            "30 scores cases 30.. of the same corpus); recorded in the report. Default: 0."
+        ),
+    )
+    parser.add_argument(
         "--corpus",
         choices=("synthetic", *CORPORA),
         default="synthetic",
@@ -393,23 +402,29 @@ def _run_accuracy(args: argparse.Namespace) -> int:
 
 
 def _load_cases(args: argparse.Namespace) -> tuple[list[Case], dict[str, object]]:
-    """The accuracy corpus `--corpus`/`--cases`/`--cases-seed` select, and its provenance.
+    """The accuracy corpus the `--corpus`/`--cases*` flags select, and its provenance.
 
     Corpus identity belongs in provenance: two accuracy runs are only comparable if they
-    scored the same cases, and (n, seed) or (repo@revision, n) fixes that.
+    scored the same cases, and (n, seed, offset) or (repo@revision, n, offset) fixes that.
     """
     from .cases import generate
 
+    corpus_meta: dict[str, object]
+    # Slicing after loading keeps each case's id (its index in the corpus), so a held-out
+    # slice never reuses an id from the first --cases.
+    end = args.cases_offset + args.cases
     if args.corpus == "synthetic":
-        return generate(args.cases, seed=args.cases_seed), {
-            "cases": args.cases,
-            "cases_seed": args.cases_seed,
-        }
-    from .external import load as load_corpus
+        cases = generate(end, seed=args.cases_seed)[args.cases_offset :]
+        corpus_meta = {"cases": len(cases), "cases_seed": args.cases_seed}
+    else:
+        from .external import load as load_corpus
 
-    cases = load_corpus(args.corpus, args.cases)
-    source = CORPORA[args.corpus]
-    return cases, {"corpus": f"{source.repo}@{source.revision}", "cases": len(cases)}
+        cases = load_corpus(args.corpus, end)[args.cases_offset :]
+        source = CORPORA[args.corpus]
+        corpus_meta = {"corpus": f"{source.repo}@{source.revision}", "cases": len(cases)}
+    if args.cases_offset:
+        corpus_meta["cases_offset"] = args.cases_offset
+    return cases, corpus_meta
 
 
 def _run_replay(args: argparse.Namespace) -> int:
