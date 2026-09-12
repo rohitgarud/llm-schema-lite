@@ -374,6 +374,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A benchmark artefact's `git_head` now says when the tree was dirty.** The stamp was a
+  bare `git rev-parse --short HEAD`, so a results file could name a commit that cannot
+  produce it: the `2026-09-10` files stamp `daf210b` while running an uncommitted
+  `sola-yaml-rescue` cell that commit does not define, and stamp `867819b` while passing
+  a `--corpus` flag whose `external.py` landed five hours later in `33ef81f`. A `-dirty`
+  suffix is appended when tracked files differ from `HEAD`. Untracked files are ignored,
+  so an arm writing its own results into the tree does not mark itself dirty.
 - **A leading `<think>`/`<thinking>` block is no longer parsed as the answer.** JSON
   extraction took the first `{`, so a reasoning model that restated the format
   (`{"answer": ...}`) inside its think block had that placeholder returned as the answer,

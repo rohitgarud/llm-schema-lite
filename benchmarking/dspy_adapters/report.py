@@ -62,7 +62,7 @@ class RunMeta:
     arm: str  # "prompt-cost" | "live"
     generated: str  # ISO-8601 timestamp
     command: str  # the argv used
-    git_head: str  # `git rev-parse --short HEAD`, "unknown" on failure
+    git_head: str  # `git rev-parse --short HEAD` + "-dirty", "unknown" on failure
     dspy_version: str
     llm_schema_lite_version: str
     encoding: str | None = None  # "cl100k_base"; offline arm only
@@ -104,20 +104,42 @@ class RunMeta:
         )
 
 
-def git_head() -> str:
-    """Return `git rev-parse --short HEAD` for the repo root, or "unknown" on any failure."""
+def git_head(repo_root: Path | None = None) -> str:
+    """Return `git rev-parse --short HEAD`, suffixed `-dirty`, or "unknown" on any failure.
+
+    A results file exists to name the code that produced it, so a bare sha is a lie the
+    moment the tree carries edits: the committed `2026-09-10` artefacts stamp `daf210b`
+    while running an uncommitted YAML fix and a `sola-yaml-rescue` cell that commit does
+    not define, and stamp `867819b` while running a `--corpus` flag added five hours
+    later. Neither stamp can reproduce its own file. The suffix makes that visible.
+
+    Untracked files are deliberately ignored: the arms write their own results into the
+    tree, and a run must not be marked dirty by the file it is in the middle of writing.
+    The residual gap that leaves -- a brand-new *source* file, untracked and imported --
+    is not worth a second subprocess call to close.
+    """
+    root = Path(__file__).resolve().parents[2] if repo_root is None else repo_root
     try:
-        repo_root = Path(__file__).resolve().parents[2]
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=repo_root,
+            cwd=root,
             capture_output=True,
             text=True,
             timeout=5,
             check=True,
         )
         head = result.stdout.strip()
-        return head or "unknown"
+        if not head:
+            return "unknown"
+        modified = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        return f"{head}-dirty" if modified.stdout.strip() else head
     except Exception:  # noqa: BLE001 -- swallow every failure into "unknown"
         return "unknown"
 

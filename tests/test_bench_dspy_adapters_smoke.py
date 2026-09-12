@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import dataclasses
 import re
+import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,7 @@ from benchmarking.dspy_adapters.report import (  # noqa: E402
     LIVE_CSV_HEADER,
     PROMPT_COST_CSV_HEADER,
     RunMeta,
+    git_head,
 )
 
 
@@ -679,6 +681,50 @@ def test_live_report_contains_no_credential_value(tmp_path: Path) -> None:
     assert REDACTED in md
     assert "max_tokens" in md
     assert "900" in md
+
+
+def test_git_head_marks_a_dirty_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A results file names the code that produced it, so a dirty tree has to say so.
+
+    Driven against a real repository rather than a patched `subprocess`: the defect this
+    guards was a *missing* git question, and a stub would happily answer whatever it was
+    told to. Untracked files must not count -- the arms write their results into the very
+    tree they are measuring, so counting them would mark every run dirty.
+
+    The environment is scrubbed first. `git` exports `GIT_DIR` and `GIT_INDEX_FILE` to the
+    hooks it runs, and those override `cwd`, so under the pre-commit hook an unscrubbed
+    version of this test reaches straight past `tmp_path` into the repository being
+    committed -- which is how the first draft wrote its identity into the real config.
+    Identity is passed with `-c` for the same reason: nothing here may write a config file.
+    """
+    for var in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=bench@test.invalid", "-c", "user.name=bench", *args],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+
+    git("init")
+    tracked = tmp_path / "code.py"
+    tracked.write_text("x = 1\n")
+    git("add", "code.py")
+    git("commit", "--no-verify", "-m", "initial")
+
+    clean = git_head(repo_root=tmp_path)
+    assert clean != "unknown"
+    assert not clean.endswith("-dirty")
+
+    (tmp_path / "results.csv").write_text("a,b\n")  # an arm's own output stays clean
+    assert git_head(repo_root=tmp_path) == clean
+
+    tracked.write_text("x = 2\n")  # a tracked edit is what a stamp must not hide
+    assert git_head(repo_root=tmp_path) == f"{clean}-dirty"
 
 
 def test_committed_results_are_provenance_clean() -> None:
