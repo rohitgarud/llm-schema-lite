@@ -42,19 +42,24 @@ runs against Ollama on the **`ollama_chat/` provider with `{"think": false}`**:
 | `prompt-cost-2026-09-10.md` | offline | — | 12 adapters x 6 signatures |
 | `live-ollama_chat-qwen3-8b-2026-09-10.md` | outcomes | `qwen3:8b` | 8 adapters x 6 signatures x 3 trials |
 | `accuracy-ollama_chat-<model>-2026-09-12.md` | accuracy | six sub-1.2B models | 8 adapters x 30 cases each |
-| `accuracy-<corpus>-ollama_chat-<model>-2026-09-12.md` | accuracy | `pii` all six; `financial-ner` all but `falcon3:1b`; `insurance-claims` and `patient-notes` `qwen3.5:0.8b` only | 8 adapters x 30 cases each, with `replies` |
-| `accuracy-<corpus>-ollama_chat-<model>-2026-09-10.md` | accuracy | the eleven cells the `2026-09-12` pass did not reach | 8 adapters x 30 cases each, no `replies` |
+| `accuracy-<corpus>-ollama_chat-<model>-2026-09-12.md` and `-2026-09-13.md` | accuracy | six sub-1.2B models, all four corpora | 8 adapters x 30 cases each, with `replies` |
+| `accuracy-<corpus>-ollama_chat-<model>-2026-09-10.md` | accuracy | same six models, superseded | 8 adapters x 30 cases each, no `replies` |
 
 Each file's provenance block carries the exact command, git head and effective
 `lm_kwargs`. If no results file is present for a given arm and date, that pass was not
 run and no numbers exist for it — this file does not claim otherwise.
 
-The third-party set spans two dates on purpose. The `2026-09-12` pass re-ran it for the
-`replies` column and an honest `git_head`, but the job was killed for low memory after 13
-of its 24 cells; a later narrow pass added `qwen3.5:0.8b` on the two corpora that had none.
-The `2026-09-10` files hold the remaining eleven cells and are kept for exactly that reason.
-Rows from the two dates are separate live runs and are not interchangeable at the third
-decimal: where both exist they agree to within one field.
+The third-party set is complete — four corpora x six models x eight adapters x 30 cases,
+every row carrying `replies` — but it took three passes to get there, and the file dates
+record that rather than hide it. The first was killed for low memory after 13 of 24 cells,
+a narrow second added `qwen3.5:0.8b` on the two corpora left with none, and a third ran the
+last eleven. The `2026-09-10` third-party files are superseded by it and carry no `replies`.
+
+The `2026-09-13` dates are a clock artefact, not a third pass: those eleven cells all ran
+between 17:38 and 19:57 UTC on the 12th, but the filename date is **local** while the
+`generated` field inside each file is **UTC**, so the run crossed local midnight mid-way.
+The names are left alone deliberately — renaming a file would make its name disagree with
+its own provenance block, which is the exact failure this whole exercise exists to stop.
 
 Four sets of superseded artefacts were deleted rather than kept:
 
