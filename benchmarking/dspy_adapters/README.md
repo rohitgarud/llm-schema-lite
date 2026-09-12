@@ -265,7 +265,7 @@ this is stated as a fact about the bug, not a claim of a run that didn't happen.
 
 ## 10. Adapter and signature ids
 
-**Adapters** (twelve in `ADAPTERS`, plus one repro-only extra in `REPRO_1871_ADAPTERS`
+**Adapters** (fifteen in `ADAPTERS`, plus one repro-only extra in `REPRO_1871_ADAPTERS`
 used exclusively by the #1871 cell set):
 
 | id | `config_repr` |
@@ -281,6 +281,9 @@ used exclusively by the #1871 cell set):
 | `sola-json-rescue` | `StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig())` |
 | `sola-jsonish-rescue` | `StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig())` |
 | `sola-yaml-rescue` | `StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig())` |
+| `sola-json-partial` | `StructuredOutputAdapter(output_mode=JSON, prompt_layout=SECTIONS, parse_config=ParseConfig(partial=True))` |
+| `sola-jsonish-partial` | `StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, parse_config=ParseConfig(partial=True))` |
+| `sola-yaml-partial` | `StructuredOutputAdapter(output_mode=YAML, prompt_layout=SECTIONS, parse_config=ParseConfig(partial=True))` |
 | `sola-yaml-block` | `StructuredOutputAdapter(output_mode=YAML, prompt_layout=JSON_BLOCK)` |
 | `sola-jsonish-nojsonobject` (repro-only) | `StructuredOutputAdapter(output_mode=JSONISH, use_json_object_response_format=False)` |
 
@@ -291,8 +294,9 @@ would silently mask parsing failures (Δ1/D3.1 in the design notes).
 The live arms default to the six `*-sections` ids (`chat`, `json`, `baml`,
 `sola-json-sections`, `sola-jsonish-sections`, `sola-yaml-sections`) **plus** two
 rescue cells, `sola-jsonish-rescue` and `sola-yaml-rescue`; the offline arm covers all
-twelve. `sola-json-rescue` is opt-in (`--adapters sola-json-rescue`): it was added after
-the `2026-09-10` accuracy artefacts, which it would otherwise leave incomplete.
+fifteen. `sola-json-rescue` is opt-in (`--adapters sola-json-rescue`): it was added after
+the `2026-09-10` accuracy artefacts, which it would otherwise leave incomplete. The three
+`sola-*-partial` cells are opt-in for a different reason, below.
 
 Each `sola-*-rescue` cell is its `*-sections` twin with one thing changed —
 `parse_config=ParseConfig()`, which arms the parse-time rescues — so the pair isolates
@@ -301,6 +305,31 @@ offline arm makes checkable: the two rows must agree on every token count, and a
 asserts it for all six signatures. Which repair matters depends on the mode: in JSONISH
 and YAML it is dropping list items whose every field is `null` (the shape a small model
 produces instead of `[]`); in JSON it is unwrapping a record sent as a one-item list.
+
+Each `sola-*-partial` cell is in turn its `*-rescue` twin with `ParseConfig(partial=True)`,
+so that pair isolates leaf salvage — what is left to win once the structural repairs have
+already failed. The prompt is again byte-identical, so all three tiers of a mode
+(`sections`, `rescue`, `partial`) are one prompt measured under three parse policies.
+
+They are **not** in the live default, and the reason is not cost. Salvage nulls what fails
+validation and keeps everything else, so it returns a record the model did not write and
+retains every value that validated — right or wrong. It therefore buys recall *with*
+invented fields, and a run that reports only its field accuracy would misrepresent it.
+Replaying the 900 recorded `qwen3.5:0.8b` replies through both tiers:
+
+| corpus / cell | field acc | recall | invented |
+|---|---|---|---|
+| patient-notes `yaml` | 0.000 → 0.405 | 0.000 → 0.478 | 0 → 165 |
+| patient-notes `jsonish` | 0.160 → 0.497 | 0.211 → 0.663 | 42 → 191 |
+| patient-notes `json` | 0.091 → 0.589 | 0.109 → 0.598 | 7 → 101 |
+| synthetic `yaml` | 0.926 → 0.957 | 0.936 → 0.963 | unchanged (2) |
+| financial-ner `json`/`yaml`, insurance-claims `json` | +0.024 each | +0.020..0.026 | +1..2 |
+| pii (all), synthetic `json`/`jsonish`, insurance-claims `jsonish`/`yaml` | inert | inert | inert |
+
+No cell scores worse. The patient-notes rows are where validation rejected an otherwise
+good record over one bad leaf — `0/30` parsed becomes `30/30` in YAML — and they are also
+where the invented count explodes, which is exactly why the `invented` column has to be
+read next to the recall one rather than after it.
 
 **Signatures** (six, `SIGNATURE_IDS` order):
 

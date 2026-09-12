@@ -92,6 +92,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Three `sola-*-partial` benchmark cells put `ParseConfig(partial=True)` on the matrix.**
+  `sola-json-partial`, `sola-jsonish-partial` and `sola-yaml-partial` are their `*-rescue`
+  twins with leaf salvage armed, so each pair isolates what salvage is worth once the
+  structural repairs have already failed. They are registered but stay **out** of the live
+  default: salvage keeps every value that validated, right or wrong, so it buys recall with
+  invented fields, and the trade-off has to be read from both columns at once. Replaying
+  the 900 recorded `qwen3.5:0.8b` replies, field accuracy on patient-notes goes
+  `0.000 -> 0.405` (YAML, 0/30 -> 30/30 parsed), `0.160 -> 0.497` (JSONISH) and
+  `0.091 -> 0.589` (JSON), while `invented` on those same cells rises `0 -> 165`,
+  `42 -> 191` and `7 -> 101`. No cell scores worse anywhere; pii, synthetic JSON/JSONISH
+  and several third-party cells are inert.
 - **Four more rescues in the DSPy adapter, for reply shapes reported on DSPy's tracker.**
   With `parse_config` set, an `Optional[X]` field holding a scalar is rescued against
   `X`, so `14` for `Optional[str]` becomes `"14"` and an enum member's name works under

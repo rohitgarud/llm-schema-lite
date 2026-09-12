@@ -35,19 +35,38 @@ class AdapterCell:
     config_repr: str
 
 
-def _sola(mode: OutputMode, layout: PromptLayout, rescue: bool = False) -> AdapterCell:
-    """A `StructuredOutputAdapter` cell; `rescue` adds a fresh `parse_config=ParseConfig()`.
+def _sola(
+    mode: OutputMode, layout: PromptLayout, rescue: bool = False, partial: bool = False
+) -> AdapterCell:
+    """A `StructuredOutputAdapter` cell; `rescue`/`partial` pick its `parse_config`.
 
-    `parse_config=None` is the constructor's own default, so a non-rescue cell builds
-    exactly what omitting the argument builds.
+    `parse_config=None` is the constructor's own default, so a cell with neither flag
+    builds exactly what omitting the argument builds. `partial` is `rescue` with
+    `ParseConfig(partial=True)`: leaf salvage only runs once the structural repairs have
+    already failed, so a partial cell is its rescue twin with one more thing armed.
+
+    Each call builds a fresh `ParseConfig`, so no two cells share one instance.
     """
-    extra = ", parse_config=ParseConfig()" if rescue else ""
-    return AdapterCell(
-        factory=lambda: StructuredOutputAdapter(
+    extra = ""
+    if partial:
+        extra = ", parse_config=ParseConfig(partial=True)"
+    elif rescue:
+        extra = ", parse_config=ParseConfig()"
+
+    def build() -> Adapter:
+        config: ParseConfig | None = None
+        if partial:
+            config = ParseConfig(partial=True)
+        elif rescue:
+            config = ParseConfig()
+        return StructuredOutputAdapter(
             output_mode=mode,
             prompt_layout=layout,
-            parse_config=ParseConfig() if rescue else None,
-        ),
+            parse_config=config,
+        )
+
+    return AdapterCell(
+        factory=build,
         config_repr=(
             f"StructuredOutputAdapter(output_mode={mode.name}, prompt_layout={layout.name}{extra})"
         ),
@@ -69,6 +88,9 @@ ADAPTERS: dict[str, AdapterCell] = {
     "sola-json-rescue": _sola(OutputMode.JSON, PromptLayout.SECTIONS, rescue=True),
     "sola-jsonish-rescue": _sola(OutputMode.JSONISH, PromptLayout.SECTIONS, rescue=True),
     "sola-yaml-rescue": _sola(OutputMode.YAML, PromptLayout.SECTIONS, rescue=True),
+    "sola-json-partial": _sola(OutputMode.JSON, PromptLayout.SECTIONS, partial=True),
+    "sola-jsonish-partial": _sola(OutputMode.JSONISH, PromptLayout.SECTIONS, partial=True),
+    "sola-yaml-partial": _sola(OutputMode.YAML, PromptLayout.SECTIONS, partial=True),
     "sola-yaml-block": _sola(OutputMode.YAML, PromptLayout.JSON_BLOCK),
 }
 

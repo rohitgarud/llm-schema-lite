@@ -415,3 +415,36 @@ def test_rescue_cell_differs_from_its_twin_only_at_parse_time(plain_id, rescue_i
         assert plain.format(cell.signature, [], cell.inputs) == rescue.format(
             cell.signature, [], cell.inputs
         ), sig_id
+
+
+@pytest.mark.parametrize(
+    ("rescue_id", "partial_id"),
+    [
+        ("sola-json-rescue", "sola-json-partial"),
+        ("sola-jsonish-rescue", "sola-jsonish-partial"),
+        ("sola-yaml-rescue", "sola-yaml-partial"),
+    ],
+)
+def test_partial_cell_differs_from_its_rescue_twin_only_by_salvage(rescue_id, partial_id):
+    """A partial cell must isolate leaf salvage, nothing else.
+
+    Its twin is the *rescue* cell, not the plain one: salvage runs only after the
+    structural repairs have already failed, so the pair measures what is left to win at
+    that point. Both sides therefore carry a `parse_config` and the flag is the only
+    difference -- a separate assertion from the rescue pair's `None` vs not-`None`.
+    """
+    from benchmarking.dspy_adapters.adapters import ADAPTERS
+    from benchmarking.dspy_adapters.signatures import SIGNATURE_IDS, SIGNATURES
+
+    rescue = ADAPTERS[rescue_id].factory()
+    partial = ADAPTERS[partial_id].factory()
+    assert rescue.parse_config is not None and rescue.parse_config.partial is False
+    assert partial.parse_config is not None and partial.parse_config.partial is True
+    # a fresh config per cell, or arming one would arm the other
+    assert rescue.parse_config is not partial.parse_config
+
+    for sig_id in SIGNATURE_IDS:
+        cell = SIGNATURES[sig_id]
+        assert rescue.format(cell.signature, [], cell.inputs) == partial.format(
+            cell.signature, [], cell.inputs
+        ), sig_id
