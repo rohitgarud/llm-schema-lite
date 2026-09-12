@@ -41,14 +41,14 @@ runs against Ollama on the **`ollama_chat/` provider with `{"think": false}`**:
 |---|---|---|---|
 | `prompt-cost-2026-09-10.md` | offline | — | 12 adapters x 6 signatures |
 | `live-ollama_chat-qwen3-8b-2026-09-10.md` | outcomes | `qwen3:8b` | 8 adapters x 6 signatures x 3 trials |
-| `accuracy-ollama_chat-<model>-2026-09-10.md` | accuracy | six sub-1.2B models | 8 adapters x 30 cases each |
+| `accuracy-ollama_chat-<model>-2026-09-12.md` | accuracy | six sub-1.2B models | 8 adapters x 30 cases each |
 | `accuracy-<corpus>-ollama_chat-<model>-2026-09-10.md` | accuracy | same six models | 4 third-party corpora x 8 adapters x 30 cases |
 
 Each file's provenance block carries the exact command, git head and effective
 `lm_kwargs`. If no results file is present for a given arm and date, that pass was not
 run and no numbers exist for it — this file does not claim otherwise.
 
-Three sets of superseded artefacts were deleted rather than kept:
+Four sets of superseded artefacts were deleted rather than kept:
 
 - The `2026-09-05` live pair was generated at `41810a5`, before the
   `response_format_sent` fix and the `parse rate` / `validation rate` columns, so its
@@ -64,8 +64,29 @@ Three sets of superseded artefacts were deleted rather than kept:
   rendered as YAML and before untagged code fences were extracted. Every
   `sola-yaml-sections` row in it measured a prompt that no longer exists (0/18 on
   `qwen3:8b`), and it predates the `sola-yaml-rescue` cell. Superseded by the
-  `2026-09-10` set, which re-ran every arm on one code version rather than patching the
-  YAML rows in.
+  `2026-09-10` set, which re-ran every arm rather than patching the YAML rows in.
+- The **`2026-09-10`** synthetic accuracy pairs — six models — were superseded by the
+  `2026-09-12` set, re-run at `b1016fb`. The re-run changed no measurement: all 1440
+  cases were compared old against new and every non-`parse_config` cell scores
+  identically, including all 180 `sola-yaml-sections` cases. It was made for the schema,
+  which now carries `recall_matched` / `recall_total` / `recall`, `invented` and the raw
+  `replies`, and for a `git_head` that can reproduce its own file.
+
+The cells that *do* move between those two sets are the `parse_config` ones, which makes
+the pair the first clean A/B of the rescues at fixed prompts — same prompts, same greedy
+decode, same seed, so every delta is parse-time repair: `sola-jsonish-rescue` on
+`falcon3:1b` goes `0.000 -> 0.720` (all 30 cases `parse_error -> ok`, while its
+`sola-jsonish-sections` twin stays at `0.000`, isolating the rescue exactly),
+`sola-yaml-rescue` on `qwen3.5:0.8b` `0.831 -> 0.926`, on `llama3.2:1b` `0.311 -> 0.357`,
+on `granite3.1-moe:1b` `0.422 -> 0.446`. `falcon3:1b`'s gain carries the highest
+`invented` count of any cell (21), so it is not free.
+
+**The `git_head` stamps on the `2026-09-10` files are not trustworthy.** They were written
+by a `rev-parse HEAD` that never asked whether the tree was dirty, and several of those
+runs were made from dirty trees: files stamped `daf210b` contain a `sola-yaml-rescue` cell
+that commit does not define, and files stamped `867819b` pass `--corpus`, which
+`external.py` only gained in `33ef81f`, five hours later. Neither stamp can reproduce its
+own file. `git_head` now appends `-dirty`, so no later artefact can repeat this.
 
 ## 2. Quick start
 

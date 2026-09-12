@@ -1,8 +1,8 @@
 ```
 arm: accuracy
-generated: 2026-09-10T06:23:07.066411+00:00
+generated: 2026-09-12T08:28:07.492952+00:00
 command: python -m benchmarking.dspy_adapters --accuracy --cases 30
-git_head: daf210b
+git_head: b1016fb
 dspy_version: 3.3.1
 llm_schema_lite_version: 0.6.1
 model: ollama_chat/granite3.1-moe:1b
@@ -18,22 +18,24 @@ Same prompt, same model, greedy: without `response_format` → `{'prompt_tokens'
 
 prompt/completion token counts are NOT comparable across the `response_format` groups
 
-field accuracy is micro-averaged over the **expected** fields of every case: a cell that raised scores 0 against its full denominator rather than being excluded, and emitting fewer fields can never raise the score. Fields the model invents are reported under `spurious` and break `exact`, but do not enter the denominator. Ground truth is the generated record the prose was rendered from, so the corpus measures schema-following under paraphrase — not real-world extraction.
+field accuracy is micro-averaged over the **expected** fields of every case: a cell that raised scores 0 against its full denominator rather than being excluded, and emitting fewer fields can never raise the score. Fields the model invents are reported under `spurious` and break `exact`, but do not enter the denominator. A correct `None` also counts as a match, so on a sparse corpus field accuracy pays a reply for extracting nothing. **recall (non-null gold)** is the extraction-quality headline: matches over only the fields whose gold value is not `None`, a cell that raised scoring 0 against them, so extracting nothing scores 0. **invented (null gold)** is the other half: of the fields whose gold is `None`, how many the reply filled anyway. Ground truth is the generated record the prose was rendered from, so the corpus measures schema-following under paraphrase — not real-world extraction.
 
 The offline prompt-cost table and the live outcomes table are never joined into one table or one derived score.
 
 ## Extraction accuracy — aggregate
 
-| adapter | cases | field accuracy | exact records | ok | parse | validation | empty | transport | format | median wall_s | median total_tokens | response_format |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| chat | 30 | 0.000 | 0/30 (0.00) | 0 | 30 | 0 | 0 | 0 | 0 | 0.807 | 964.5 | none |
-| json | 30 | 0.797 | 6/30 (0.20) | 30 | 0 | 0 | 0 | 0 | 0 | 0.519 | 982.5 | json_object |
-| baml | 30 | 0.760 | 8/30 (0.27) | 27 | 3 | 0 | 0 | 0 | 0 | 0.709 | 563.0 | json_object |
-| sola-json-sections | 30 | 0.157 | 0/30 (0.00) | 6 | 0 | 24 | 0 | 0 | 0 | 0.659 | 933.5 | json_object |
-| sola-jsonish-sections | 30 | 0.858 | 9/30 (0.30) | 29 | 0 | 1 | 0 | 0 | 0 | 0.679 | 626.5 | json_object |
-| sola-yaml-sections | 30 | 0.422 | 5/30 (0.17) | 14 | 0 | 16 | 0 | 0 | 0 | 0.610 | 534.5 | none |
-| sola-jsonish-rescue | 30 | 0.858 | 9/30 (0.30) | 29 | 0 | 1 | 0 | 0 | 0 | 0.704 | 626.5 | json_object |
-| sola-yaml-rescue | 30 | 0.422 | 5/30 (0.17) | 14 | 0 | 16 | 0 | 0 | 0 | 0.598 | 534.5 | none |
+| adapter | cases | field accuracy | exact records | ok | parse | validation | empty | transport | format | median wall_s | median total_tokens | response_format | recall (non-null gold) | invented (null gold) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| chat | 30 | 0.000 | 0/30 (0.00) | 0 | 30 | 0 | 0 | 0 | 0 | 0.755 | 964.5 | none | 0.000 (0/296) | 0.000 (0/29) |
+| json | 30 | 0.797 | 6/30 (0.20) | 30 | 0 | 0 | 0 | 0 | 0 | 0.553 | 982.5 | json_object | 0.834 (247/296) | 0.207 (6/29) |
+| baml | 30 | 0.760 | 8/30 (0.27) | 27 | 3 | 0 | 0 | 0 | 0 | 0.661 | 563.0 | json_object | 0.791 (234/296) | 0.414 (12/29) |
+| sola-json-sections | 30 | 0.157 | 0/30 (0.00) | 6 | 0 | 24 | 0 | 0 | 0 | 0.673 | 933.5 | json_object | 0.169 (50/296) | 0.207 (6/29) |
+| sola-jsonish-sections | 30 | 0.858 | 9/30 (0.30) | 29 | 0 | 1 | 0 | 0 | 0 | 0.695 | 626.5 | json_object | 0.899 (266/296) | 0.414 (12/29) |
+| sola-yaml-sections | 30 | 0.422 | 5/30 (0.17) | 14 | 0 | 16 | 0 | 0 | 0 | 0.508 | 534.5 | none | 0.419 (124/296) | 0.172 (5/29) |
+| sola-jsonish-rescue | 30 | 0.858 | 9/30 (0.30) | 29 | 0 | 1 | 0 | 0 | 0 | 0.769 | 626.5 | json_object | 0.899 (266/296) | 0.414 (12/29) |
+| sola-yaml-rescue | 30 | 0.446 | 6/30 (0.20) | 15 | 0 | 15 | 0 | 0 | 0 | 0.513 | 534.5 | none | 0.439 (130/296) | 0.172 (5/29) |
+
+**All-null floor: 0.025** — the field accuracy of a reply that extracts nothing (every output field `None`) on these same cases. A correct `None` counts as a match, so field accuracy is only a distance from this floor, and an adapter near it may simply have extracted nothing. Recall (non-null gold) has a floor of 0 by construction: compare adapters on that.
 
 ## Most-missed fields
 
@@ -128,13 +130,13 @@ The offline prompt-cost table and the live outcomes table are never joined into 
 
 | field | wrong | missing |
 |---|---|---|
-| `tags[]` | 0 | 23 |
 | `contacts[].phone` | 3 | 18 |
+| `tags[]` | 0 | 21 |
 | `contacts[].email` | 2 | 18 |
-| `address.street` | 2 | 16 |
-| `address.city` | 0 | 16 |
-| `address.postcode` | 0 | 16 |
-| `age` | 0 | 16 |
-| `name` | 0 | 16 |
+| `address.street` | 2 | 15 |
+| `address.city` | 0 | 15 |
+| `address.postcode` | 0 | 15 |
+| `age` | 0 | 15 |
+| `name` | 0 | 15 |
 
 Per-case detail is in the companion `.csv`; it is not duplicated here.
