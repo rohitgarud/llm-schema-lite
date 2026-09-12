@@ -636,7 +636,8 @@ without it — offline numbers, not rows of the table above:
 
 The same six models and eight adapters, the first 30 cases of each corpus, field accuracy.
 Bold marks each model's best cell. Read every table against its all-null floor — the
-score of a reply that extracts nothing.
+score of a reply that extracts nothing. Numbers are read from the `2026-09-12` /
+`2026-09-13` artefacts, the first pass in which every cell carries its `replies`.
 
 **`pii`** (floor **0.949**):
 
@@ -647,22 +648,22 @@ score of a reply that extracts nothing.
 | `baml` | 0.833 | 0.696 | 0.000 | 0.142 | 0.000 | 0.000 |
 | `sola-json-sections` | 0.496 | 0.575 | 0.402 | 0.000 | 0.346 | 0.000 |
 | `sola-jsonish-sections` | 0.864 | 0.710 | 0.082 | 0.000 | 0.321 | 0.000 |
-| `sola-yaml-sections` | 0.928 | 0.289 | 0.000 | **0.443** | 0.383 | 0.000 |
-| `sola-jsonish-rescue` | 0.862 | 0.710 | 0.082 | 0.000 | 0.321 | 0.000 |
+| `sola-yaml-sections` | **0.929** | 0.289 | 0.000 | **0.443** | 0.383 | 0.000 |
+| `sola-jsonish-rescue` | 0.862 | 0.710 | 0.340 | 0.000 | 0.370 | 0.000 |
 | `sola-yaml-rescue` | **0.929** | 0.289 | 0.000 | **0.443** | **0.396** | 0.000 |
 
 **`financial-ner`** (floor **0.590**):
 
 | adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
 |---|---|---|---|---|---|---|
-| `chat` | 0.000 | 0.000 | **0.173** | 0.000 | 0.028 | 0.000 |
+| `chat` | 0.000 | 0.000 | 0.189 | 0.000 | 0.008 | 0.000 |
 | `json` | 0.044 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
 | `baml` | 0.570 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
 | `sola-json-sections` | 0.213 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
-| `sola-jsonish-sections` | 0.639 | 0.000 | 0.000 | **0.333** | 0.000 | 0.000 |
-| `sola-yaml-sections` | **0.763** | **0.020** | 0.000 | 0.100 | **0.112** | **0.036** |
-| `sola-jsonish-rescue` | 0.618 | 0.000 | 0.000 | **0.333** | 0.000 | 0.000 |
-| `sola-yaml-rescue` | **0.763** | **0.020** | 0.000 | 0.100 | **0.112** | 0.016 |
+| `sola-jsonish-sections` | 0.639 | 0.000 | 0.000 | 0.333 | 0.000 | 0.000 |
+| `sola-yaml-sections` | **0.699** | 0.020 | 0.000 | 0.100 | 0.112 | 0.036 |
+| `sola-jsonish-rescue` | 0.639 | **0.225** | **0.281** | **0.357** | **0.281** | 0.000 |
+| `sola-yaml-rescue` | 0.695 | 0.213 | 0.080 | 0.169 | 0.112 | **0.076** |
 
 **`insurance-claims`** (floor **0.018**):
 
@@ -671,18 +672,18 @@ score of a reply that extracts nothing.
 | `chat` | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
 | `json` | 0.111 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
 | `baml` | 0.026 | **0.152** | **0.025** | 0.000 | 0.000 | 0.000 |
-| `sola-json-sections` | **0.686** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
-| `sola-jsonish-sections` | 0.219 | 0.030 | 0.000 | 0.000 | **0.021** | 0.000 |
-| `sola-yaml-sections` | 0.628 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
-| `sola-jsonish-rescue` | 0.233 | 0.030 | 0.000 | 0.000 | **0.021** | 0.000 |
-| `sola-yaml-rescue` | 0.670 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-json-sections` | 0.697 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-jsonish-sections` | 0.219 | 0.030 | 0.000 | 0.000 | 0.021 | 0.000 |
+| `sola-yaml-sections` | 0.670 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-jsonish-rescue` | **0.721** | 0.030 | 0.000 | 0.000 | **0.042** | 0.000 |
+| `sola-yaml-rescue` | **0.721** | 0.000 | 0.019 | 0.000 | 0.000 | 0.000 |
 
 **`patient-notes`** (floor **0.356**):
 
 | adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
 |---|---|---|---|---|---|---|
-| `sola-jsonish-sections` | **0.162** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
-| `sola-jsonish-rescue` | 0.160 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-jsonish-sections` | **0.163** | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `sola-jsonish-rescue` | 0.160 | 0.000 | **0.021** | 0.000 | 0.000 | 0.000 |
 | every other adapter | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
 
 The causes below come from replaying failing cells and counting pydantic's first error
@@ -696,7 +697,7 @@ match the artefacts to within Ollama's noise, not exactly.
   is restraint, not recall. `gemma3:270m` with `json` (0.918) is the floor effect in pure
   form — every one of its misses is a real value left null. It extracted nothing.
 - **`financial-ner`: JSON mode fails on one shape, and a repair recovers it.** Only
-  `qwen3.5:0.8b` clears the 0.590 floor, in YAML (0.763) and JSONISH (0.639). JSON mode
+  `qwen3.5:0.8b` clears the 0.590 floor, in YAML (0.699) and JSONISH (0.639). JSON mode
   collapses because the model sends the record as a one-item list,
   `{"entities": [{...}]}` — that is the first error of every failed case under `json`
   (29/29) and `sola-json-sections` (21/21). `baml` parses but leaves 99 real values null.
@@ -704,29 +705,41 @@ match the artefacts to within Ollama's noise, not exactly.
   without it (`sola-json-rescue`): 9/30 -> 26/30 parsed, 0.209 -> 0.606 — onto the floor,
   still short of YAML. `llama3.2:1b` gains 3 records (0 -> 0.036), `granite3.1-moe:1b`
   none, and JSONISH and YAML replies are unchanged on every corpus: they never send the
-  shape.
+  shape. The re-run also makes `sola-jsonish-rescue` this corpus's best cell for four of
+  the six models — `smollm2:360m` 0.357, `llama3.2:1b` and `falcon3:1b` 0.281,
+  `granite3.1-moe:1b` 0.225, where the superseded table read 0.000 for three of them.
+  All four remain far below the 0.590 floor: parse repair turns a total failure into a
+  partial one here, it does not turn it into extraction.
 - **`insurance-claims` rewards keeping the nesting.** Under most adapters `qwen3.5:0.8b`
   hoists `ClaimHeader`'s fields to the top level, so `header` is reported missing: the
   first error of 18 of `json`'s 26 failures, 29/29 of `baml`'s, 21/22 of
   `sola-jsonish-sections`'. `sola-json-sections` keeps the nesting — 29/30 validate — and
-  scores 0.686, with YAML close behind at 0.670 with the rescue. This is the one corpus
-  where JSON mode's full schema beats the compact ones. With a 0.018 floor, every
+  scores 0.697, but it no longer leads: both rescue cells reach 0.721, so the repairs
+  below get to the same records without JSON mode's full schema. With a 0.018 floor, every
   non-zero score here is real extraction. The hoisting is repairable, and `ParseConfig()`
   now repairs it: hoisted fields move back under `header`, and in the other shape seen —
   `header`'s fields under `claim`, `claim`'s own fields beside it at the reply's top level
   — those move into `claim` first. Parsing the same captured completions with and
   without it, `qwen3.5:0.8b`'s JSONISH goes 0.233 -> 0.720 (9/30 -> 30/30 parsed), above
   `sola-json-sections`, and YAML 0.670 -> 0.721 once a `*` copied into nested keys is
-  stripped too. Those are offline A/B numbers; the table above predates the repair.
-- **`patient-notes` defeats every model.** The best cell is 0.162 against a 0.356 floor.
-  Of the 240 cells each model runs, all but `qwen3.5:0.8b`'s 16 JSONISH records are
-  parse, validation or (for `baml`) format errors; *Third-party corpora* above gives the
-  causes.
+  stripped too. Those were offline A/B numbers predicting a live run that has since
+  happened: the table above now carries both rescue cells at 0.721, within a thousandth
+  of the replayed 0.720 and 0.721. A parse-time prediction that survives contact with
+  fresh live calls is the strongest form this benchmark can offer.
+- **`patient-notes` defeats every model.** The best cell is 0.163 against a 0.356 floor.
+  Of the 240 cells each model runs, all but `qwen3.5:0.8b`'s JSONISH records and
+  `llama3.2:1b`'s one rescued cell (0.021) are parse, validation or (for `baml`) format
+  errors; *Third-party corpora* above gives the causes. `ParseConfig(partial=True)` is
+  the only thing measured here that moves it — `0/30` to `30/30` parsed — and it pays for
+  that in invented fields, which is why it is not a default.
 
 **What carries over from the synthetic corpus.** No adapter wins everywhere: on
-`qwen3.5:0.8b`, the only model that clears a floor, the best adapter is YAML on `pii` and
-`financial-ner`, `sola-json-sections` on `insurance-claims` and JSONISH on
-`patient-notes`. `falcon3:1b`, `gemma3:270m` and `smollm2:360m` clear no floor on any
-corpus, as on the synthetic one. What changes is the failure: the missing `record`
+`qwen3.5:0.8b`, the best adapter is YAML on `pii` and `financial-ner`, either rescue cell
+on `insurance-claims` and JSONISH on `patient-notes`. It is the only model that clears a
+floor worth clearing — `financial-ner` at 0.699 against 0.590. `insurance-claims` has a
+0.018 floor that four of the six models step over (`granite3.1-moe:1b` 0.152 on `baml`,
+`falcon3:1b` 0.042, `llama3.2:1b` 0.025), which says more about a floor that low than
+about the models; `gemma3:270m` and `smollm2:360m` clear nothing anywhere, as on the
+synthetic corpus. What changes is the failure: the missing `record`
 envelope that dominated the synthetic sweep gives way to shape errors *inside* the
 envelope — records wrapped in lists, nested objects flattened, strict literals missed.
