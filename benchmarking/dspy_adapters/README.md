@@ -42,11 +42,19 @@ runs against Ollama on the **`ollama_chat/` provider with `{"think": false}`**:
 | `prompt-cost-2026-09-10.md` | offline | — | 12 adapters x 6 signatures |
 | `live-ollama_chat-qwen3-8b-2026-09-10.md` | outcomes | `qwen3:8b` | 8 adapters x 6 signatures x 3 trials |
 | `accuracy-ollama_chat-<model>-2026-09-12.md` | accuracy | six sub-1.2B models | 8 adapters x 30 cases each |
-| `accuracy-<corpus>-ollama_chat-<model>-2026-09-10.md` | accuracy | same six models | 4 third-party corpora x 8 adapters x 30 cases |
+| `accuracy-<corpus>-ollama_chat-<model>-2026-09-12.md` | accuracy | `pii` all six; `financial-ner` all but `falcon3:1b`; `insurance-claims` and `patient-notes` `qwen3.5:0.8b` only | 8 adapters x 30 cases each, with `replies` |
+| `accuracy-<corpus>-ollama_chat-<model>-2026-09-10.md` | accuracy | the eleven cells the `2026-09-12` pass did not reach | 8 adapters x 30 cases each, no `replies` |
 
 Each file's provenance block carries the exact command, git head and effective
 `lm_kwargs`. If no results file is present for a given arm and date, that pass was not
 run and no numbers exist for it — this file does not claim otherwise.
+
+The third-party set spans two dates on purpose. The `2026-09-12` pass re-ran it for the
+`replies` column and an honest `git_head`, but the job was killed for low memory after 13
+of its 24 cells; a later narrow pass added `qwen3.5:0.8b` on the two corpora that had none.
+The `2026-09-10` files hold the remaining eleven cells and are kept for exactly that reason.
+Rows from the two dates are separate live runs and are not interchangeable at the third
+decimal: where both exist they agree to within one field.
 
 Four sets of superseded artefacts were deleted rather than kept:
 
@@ -315,7 +323,11 @@ They are **not** in the live default, and the reason is not cost. Salvage nulls 
 validation and keeps everything else, so it returns a record the model did not write and
 retains every value that validated — right or wrong. It therefore buys recall *with*
 invented fields, and a run that reports only its field accuracy would misrepresent it.
-Replaying the 900 recorded `qwen3.5:0.8b` replies through both tiers:
+Replaying 900 recorded `qwen3.5:0.8b` replies — five corpora x three modes x 30 cases,
+each row scored under both tiers — so every arrow below starts at `rescue`, not at
+`sections`. The distinction is not cosmetic: `patient-notes json` reads `0.091 → 0.589`
+from `rescue`, but `0.000 → 0.592` from `sections`, because the rescue tier alone already
+recovers four records there.
 
 | corpus / cell | field acc | recall | invented |
 |---|---|---|---|
@@ -330,6 +342,12 @@ No cell scores worse. The patient-notes rows are where validation rejected an ot
 good record over one bad leaf — `0/30` parsed becomes `30/30` in YAML — and they are also
 where the invented count explodes, which is exactly why the `invented` column has to be
 read next to the recall one rather than after it.
+
+Those 900 replies were captured out of tree. The `2026-09-12` pairs now carry a `replies`
+column for every corpus in the table, so it can be re-derived from committed artefacts;
+the `2026-09-10` third-party CSVs have no such column and never could. Re-deriving it
+reproduces the table to within a thousandth — `patient-notes json` scores `0.092` against
+the `0.091` recorded here, one field between two live runs.
 
 **Signatures** (six, `SIGNATURE_IDS` order):
 
