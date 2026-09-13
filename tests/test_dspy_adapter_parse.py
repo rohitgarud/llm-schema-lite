@@ -1025,3 +1025,62 @@ class TestExtractionFixes:
         assert adapter.parse(sig, '{"names": ["Ada", "Gra') == {"names": ["Ada"]}
         # The object closed, so a stray quote after it is not a cut
         assert adapter.parse(sig, '{"names": ["Ada"]} and "more') == {"names": ["Ada"]}
+
+
+class TestSchemaEchoIsNotData:
+    """A reply that is the rendered schema handed back is not an extraction.
+
+    Both output fields of QAOptional admit ``str``, so every rendered type token
+    validates and the reply used to be accepted with each field "extracted" as the
+    literal token. Measured on the ``pii`` corpus with ``gemma3:270m``,
+    ``sola-yaml-sections`` returned ok on 30/30 cases while inventing a value for all
+    1594 null-gold fields.
+    """
+
+    def test_yaml_schema_echo_raises(self):
+        """The recorded shape: a YAML schema sketch copied back verbatim."""
+        echo = "answer: string\nnote: string OR null  # (default=null)"
+        with pytest.raises(AdapterParseError):
+            make_adapter(OutputMode.YAML).parse(QAOptional, echo)
+
+    def test_json_schema_echo_raises(self):
+        """Not YAML-only: the same reply through the JSONISH branch."""
+        with pytest.raises(AdapterParseError):
+            make_adapter(OutputMode.JSONISH).parse(
+                QAOptional, '{"answer": "string", "note": "string OR null"}'
+            )
+
+    def test_constraint_and_container_tokens_are_recognised(self):
+        """Tokens carrying a constraint suffix or a container shape still count."""
+        with pytest.raises(AdapterParseError):
+            make_adapter(OutputMode.JSONISH).parse(
+                QAOptional, '{"answer": "string (2-9 chars)", "note": "list[string]"}'
+            )
+
+    def test_a_rescue_config_does_not_smuggle_the_echo_through(self):
+        """The guard sits above every rescue, so ParseConfig cannot revive it."""
+        with pytest.raises(AdapterParseError):
+            make_adapter(OutputMode.YAML, parse_config=ParseConfig()).parse(
+                QAOptional, "answer: string\nnote: string OR null"
+            )
+
+    def test_one_real_value_means_the_model_answered(self):
+        """Whole-reply, never per-field: a single real value keeps the reply."""
+        adapter = make_adapter(OutputMode.JSONISH)
+        assert adapter.parse(QAOptional, '{"answer": "Paris", "note": "string OR null"}') == {
+            "answer": "Paris",
+            "note": "string OR null",
+        }
+
+    def test_a_lone_token_valued_field_is_not_an_echo(self):
+        """Below the two-leaf floor, "string" is just an answer."""
+        sig = dspy.Signature({"q": (str, dspy.InputField()), "answer": (str, dspy.OutputField())})
+        assert make_adapter(OutputMode.JSONISH).parse(sig, '{"answer": "string"}') == {
+            "answer": "string"
+        }
+
+    def test_an_all_null_reply_is_not_an_echo(self):
+        """Extracting nothing is a legitimate answer and must not raise."""
+        assert make_adapter(OutputMode.JSONISH).parse(
+            QAOptional, '{"answer": "", "note": null}'
+        ) == {"answer": "", "note": None}

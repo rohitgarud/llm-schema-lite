@@ -56,6 +56,26 @@ _JSON_PARSE_ERROR_MESSAGE = "LM response cannot be serialized to a JSON object."
 # (see _extract_yaml).
 _YAML_PARSE_ERROR_MESSAGE = "LM response cannot be parsed as YAML or JSON."
 
+# Raised when the reply is this adapter's own rendered schema handed back verbatim. Named
+# separately from the two parse messages above because the reply DID parse -- it is well
+# formed, it is just the question rather than an answer.
+_SCHEMA_ECHO_ERROR_MESSAGE = "LM echoed the schema back instead of producing values."
+
+# The scalar type tokens the formatters render in value position, as emitted (see
+# FormatterConfig.TYPE_MAP and BaseFormatter.process_property). An echoed field arrives as
+# one of these, optionally with a constraint suffix ("(2-9 chars)", "(0 to 120)") and/or an
+# " OR null" tail; the trailing comment that would carry an enum's values is stripped by the
+# YAML/JSONish parse, so an echoed enum reduces to the bare word "string" and is caught by
+# the same set rather than needing its own rule.
+_TYPE_TOKEN_RE = re.compile(
+    r"^(?:string|int|float|bool|any|null|list\[[^\]]*\]|dict\[[^\]]*\])"
+    r"(?:\s*\([^)]*\))?(?:\s+OR\s+null)?$"
+)
+
+# Below this many scalar leaves an all-token reply is not evidence of an echo: a one-field
+# signature whose real answer is the word "string" would otherwise be destroyed.
+_SCHEMA_ECHO_MIN_LEAVES = 2
+
 # Bound on _unwrap_array_reply's recursion into nested lists. Deliberately separate from
 # FormatterConfig.max_recursion_depth (a render-side cap) and from MARKER_WALK_MAX_DEPTH
 # (parsers/schema_parser.py) -- each bounds a different walk.
@@ -1429,6 +1449,18 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
                 message=_JSON_PARSE_ERROR_MESSAGE,
             )
 
+        # Before any rescue: a reply whose every value is one of our own rendered type
+        # tokens is the prompt copied back, not an answer. It has to raise here rather
+        # than fall through, because against an all-str model it parses and validates
+        # cleanly -- the failure mode is a silent 100% invention rate, not an error.
+        if _is_schema_echo(raw):
+            raise AdapterParseError(
+                adapter_name="StructuredOutputAdapter",
+                signature=signature,
+                lm_response=completion,
+                message=_SCHEMA_ECHO_ERROR_MESSAGE,
+            )
+
         raw = self._normalize_reply_keys(signature, raw)
 
         fields = {k: v for k, v in raw.items() if k in signature.output_fields}
@@ -1642,6 +1674,41 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
 
 
 # ==================== Helper Functions ====================
+
+
+def _scalar_leaves(value: Any, _depth: int = 0) -> list[Any]:
+    """Every non-container leaf in ``value``, depth-first.
+
+    Shares _ARRAY_UNWRAP_MAX_DEPTH as its bound: both walk the same reply shapes, and a
+    reply deep enough to exhaust one is malformed for the other's purposes too.
+    """
+    if _depth >= _ARRAY_UNWRAP_MAX_DEPTH:
+        return []
+    if isinstance(value, dict):
+        return [leaf for v in value.values() for leaf in _scalar_leaves(v, _depth + 1)]
+    if isinstance(value, list):
+        return [leaf for v in value for leaf in _scalar_leaves(v, _depth + 1)]
+    return [value]
+
+
+def _is_schema_echo(raw: Any) -> bool:
+    """Whether ``raw`` is a rendered schema handed back instead of extracted values.
+
+    Small models sometimes copy the schema block out of the prompt. In YAML mode that
+    copy is itself valid YAML, so it parses, and against an all-``str | None`` model
+    every type token validates -- the reply is accepted and every field is "extracted"
+    as the literal string ``"string OR null"``. Measured on the ``pii`` corpus with
+    ``gemma3:270m``, ``sola-yaml-sections`` returned ok on 30/30 cases while inventing
+    a value for 1594/1594 fields whose gold is null.
+
+    The test is whole-reply and never per-field: a reply is an echo only when EVERY
+    scalar leaf is a type token. One real value among them means the model answered,
+    so nothing is nulled on a suspicion.
+    """
+    leaves = _scalar_leaves(raw)
+    if len(leaves) < _SCHEMA_ECHO_MIN_LEAVES:
+        return False
+    return all(isinstance(leaf, str) and _TYPE_TOKEN_RE.match(leaf.strip()) for leaf in leaves)
 
 
 def _unwrap_array_reply(raw: Any, _depth: int = 0) -> Any:

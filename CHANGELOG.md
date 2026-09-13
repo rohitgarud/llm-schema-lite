@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A reply that is the rendered schema echoed back is no longer accepted as data.**
+  Small models sometimes copy the schema block out of the prompt. In YAML mode that copy
+  is itself valid YAML, so it parsed, and against a model whose fields all admit `str`
+  every type token validated — the adapter returned success with each field "extracted"
+  as the literal string `string OR null`. Measured on the `pii` corpus with
+  `gemma3:270m`, `sola-yaml-sections` returned ok on 30/30 cases while inventing a value
+  for all 1594 fields whose gold is null. `StructuredOutputAdapter` now raises
+  `AdapterParseError` when *every* scalar leaf of a reply is one of its own rendered type
+  tokens. The test is whole-reply and never per-field, so a single legitimate value
+  (including the bare word `string`) is untouched. Replaying all 30 committed accuracy
+  cells moves 3 of them, in every case by reclassifying an echo that had been scored as a
+  success: `pii`/`gemma3:270m` invented 1.000 → 0.000 (`sola-yaml-sections`) and
+  0.967 → 0.000 (`sola-yaml-rescue`), and `financial-ner`/`smollm2:360m` invented
+  2.033 → 1.333 across 10 cases. Recall is unchanged in all three, so no real extraction
+  is lost — only the false successes. One of those cases is the instructive shape: the
+  model used genuinely extracted entity names as the *keys* (`Time Warner:`, `$80B:`)
+  while still echoing `list[string] OR null` as every value, and scored `ok` before.
+
 ## [v0.7.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.7.0) - 2026-09-13
 
 <small>[Compare with v0.6.1](https://github.com/rohitgarud/llm-schema-lite/compare/v0.6.1...v0.7.0)</small>

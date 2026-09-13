@@ -676,9 +676,17 @@ score of a reply that extracts nothing. Numbers are read from the `2026-09-12` /
 | `baml` | 0.570 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
 | `sola-json-sections` | 0.213 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
 | `sola-jsonish-sections` | 0.639 | 0.000 | 0.000 | 0.333 | 0.000 | 0.000 |
-| `sola-yaml-sections` | **0.699** | 0.020 | 0.000 | 0.100 | 0.112 | 0.036 |
+| `sola-yaml-sections` | **0.699** | 0.020 | 0.000 | 0.080 | 0.112 | 0.036 |
 | `sola-jsonish-rescue` | 0.639 | **0.225** | **0.281** | **0.357** | **0.281** | 0.000 |
-| `sola-yaml-rescue` | 0.695 | 0.213 | 0.080 | 0.169 | 0.112 | **0.076** |
+| `sola-yaml-rescue` | 0.695 | 0.213 | 0.080 | 0.149 | 0.112 | **0.076** |
+
+The two `smollm2:360m` YAML cells differ from the `2026-09-12` artefact beside them
+(0.100 and 0.169 there): those replies were recorded before the schema-echo guard, which
+now rejects a reply whose every value is a rendered type token. Ten of that cell's cases
+are echoes — including one where the model used real extracted entity names as the *keys*
+(`Time Warner:`, `$80B:`) while every value stayed `list[string] OR null`. Replaying the
+committed CSV on today's code reproduces the numbers above; recall is unchanged at 0.022
+and 0.000, so the drop removes credited echoes, not extractions.
 
 **`insurance-claims`** (floor **0.018**):
 
@@ -705,6 +713,12 @@ The causes below come from replaying failing cells and counting pydantic's first
 (location, type, input type) per case. Replays are separate live runs, so their counts
 match the artefacts to within Ollama's noise, not exactly.
 
+- **The `pii` / `gemma3:270m` YAML cells were schema echoes, not extractions.** Both
+  scored 0.000 field accuracy while reporting success on 30/30 and 29/30 cases, filling
+  every one of the 1594 null-gold fields with the literal token `string OR null`. The
+  guard now raises on them, taking invented from 1.000 and 0.967 to 0.000 with field
+  accuracy and recall unchanged. These two cells and the `financial-ner` / `smollm2:360m`
+  pair noted above are the only three the 30-cell sweep moves.
 - **Nothing beats the floor on `pii`.** The best cell, `qwen3.5:0.8b` with
   `sola-yaml-rescue`, is 0.929 against 0.949. Its misses are mostly *invented* values:
   under `json` it filled 93 fields that gold leaves null, dropped 53 real ones and got 10
