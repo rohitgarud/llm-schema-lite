@@ -9,7 +9,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel
 
 from ..coercion import ParseConfig, coerce_to_schema
-from ..exceptions import ConversionError
+from ..exceptions import ConversionError, ValidationError
 from ..schema_enrichment import enrich_schema_with_enum_metadata
 from .base import BaseParser
 from .json_parser import JSONParser
@@ -43,22 +43,29 @@ def _validate_field(
     """Validate a single field against its schema.
 
     `defs` is the root schema's $defs. A nested model's field_schema is a bare
-    {"$ref": "#/$defs/Name"}; on its own that resolves to nothing, jsonschema raises,
-    the blanket except below swallows it and the field is reported VALID -- so nested
-    content went unchecked. Passing defs puts the definitions back in scope.
+    {"$ref": "#/$defs/Name"}; without the definitions in scope it resolves to nothing
+    and jsonschema raises. Passing defs puts them back.
+
+    The (is_valid, errors) return describes the DATA. A broken SCHEMA -- an unresolvable
+    $ref, a malformed node, an uncompilable regex -- raises ValidationError instead.
+    Reporting it valid would be a lie (the value was never examined) and reporting it
+    invalid would blame the reply for a bug in the schema. This matches the non-partial
+    route, where JSONValidator already raises for exactly these schemas.
+
+    Raises:
+        ValidationError: The schema could not be compiled or evaluated.
     """
+    format_checker = FormatChecker()
+    if defs and isinstance(field_schema, dict):
+        field_schema = {**field_schema, "$defs": defs}
     try:
-        format_checker = FormatChecker()
-        if defs:
-            field_schema = {**field_schema, "$defs": defs}
         validator = Draft202012Validator(field_schema, format_checker=format_checker)
         errors = list(validator.iter_errors(value))
-        if not errors:
-            return True, []
-        error_messages = [err.message for err in errors]
-        return False, error_messages
-    except Exception:
+    except Exception as exc:
+        raise ValidationError(f"Invalid JSON schema: {exc}") from exc
+    if not errors:
         return True, []
+    return False, [err.message for err in errors]
 
 
 MARKER_WALK_MAX_DEPTH = 8
@@ -564,8 +571,10 @@ class SchemaParser(BaseParser):
                     # Optional field - set to None and track failure
                     result_dict[field_name] = None
                     failed_fields[field_name] = value
-            except ConversionError:
-                # Re-raise ConversionError (for required fields)
+            except (ConversionError, ValidationError):
+                # ConversionError: a required field failed. ValidationError: the schema
+                # itself is broken, which is not "this field failed validation" and must
+                # not be downgraded to a nulled optional field by the handler below.
                 raise
             except Exception as err:
                 # Any other exception means validation/coercion failed

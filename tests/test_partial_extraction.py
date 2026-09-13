@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from llm_schema_lite import ConversionError, ParseConfig, loads
+from llm_schema_lite import ConversionError, ParseConfig, ValidationError, loads
 from llm_schema_lite.parsers.schema_parser import (
     _build_result,
     _get_json_schema,
@@ -462,6 +462,102 @@ class TestNestedModels:
                 schema=self._user_model(),
                 parse_config=ParseConfig(partial=True),
             )
+
+
+class TestBrokenSchemaRaises:
+    """A broken schema is a schema defect, not a field that failed validation.
+
+    _validate_field used to answer "valid" for anything it could not evaluate, so a
+    schema jsonschema cannot compile silently accepted whatever the model sent. The
+    non-partial route has always raised for these; partial mode was the outlier.
+    """
+
+    BROKEN = {
+        "dangling $ref": {"$ref": "#/$defs/Missing"},
+        "uncompilable regex": {"type": "string", "pattern": "["},
+        "malformed type node": {"type": 5},
+    }
+
+    @pytest.mark.parametrize("label", sorted(BROKEN))
+    def test_broken_schema_on_required_field_raises(self, label):
+        """A required field whose schema cannot be evaluated raises ValidationError."""
+        schema = {
+            "type": "object",
+            "properties": {"field": self.BROKEN[label]},
+            "required": ["field"],
+        }
+        with pytest.raises(ValidationError):
+            loads(
+                '{"field": "anything"}',
+                schema=schema,
+                parse_config=ParseConfig(partial=True),
+            )
+
+    @pytest.mark.parametrize("label", sorted(BROKEN))
+    def test_broken_schema_on_optional_field_raises(self, label):
+        """An OPTIONAL field must not swallow the schema defect by nulling itself.
+
+        This is the case the old blanket except hid best: the field was quietly set to
+        None, recorded in failed_fields as if the reply were at fault, and the caller
+        got a successful parse back.
+        """
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "extra": self.BROKEN[label],
+            },
+            "required": ["name"],
+        }
+        with pytest.raises(ValidationError):
+            loads(
+                '{"name": "Alice", "extra": "anything"}',
+                schema=schema,
+                parse_config=ParseConfig(partial=True),
+            )
+
+    @pytest.mark.parametrize("label", sorted(BROKEN))
+    def test_both_routes_agree_on_a_broken_schema(self, label):
+        """partial=True and partial=False reject the same broken schema."""
+        schema = {
+            "type": "object",
+            "properties": {"field": self.BROKEN[label]},
+            "required": ["field"],
+        }
+        with pytest.raises(ValidationError):
+            loads('{"field": "anything"}', schema=schema)
+        with pytest.raises(ValidationError):
+            loads(
+                '{"field": "anything"}',
+                schema=schema,
+                parse_config=ParseConfig(partial=True),
+            )
+
+    def test_validate_field_raises_on_unevaluatable_schema(self):
+        """_validate_field itself raises rather than reporting an unchecked value valid."""
+        with pytest.raises(ValidationError):
+            _validate_field("abc", {"type": "string", "pattern": "["})
+
+    def test_validate_field_still_reports_data_errors_normally(self):
+        """A sound schema with bad data is still (False, errors), not an exception."""
+        is_valid, errors = _validate_field("not_a_number", {"type": "integer"})
+        assert is_valid is False
+        assert errors
+
+    def test_valid_schema_is_unaffected(self):
+        """The tightening changes nothing for a schema that compiles."""
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        result, metadata = loads(
+            '{"name": "Alice"}',
+            schema=schema,
+            parse_config=ParseConfig(partial=True),
+        )
+        assert result["name"] == "Alice"
+        assert metadata["failed_fields"] == {}
 
 
 class TestRequiredMarkerKeys:

@@ -555,3 +555,96 @@ class TestMetadata:
         assert len(age_metadata) == 1
         assert age_metadata[0].original_value == "25"
         assert age_metadata[0].coerced_value == 25
+
+
+class TestNestedModelRefs:
+    """A nested BaseModel reaches coercion as {"$ref": "#/$defs/Name"}.
+
+    Until the ref was resolved that node carried no "type", so every field inside it
+    fell through to the untyped-object branch and was coerced against a hardcoded
+    {"type": "string"} -- including values that already had the declared type.
+    """
+
+    @staticmethod
+    def _user_model():
+        from pydantic import BaseModel
+
+        class Address(BaseModel):
+            street: str
+            zipcode: int
+            verified: bool
+
+        class User(BaseModel):
+            name: str
+            address: Address
+
+        return User
+
+    def test_correct_nested_types_are_preserved(self):
+        """Values already of the declared type are left alone, not stringified."""
+        data = {
+            "name": "Ada",
+            "address": {"street": "1 Main St", "zipcode": 12345, "verified": True},
+        }
+        result, _ = coerce(data, self._user_model(), ParseConfig())
+
+        assert result["address"]["zipcode"] == 12345
+        assert result["address"]["verified"] is True
+
+    def test_nested_values_coerce_to_their_declared_types(self):
+        """A nested int-as-string becomes an int once the $ref resolves."""
+        data = {
+            "name": "Ada",
+            "address": {"street": "1 Main St", "zipcode": "12345", "verified": "true"},
+        }
+        result, _ = coerce(data, self._user_model(), ParseConfig())
+
+        assert result["address"]["zipcode"] == 12345
+        assert result["address"]["verified"] is True
+
+    def test_nested_coercion_reports_a_dotted_field_path(self):
+        """Metadata for a coercion inside a nested model carries the full path."""
+        data = {
+            "name": "Ada",
+            "address": {"street": "1 Main St", "zipcode": "12345", "verified": True},
+        }
+        _, metadata = coerce(data, self._user_model(), ParseConfig())
+
+        assert "address.zipcode" in {m.field_path for m in metadata}
+
+
+class TestNoneIsNotCoerced:
+    """null is a value, not a type mismatch to repair.
+
+    str(None) yields the string "None", which validates against {"type": "string"};
+    coercing it therefore hid a missing value from the validator completely.
+    """
+
+    def test_none_is_left_alone_for_a_string_field(self):
+        """A null stays null instead of becoming the string "None"."""
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        result, metadata = coerce({"name": None}, schema, ParseConfig())
+
+        assert result["name"] is None
+        assert metadata == []
+
+    def test_none_is_left_alone_inside_a_nested_model(self):
+        """The guard applies at every level, not just the top one."""
+        from pydantic import BaseModel
+
+        class Address(BaseModel):
+            street: str
+
+        class User(BaseModel):
+            address: Address
+
+        result, _ = coerce({"address": {"street": None}}, User, ParseConfig())
+
+        assert result["address"]["street"] is None
+
+    def test_coerce_value_keeps_its_own_contract(self):
+        """The guard lives in coerce_recursive; the primitive is deliberately unchanged."""
+        result, metadata = coerce_value(None, "string")
+
+        assert result == "None"
+        assert metadata is not None
