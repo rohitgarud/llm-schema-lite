@@ -9,6 +9,8 @@
 
 Transform verbose JSON schemas into LLM-friendly formats. Reduce token usage by **60-85%** while preserving essential type information and integrating validation constraints directly into type descriptions for optimal LLM readability. Includes robust JSON/YAML parsing with automatic error recovery and enhanced constraint integration across all formatters.
 
+Framework agnostic by construction: the package turns a schema into a string and a reply back into a model, so it drops into the OpenAI SDK, any OpenAI-compatible endpoint, or a framework like DSPy without tying you to any of them.
+
 ---
 
 ## 📦 Installation
@@ -213,10 +215,157 @@ for m in metadata:
 # age to_int 36 -> 36
 ```
 
-`loads(reply, schema=User)` already runs coercion and returns `(instance, metadata)`; call
-`coerce()` directly when you have a dict rather than raw model text.
+`loads(reply, schema=User)` validates against the schema and returns `(instance, metadata)`;
+call `coerce()` directly when you have a dict rather than raw model text.
+
+### Tuning the parse with `ParseConfig`
+
+`ParseConfig` is the single knob-holder for parsing and coercion behaviour. `loads()`,
+`coerce()` and the DSPy adapter all take one:
+
+| Field | Default | Effect |
+|---|---|---|
+| `partial` | `False` | Keep what validates. A failing **optional** field is dropped and listed in `metadata["failed_fields"]`; a failing **required** field still raises `ConversionError`. |
+| `allow_coercion` | `True` | Coerce a field that fails validation instead of rejecting it. |
+| `coerce_list_single_item` | `False` | Wrap a lone scalar where a list belongs — `"x"` becomes `["x"]`. |
+| `strip_required_marker` | `"*"` | Strip this trailing marker from reply keys, at every nesting level, so a model that echoes `name*` back is still understood. Set to `""` to disable. |
+| `log_coercions` | `True` | Log coercion events for debugging. |
+
+One sharp edge worth stating plainly: **`allow_coercion` and `coerce_list_single_item` only
+take effect when `partial=True`.** The default `loads()` path validates without coercing, so a
+reply carrying `"age": "36"` raises rather than repairing the string. Reach for `coerce()`, or
+turn on `partial=True`:
+
+```python
+from pydantic import BaseModel, Field
+
+from llm_schema_lite import ConversionError, ParseConfig, loads
+
+
+class Address(BaseModel):
+    street: str
+    city: str
+
+
+class User(BaseModel):
+    name: str = Field(min_length=2)
+    age: int = Field(ge=0, le=120)
+    address: Address
+
+
+reply = '{"name": "Ada", "age": "36", "address": {"street": "1 Main St", "city": "Springfield"}}'
+
+try:
+    loads(reply, schema=User)  # the default path validates without coercing
+except ConversionError as exc:
+    print(exc)  # Validation failed: ... '36' is not of type 'integer'
+
+user, metadata = loads(reply, parse_config=ParseConfig(partial=True), schema=User)
+print(user.age)  # 36
+```
+
+`partial=True` still needs every **required** field present: it salvages fields that fail
+validation, not fields the model never sent.
+
+It is also a rescue, not a constructor. A nested model's *contents* are checked against the
+schema, but partial mode assembles the instance with Pydantic's own validation pass skipped,
+so the nested value arrives as a plain `dict` — `user.address` above is
+`{'street': ..., 'city': ...}`, not an `Address` instance. Re-validate the result yourself if
+you need the nested type rather than the nested data.
+
+## 🔌 Use It With Any SDK
+
+There is no LLM client dependency here. The package renders a schema **to a string** and
+parses a reply **from a string** — anything that can send text to a model is already
+compatible, and you keep whatever SDK you are using.
+
+Against the OpenAI **Responses API**:
+
+<!-- lsl-docs: skip: issues a live OpenAI Responses API request -->
+
+```python
+from openai import OpenAI
+from pydantic import BaseModel, Field
+
+from llm_schema_lite import loads, simplify_schema
+
+
+class User(BaseModel):
+    """A user account."""
+
+    name: str = Field(min_length=2, description="Full name")
+    age: int = Field(ge=0, le=120)
+    email: str | None = None
+
+
+client = OpenAI()
+schema = simplify_schema(User)
+
+response = client.responses.create(
+    model="gpt-4o-mini",
+    input=[
+        {
+            "role": "system",
+            "content": (
+                "Reply with one JSON object matching this schema:\n"
+                f"{schema.to_string()}"
+            ),
+        },
+        {"role": "user", "content": "Ada Lovelace, 36, ada@example.com"},
+    ],
+)
+
+user, metadata = loads(response.output_text, schema=User)
+print(user.name, user.age)  # Ada Lovelace 36
+```
+
+Two calls into the package, at the two edges of the request: `simplify_schema()` on the way
+out, `loads()` on the way back. Everything between them is your SDK's business.
+
+`loads()` is doing real work on that return trip. It absorbs the replies a bare
+`json.loads()` rejects — markdown fences, a leading `Here you go:`, a trailing comma,
+single quotes — so a slightly unruly model does not become an exception at the call site.
+
+### Chat Completions, and any OpenAI-compatible endpoint
+
+Swap the one call. The schema and the parse do not move:
+
+<!-- lsl-docs: skip: issues a live OpenAI Chat Completions request -->
+
+```python
+completion = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[...],  # same two messages as above
+)
+user, metadata = loads(completion.choices[0].message.content, schema=User)
+```
+
+Point `base_url` somewhere else and the identical code runs against a local or third-party
+server — Ollama, vLLM, LM Studio, OpenRouter:
+
+<!-- lsl-docs: skip: constructs an OpenAI client pointed at a local server -->
+
+```python
+client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+```
+
+That last case is the one the compact format is built for. A small local model frequently
+has no structured-output mode to fall back on, so the schema has to travel in the prompt —
+where its size is paid for on every call — and the reply has to be parsed defensively.
+Passing `parse_config=ParseConfig(partial=True)` to `loads()` goes further still: an
+*optional* field that fails validation is dropped and reported in
+`metadata["failed_fields"]` rather than sinking the whole reply, while a *required* field
+that fails still raises `ConversionError`. Partial mode salvages the nice-to-haves; it
+does not hand you a half-built model.
+
+Anthropic, Gemini, Bedrock, LiteLLM, LangChain, a bare `httpx.post` — none of them need
+anything different. Hand the model `schema.to_string()`, hand the reply to `loads()`.
 
 ## 🤖 DSPy Integration
+
+The DSPy adapter below is a convenience, not the supported path — it wires the same two
+calls into DSPy's adapter protocol so you do not have to. Skip it entirely if you are not
+using DSPy.
 
 `pip install "llm-schema-lite[dspy]"` (DSPy `>=3.3.1`) adds `StructuredOutputAdapter`, a
 drop-in DSPy adapter that renders signature schemas in the compact format above instead of
