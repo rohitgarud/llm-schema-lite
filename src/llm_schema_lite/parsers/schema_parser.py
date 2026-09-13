@@ -1,7 +1,6 @@
 """Schema parser for parsing with schema validation and partial extraction."""
 
 import json
-import re
 from collections.abc import Iterable
 from typing import Any, cast
 
@@ -12,7 +11,7 @@ from ..coercion import ParseConfig, coerce_to_schema
 from ..exceptions import ConversionError, ValidationError
 from ..schema_enrichment import enrich_schema_with_enum_metadata
 from .base import BaseParser
-from .json_parser import JSONParser
+from .json_parser import JSONParser, _extract_balanced
 
 # =============================================================================
 # Module-level helper functions (for internal use and re-export)
@@ -425,7 +424,8 @@ class SchemaParser(BaseParser):
         self._extract_json_from_text. Folding both into one unconditional behaviour
         would silently change the non-partial route's failure mode for garbage input
         from a parse error into a validation error, which is out of scope for
-        lsl-2026-09-04-008. _extract_json_from_text itself is unchanged.
+        lsl-2026-09-04-008. _extract_json_from_text extracts the first brace-balanced
+        object (lsl-2026-09-13-003); the asymmetry itself is unchanged.
 
         Args:
             text: The text content to parse.
@@ -588,12 +588,14 @@ class SchemaParser(BaseParser):
         return result_dict, failed_fields
 
     def _extract_json_from_text(self, text: str) -> dict[str, Any]:
-        """Extract JSON object from text that may contain extra content."""
-        # Try to find JSON object in the text
-        json_match = re.search(r"\{[^{}]*\}", text)
-        if json_match:
+        """Extract the first brace-balanced JSON object from text with extra content."""
+        # _extract_balanced returns its input UNCHANGED when nothing balances, so identity
+        # cannot be the sentinel: a text that is itself one object also comes back as-is.
+        # A real span is recognised by its shape -- it always starts "{" and ends "}".
+        span = _extract_balanced(text, "{", "}")
+        if span.startswith("{") and span.endswith("}"):
             try:
-                parsed: dict[str, Any] = JSONParser().parse(json_match.group(), repair=True)
+                parsed: dict[str, Any] = JSONParser().parse(span, repair=True)
                 return parsed
             except ConversionError:
                 pass

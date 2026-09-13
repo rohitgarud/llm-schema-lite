@@ -1104,3 +1104,130 @@ class TestMappingAndBareContainerValues:
         )
 
         assert result.m == {"a": 5}
+
+
+class TestEmbeddedJSONRescue:
+    """The embedded-JSON rescue returns the outermost object, not an inner fragment
+    (lsl-2026-09-13-003).
+
+    FENCE below is the only reachable trigger: a markdown fence whose body is not
+    JSON, so JSONParser.parse raises ConversionError and _parse_to_dict falls back to
+    _extract_json_from_text -- which re-scans the ORIGINAL text, not the fence body.
+    A bare prose+object reply (no fence) never reaches this rescue at all;
+    _extract_balanced handles it correctly one layer up.
+    """
+
+    FENCE = "```json\nnot json at all\n```\n"
+
+    def test_nested_object_in_prose_returns_outermost(self):
+        """The money case: a key-shadowing nested object no longer silently wins."""
+        from pydantic import BaseModel
+
+        class Reading(BaseModel):
+            value: int
+            unit: str
+
+        text = (
+            self.FENCE + 'Answer: {"previous": {"value": 1, "unit": "C"}, "value": 5, "unit": "F"}'
+        )
+        result, metadata = loads(text, schema=Reading, parse_config=ParseConfig(partial=True))
+        assert result.value == 5
+        assert result.unit == "F"
+        assert metadata["failed_fields"] == {}
+
+    def test_flat_object_unchanged(self):
+        """A flat object in fenced prose is extracted exactly as before (AC-3)."""
+        from pydantic import BaseModel
+
+        class Reading(BaseModel):
+            value: int
+            unit: str
+
+        text = self.FENCE + 'Answer: {"value": 5, "unit": "F"}'
+        result, _ = loads(text, schema=Reading, parse_config=ParseConfig(partial=True))
+        assert result.value == 5
+        assert result.unit == "F"
+
+    def test_sibling_objects_first_wins(self):
+        """Two sibling objects: the first still wins (inherited, unchanged ambiguity)."""
+        from pydantic import BaseModel
+
+        class Reading(BaseModel):
+            value: int
+            unit: str
+
+        text = self.FENCE + 'Fmt {"value": 0, "unit": "X"} Actual {"value": 5, "unit": "F"}'
+        result, _ = loads(text, schema=Reading, parse_config=ParseConfig(partial=True))
+        assert result.value == 0
+        assert result.unit == "X"
+
+    def test_no_object_raises_for_required_field(self):
+        """No object anywhere -> {} -> the required field is reported missing."""
+        from pydantic import BaseModel
+
+        class Reading(BaseModel):
+            value: int
+            unit: str
+
+        text = self.FENCE + "Answer: forty two"
+        with pytest.raises(ConversionError) as exc_info:
+            loads(text, schema=Reading, parse_config=ParseConfig(partial=True))
+        assert "value" in str(exc_info.value)
+
+    def test_no_object_yields_all_none_for_optional_schema(self):
+        """No object, all-optional schema -> {} survives as a successful all-None record."""
+        from pydantic import BaseModel
+
+        class ReadingOpt(BaseModel):
+            value: int | None = None
+            unit: str | None = None
+
+        text = self.FENCE + "Answer: forty two"
+        result, _ = loads(text, schema=ReadingOpt, parse_config=ParseConfig(partial=True))
+        assert result.value is None
+        assert result.unit is None
+
+    def test_unbalanced_object_yields_no_record(self):
+        """An unbalanced (never-closing) object no longer donates its inner fragment."""
+        from pydantic import BaseModel
+
+        class Reading(BaseModel):
+            value: int
+            unit: str
+
+        text = self.FENCE + 'Answer: {"outer": {"value": 1, "unit": "C"} oops'
+        with pytest.raises(ConversionError) as exc_info:
+            loads(text, schema=Reading, parse_config=ParseConfig(partial=True))
+        assert "value" in str(exc_info.value)
+
+    def test_whole_text_object_is_not_treated_as_no_match(self):
+        """Direct-call sentinel: a bare, whole-text object is not misclassified as
+        'nothing found' by the shape guard. Unreachable through loads() -- a reachable
+        reply always starts with a fence, so this is the one deliberate non-end-to-end
+        test in this class."""
+        from pydantic import BaseModel
+
+        from llm_schema_lite.parsers.schema_parser import SchemaParser
+
+        class Reading(BaseModel):
+            value: int
+            unit: str
+
+        parser = SchemaParser(Reading)
+        assert parser._extract_json_from_text('{"value": 5, "unit": "F"}') == {
+            "value": 5,
+            "unit": "F",
+        }
+
+    def test_brace_inside_string_value_is_not_truncated(self):
+        """A `{` or `}` inside a JSON string value no longer truncates the match."""
+        from pydantic import BaseModel
+
+        class Reading(BaseModel):
+            value: int
+            unit: str
+
+        text = self.FENCE + 'Answer: {"code": "if (x) { y }", "value": 5, "unit": "F"}'
+        result, _ = loads(text, schema=Reading, parse_config=ParseConfig(partial=True))
+        assert result.value == 5
+        assert result.unit == "F"

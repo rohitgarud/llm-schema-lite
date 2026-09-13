@@ -397,6 +397,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The embedded-JSON rescue no longer returns an inner fragment of the reply.** In
+  partial mode (`ParseConfig(partial=True)` with a `schema`), a reply whose markdown
+  fence holds something other than JSON falls back to scanning the whole reply for an
+  object. That scan used a non-recursive regex, so it matched the first *innermost*
+  `{…}`: for a fenced reply followed by
+  `Answer: {"previous": {"value": 1, "unit": "C"}, "value": 5, "unit": "F"}` it returned
+  the nested `previous` object, and because those keys covered the schema's required
+  set the caller got `Reading(value=1, unit='C')` with no error and an empty
+  `failed_fields`. The rescue now uses the same brace-balanced, string-aware scanner as
+  ordinary extraction, so it returns the outermost object (`value=5, unit='F'`), and a
+  `{` or `[` inside a string value no longer truncates the match. **User-observable
+  change:** when the reply's only object is unbalanced (e.g.
+  `{"outer": {"value": 1, "unit": "C"}` with no closing brace), a record used to be
+  built from the nested fragment; no complete object is found now, so a missing
+  required field raises `ConversionError` instead. Flat objects, sibling objects (the
+  first still wins) and replies with no object at all are unchanged.
+  (`lsl-2026-09-13-003`)
 - **A benchmark artefact's `git_head` now says when the tree was dirty.** The stamp was a
   bare `git rev-parse --short HEAD`, so a results file could name a commit that cannot
   produce it: the `2026-09-10` files stamp `daf210b` while running an uncommitted
