@@ -43,7 +43,6 @@ runs against Ollama on the **`ollama_chat/` provider with `{"think": false}`**:
 | `live-ollama_chat-qwen3-8b-2026-09-10.md` | outcomes | `qwen3:8b` | 8 adapters x 6 signatures x 3 trials |
 | `accuracy-ollama_chat-<model>-2026-09-12.md` | accuracy | six sub-1.2B models | 8 adapters x 30 cases each |
 | `accuracy-<corpus>-ollama_chat-<model>-2026-09-12.md` and `-2026-09-13.md` | accuracy | six sub-1.2B models, all four corpora | 8 adapters x 30 cases each, with `replies` |
-| `accuracy-<corpus>-ollama_chat-<model>-2026-09-10.md` | accuracy | same six models, superseded | 8 adapters x 30 cases each, no `replies` |
 
 Each file's provenance block carries the exact command, git head and effective
 `lm_kwargs`. If no results file is present for a given arm and date, that pass was not
@@ -53,7 +52,7 @@ The third-party set is complete — four corpora x six models x eight adapters x
 every row carrying `replies` — but it took three passes to get there, and the file dates
 record that rather than hide it. The first was killed for low memory after 13 of 24 cells,
 a narrow second added `qwen3.5:0.8b` on the two corpora left with none, and a third ran the
-last eleven. The `2026-09-10` third-party files are superseded by it and carry no `replies`.
+last eleven. The `2026-09-10` third-party files it replaces have been deleted.
 
 The `2026-09-13` dates are a clock artefact, not a third pass: those eleven cells all ran
 between 17:38 and 19:57 UTC on the 12th, but the filename date is **local** while the
@@ -61,7 +60,7 @@ between 17:38 and 19:57 UTC on the 12th, but the filename date is **local** whil
 The names are left alone deliberately — renaming a file would make its name disagree with
 its own provenance block, which is the exact failure this whole exercise exists to stop.
 
-Four sets of superseded artefacts were deleted rather than kept:
+Five sets of superseded artefacts were deleted rather than kept:
 
 - The `2026-09-05` live pair was generated at `41810a5`, before the
   `response_format_sent` fix and the `parse rate` / `validation rate` columns, so its
@@ -84,6 +83,11 @@ Four sets of superseded artefacts were deleted rather than kept:
   identically, including all 180 `sola-yaml-sections` cases. It was made for the schema,
   which now carries `recall_matched` / `recall_total` / `recall`, `invented` and the raw
   `replies`, and for a `git_head` that can reproduce its own file.
+- The **`2026-09-10`** third-party accuracy pairs — four corpora x six models — were
+  superseded by the `2026-09-12` / `2026-09-13` set once it reached all 24 cells. They
+  carried no `replies`, `recall` or `invented` columns, so nothing in them could be
+  replayed or re-scored; every table that once cited them has been re-read off the new
+  files, and several claims changed in the process.
 
 The cells that *do* move between those two sets are the `parse_config` ones, which makes
 the pair the first clean A/B of the rescues at fixed prompts — same prompts, same greedy
@@ -94,12 +98,14 @@ decode, same seed, so every delta is parse-time repair: `sola-jsonish-rescue` on
 on `granite3.1-moe:1b` `0.422 -> 0.446`. `falcon3:1b`'s gain carries the highest
 `invented` count of any cell (21), so it is not free.
 
-**The `git_head` stamps on the `2026-09-10` files are not trustworthy.** They were written
-by a `rev-parse HEAD` that never asked whether the tree was dirty, and several of those
-runs were made from dirty trees: files stamped `daf210b` contain a `sola-yaml-rescue` cell
-that commit does not define, and files stamped `867819b` pass `--corpus`, which
-`external.py` only gained in `33ef81f`, five hours later. Neither stamp can reproduce its
-own file. `git_head` now appends `-dirty`, so no later artefact can repeat this.
+**The `git_head` stamps on the two surviving `2026-09-10` files are not trustworthy.**
+They were written by a `rev-parse HEAD` that never asked whether the tree was dirty, and
+both runs were made from dirty trees: the `qwen3:8b` live pair stamps `daf210b` and the
+prompt-cost pair `867819b`, yet each reports a `sola-yaml-rescue` cell that neither commit
+defines. Neither stamp can reproduce its own file. The sharpest evidence — files stamped
+`867819b` passing `--corpus`, which `external.py` only gained in `33ef81f` five hours
+later — was in the third-party artefacts, now deleted. `git_head` appends `-dirty` from
+`0a19fb4` on, so no later artefact can repeat this.
 
 ## 2. Quick start
 
@@ -350,8 +356,8 @@ where the invented count explodes, which is exactly why the `invented` column ha
 read next to the recall one rather than after it.
 
 Those 900 replies were captured out of tree. The `2026-09-12` pairs now carry a `replies`
-column for every corpus in the table, so it can be re-derived from committed artefacts;
-the `2026-09-10` third-party CSVs have no such column and never could. Re-deriving it
+column for every corpus in the table, so it can be re-derived from committed artefacts —
+which the superseded third-party CSVs never could, having no such column. Re-deriving it
 reproduces the table to within a thousandth — `patient-notes json` scores `0.092` against
 the `0.091` recorded here, one field between two live runs.
 
