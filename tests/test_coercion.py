@@ -648,3 +648,64 @@ class TestNoneIsNotCoerced:
 
         assert result == "None"
         assert metadata is not None
+
+
+class TestOptionalFieldsAreNotStringified:
+    """`X | None` is an anyOf node carrying no "type" of its own.
+
+    Without the unwrap it fell through to the scalar branch and was coerced against
+    the default {"type": "string"}, so a valid `int | None` of 7 became "7" -- which
+    then failed validation and, in partial mode, nulled the field and recorded the
+    reply as at fault.
+    """
+
+    def test_a_valid_optional_int_survives_coercion(self):
+        """The regression: a correctly-typed optional value is left exactly alone."""
+        from pydantic import BaseModel
+
+        class Rec(BaseModel):
+            name: str
+            count: int | None = None
+
+        result, metadata = coerce({"name": "Ada", "count": 7}, Rec, ParseConfig())
+
+        assert result["count"] == 7
+        assert metadata == []
+
+    def test_an_optional_int_is_still_coerced_from_a_string(self):
+        """Unwrapping must not cost the coercion the union was hiding."""
+        from pydantic import BaseModel
+
+        class Rec(BaseModel):
+            name: str
+            count: int | None = None
+
+        result, _ = coerce({"name": "Ada", "count": "7"}, Rec, ParseConfig())
+
+        assert result["count"] == 7
+
+    def test_an_optional_nested_model_resolves_through_the_union(self):
+        """anyOf wrapping a $ref: both hops have to happen, in that order."""
+        from pydantic import BaseModel
+
+        class Address(BaseModel):
+            zipcode: int
+
+        class User(BaseModel):
+            address: Address | None = None
+
+        result, _ = coerce({"address": {"zipcode": 12345}}, User, ParseConfig())
+
+        assert result["address"]["zipcode"] == 12345
+
+    def test_a_genuine_multi_type_union_is_left_alone(self):
+        """Two non-null members give no single target; guessing one would corrupt."""
+        from pydantic import BaseModel
+
+        class Rec(BaseModel):
+            value: str | int
+
+        result, metadata = coerce({"value": 7}, Rec, ParseConfig())
+
+        assert result["value"] == 7
+        assert metadata == []

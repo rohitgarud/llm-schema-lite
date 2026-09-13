@@ -914,3 +914,63 @@ class TestNormalizeMarkerKeysUnit:
         snapshot = dict(original)
         normalize_marker_keys(original, known, "*")
         assert original == snapshot
+
+
+class TestOptionalFieldIsNotNulledByCoercion:
+    """Regression: partial mode coerced an `X | None` against the default string type.
+
+    An anyOf node carries no "type" of its own, so a valid `int | None` of 7 became
+    "7", failed _validate_field, and -- being optional -- was set to None and recorded
+    in failed_fields, blaming the reply for a value it had sent correctly. Partial mode
+    is the only route that coerces, so it was the only route that corrupted.
+    """
+
+    def test_a_valid_optional_int_is_kept(self):
+        """The value survives and nothing is recorded against the reply."""
+        from pydantic import BaseModel
+
+        class Rec(BaseModel):
+            name: str
+            count: int | None = None
+
+        result, metadata = loads(
+            '{"name": "Ada", "count": 7}',
+            parse_config=ParseConfig(partial=True),
+            schema=Rec,
+        )
+
+        assert result.count == 7
+        assert metadata == {"failed_fields": {}}
+
+    def test_both_routes_agree_on_a_valid_optional_int(self):
+        """The strict route never coerced, so it was always right; they must now match."""
+        from pydantic import BaseModel
+
+        class Rec(BaseModel):
+            name: str
+            count: int | None = None
+
+        text = '{"name": "Ada", "count": 7}'
+        strict, _ = loads(text, schema=Rec)
+        partial, _ = loads(text, parse_config=ParseConfig(partial=True), schema=Rec)
+
+        assert strict.count == partial.count == 7
+
+    def test_an_optional_nested_model_survives_partial_mode(self):
+        """anyOf wrapping a $ref -- the union unwrap and the ref resolve must compose."""
+        from pydantic import BaseModel
+
+        class Address(BaseModel):
+            zipcode: int
+
+        class User(BaseModel):
+            address: Address | None = None
+
+        result, metadata = loads(
+            '{"address": {"zipcode": 12345}}',
+            parse_config=ParseConfig(partial=True),
+            schema=User,
+        )
+
+        assert result.address["zipcode"] == 12345
+        assert metadata == {"failed_fields": {}}

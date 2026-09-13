@@ -260,6 +260,19 @@ def coerce_recursive(
 
     metadata_list: list[CoercionMetadata] = []
 
+    # `X | None` renders as {"anyOf": [X, {"type": "null"}]} and carries no "type" of its
+    # own, so it fell through to the scalar branch below and was coerced to string: a
+    # valid `int | None` of 7 became "7", which then failed validation and, in partial
+    # mode, nulled the field and recorded the reply as at fault. Unwrap the single
+    # non-null member and re-enter, which also resolves a nested model's or enum's $ref.
+    # A genuine multi-type union (str | int) is left alone rather than guessed at.
+    members = schema.get("anyOf") or schema.get("oneOf")
+    if members and "type" not in schema:
+        non_null = [m for m in members if isinstance(m, dict) and m.get("type") != "null"]
+        if len(non_null) == 1:
+            return coerce_recursive(data, non_null[0], config, field_path, defs)
+        return data, metadata_list
+
     # Handle object (dict) with properties
     if isinstance(data, dict) and schema.get("type") == "object" and "properties" in schema:
         result_dict: dict[str, Any] = {}
