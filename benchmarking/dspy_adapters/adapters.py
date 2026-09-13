@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from dspy.adapters import ChatAdapter, JSONAdapter
 from dspy.adapters.baml_adapter import BAMLAdapter  # C1: the only working import path
@@ -73,12 +74,47 @@ def _sola(
     )
 
 
+class ConstrainedJSONAdapter(JSONAdapter):
+    """`JSONAdapter` with schema-constrained decoding forced on.
+
+    Upstream sends the signature's schema as `response_format` only when
+    `lm.supports_response_schema` is true (`json_adapter.py:62`); litellm answers False
+    for every Ollama prefix, so the stock `json` arm downgrades to
+    `{"type": "json_object"}` -- valid JSON of *any* shape. Ollama's `/v1` endpoint
+    honours a `json_schema` `response_format` regardless of what litellm's table claims:
+    verified against `falcon3:1b` with a `Literal["ZZQX_PURPLE_ONLY"]` field, which forced
+    that value as the colour of a banana while the unconstrained call answered "yellow".
+
+    Returning `None` from the common pre-check is the whole override: both `__call__` and
+    `acall` read it as "no early return" and fall through to their structured-output path,
+    including its existing downgrade-to-`json_object` rescue if the schema build fails.
+    Without this cell the matrix has no grammar-constrained arm at all, so every number in
+    it compares prompt-plus-parse against prompt-plus-parse.
+    """
+
+    def _json_adapter_call_common(  # type: ignore[override]
+        self,
+        lm: Any,
+        lm_kwargs: dict[str, Any],
+        signature: Any,
+        demos: Any,
+        inputs: Any,
+        call_fn: Any,
+    ) -> None:
+        """Always fall through to the structured-output path. Never returns a result."""
+        return None
+
+
 ADAPTERS: dict[str, AdapterCell] = {
     "chat": AdapterCell(
         factory=lambda: ChatAdapter(use_json_adapter_fallback=False),
         config_repr="ChatAdapter(use_json_adapter_fallback=False)",
     ),
     "json": AdapterCell(factory=lambda: JSONAdapter(), config_repr="JSONAdapter()"),
+    "json-constrained": AdapterCell(
+        factory=lambda: ConstrainedJSONAdapter(),
+        config_repr="ConstrainedJSONAdapter()",
+    ),
     "baml": AdapterCell(factory=lambda: BAMLAdapter(), config_repr="BAMLAdapter()"),
     "sola-json-sections": _sola(OutputMode.JSON, PromptLayout.SECTIONS),
     "sola-jsonish-sections": _sola(OutputMode.JSONISH, PromptLayout.SECTIONS),

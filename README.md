@@ -485,8 +485,14 @@ Honest reading, because the floors matter more than the wins:
 
 - **The cleanest result is the rescue A/B on synthetic**: same prompt, same tokens, only
   parse-time repair differs — recall +0.193 with the invented rate provably unchanged.
-- **Nothing beats the all-null floor on `pii` or `patient-notes`.** On those two corpora
-  every adapter, ours included, loses to extracting nothing.
+- **Nothing in the table above beats the all-null floor on `pii` or `patient-notes`.** On
+  those two corpora every one of these eight adapters, ours included, loses to extracting
+  nothing. `patient-notes` is only unbeaten *within this table*: a ninth arm not in it —
+  upstream `JSONAdapter` forced to send the signature's JSON Schema as `response_format`,
+  which Ollama honours even though litellm reports the capability unsupported — clears that
+  0.356 floor with 0.385 on `falcon3:1b`. Where schema-constrained decoding is available it
+  is a stronger baseline than anything measured above, and it buys that reach by inventing:
+  on the same run it filled every nullable field whose gold was null.
 - **Where we win big we also invent more.** The insurance-claims result buys its recall by
   filling null-gold fields, and that cost is significant, not noise.
 - Ollama moves a cell by up to 0.02 on identical code, and across dozens of comparisons

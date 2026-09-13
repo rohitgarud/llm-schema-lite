@@ -176,7 +176,7 @@ def cold_encoding_memo() -> Iterator[None]:
 
 def test_benchmarking_package_imports() -> None:
     """The `benchmarking.dspy_adapters` import mechanism works under pytest."""
-    assert len(ADAPTERS) == 15
+    assert len(ADAPTERS) == 16
     assert len(SIGNATURES) == 6
 
 
@@ -197,11 +197,11 @@ def test_every_signature_cell_builds() -> None:
 
 
 def test_offline_arm_covers_full_matrix() -> None:
-    """run_offline_arm() returns exactly 90 unique PromptRows (15 adapters x 6 sigs)."""
+    """run_offline_arm() returns exactly 96 unique PromptRows (16 adapters x 6 sigs)."""
     rows = run_offline_arm()
-    assert len(rows) == 90
+    assert len(rows) == 96
     assert all(isinstance(row, PromptRow) for row in rows)
-    assert len({(row.adapter, row.signature) for row in rows}) == 90
+    assert len({(row.adapter, row.signature) for row in rows}) == 96
 
 
 def test_offline_arm_reports_positive_tokens() -> None:
@@ -327,6 +327,26 @@ def test_chat_adapter_fallback_is_disabled() -> None:
     assert row.outcome is Outcome.PARSE_ERROR
     assert row.lm_calls == 1
     assert row.fallback_suspected is False
+
+
+def test_constrained_arm_sends_a_schema_not_json_object() -> None:
+    """`json-constrained` sends the signature's schema; stock `json` downgrades to json_object.
+
+    The one guard that matters for this cell. litellm answers
+    `supports_response_schema=False` for every Ollama prefix, so upstream `JSONAdapter`
+    silently sends `{"type": "json_object"}` -- valid JSON of *any* shape, which is not
+    grammar-constrained decoding. If this assertion ever flips, the "constrained" arm is
+    measuring the same thing as the `json` arm and every comparison drawn from it is void.
+    """
+    rows = run_live_arm(
+        _seeded_lm_factory([{"answer": "blue", "confidence": "0.9"}]),
+        adapter_ids=["json", "json-constrained"],
+        signature_ids=["flat"],
+        disable_cache=False,
+    )
+    sent = {row.adapter: row.response_format_sent for row in rows}
+    assert sent["json-constrained"] == "json_schema", sent
+    assert sent["json"] != "json_schema", sent
 
 
 def test_repro_1871_capability_vector() -> None:
