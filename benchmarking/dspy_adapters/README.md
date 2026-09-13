@@ -307,8 +307,9 @@ would silently mask parsing failures (Δ1/D3.1 in the design notes).
 The live arms default to the six `*-sections` ids (`chat`, `json`, `baml`,
 `sola-json-sections`, `sola-jsonish-sections`, `sola-yaml-sections`) **plus** two
 rescue cells, `sola-jsonish-rescue` and `sola-yaml-rescue`; the offline arm covers all
-fifteen. `sola-json-rescue` is opt-in (`--adapters sola-json-rescue`): it was added after
-the `2026-09-10` accuracy artefacts, which it would otherwise leave incomplete. The three
+fifteen. `sola-json-rescue` is opt-in (`--adapters sola-json-rescue`): it postdates the
+first accuracy sweeps and is still outside the eight-cell live default, so no committed
+artefact carries it and every number quoted for it is an offline replay. The three
 `sola-*-partial` cells are opt-in for a different reason, below.
 
 Each `sola-*-rescue` cell is its `*-sections` twin with one thing changed —
@@ -543,17 +544,18 @@ positions. Per-case detail — including the exact `wrong` / `missing` / `spurio
 
 ### What the sweep found
 
-Six sub-1.2B models across five families, 30 labeled cases each, field accuracy. The
-committed `2026-09-10` artefacts predate the recall and invented columns, so these tables
-and the third-party ones below report field accuracy only:
+Six sub-1.2B models across five families, 30 labeled cases each, field accuracy, read
+from the `2026-09-12` artefacts. Those files do carry `recall` and `invented`; these
+tables report field accuracy alone to stay comparable cell to cell, and the floors below
+are what keep that honest:
 
 | adapter | qwen3.5:0.8b | granite3.1-moe:1b | llama3.2:1b | smollm2:360m | falcon3:1b | gemma3:270m |
 |---|---|---|---|---|---|---|
-| `sola-jsonish-rescue` | **0.929** | **0.858** | 0.215 | **0.095** | 0.000 | 0.000 |
+| `sola-jsonish-rescue` | **0.929** | **0.858** | 0.271 | **0.095** | **0.720** | 0.000 |
 | `json` (`JSONAdapter`) | 0.889 | 0.797 | 0.203 | 0.000 | 0.000 | 0.000 |
 | `sola-json-sections` | 0.886 | 0.157 | **0.363** | 0.000 | 0.000 | 0.000 |
 | `sola-jsonish-sections` | 0.745 | **0.858** | 0.215 | **0.095** | 0.000 | 0.000 |
-| `sola-yaml-rescue` | 0.831 | 0.422 | 0.311 | 0.000 | 0.000 | 0.000 |
+| `sola-yaml-rescue` | 0.926 | 0.446 | 0.357 | 0.000 | 0.000 | 0.000 |
 | `sola-yaml-sections` | 0.711 | 0.422 | 0.255 | 0.000 | 0.000 | 0.000 |
 | `baml` (`BAMLAdapter`) | 0.000 | 0.760 | 0.000 | 0.000 | 0.000 | 0.000 |
 | `chat` (`ChatAdapter`) | 0.000 | 0.000 | 0.022 | 0.000 | 0.000 | 0.000 |
@@ -571,10 +573,13 @@ This is not a defect unique to this package. `BAMLAdapter` renders
 ``Output field `record` should be of type:`` followed by a schema whose brace opens at
 column 0 — the same ambiguity, and it still has it.
 
-**Three models cannot do the task at all.** `falcon3:1b`, `gemma3:270m` and
-`smollm2:360m` score ~0 for every adapter. That is a property of the models, not the
-harness: `falcon3:1b` answers with a JSON *schema* rather than an instance. Nested
-extraction with optionality needs roughly ≥0.8B.
+**Two models cannot do the task at all; a third only looked that way.** `gemma3:270m` and
+`smollm2:360m` score ~0 for every adapter, and that is a property of the models, not the
+harness. `falcon3:1b` read the same until `ParseConfig()` was armed: it answers with a
+JSON *schema* rather than an instance, which is an envelope failure, not a comprehension
+one, and `sola-jsonish-rescue` recovers all 30 cases (0.000 -> 0.720). Its extraction was
+there the whole time. Nested extraction with optionality still needs roughly ≥0.8B, but
+the floor for *measuring* it is lower than this table read before the rescue cells landed.
 
 **Adapter ranking is model-dependent, and mode matters more than adapter.** JSON beats
 JSONISH on `qwen3.5:0.8b` (0.886 vs 0.745) and loses badly on `granite3.1-moe:1b` (0.157
@@ -601,19 +606,23 @@ prompt change alone was not a uniform win, and the recovery came from two other 
   did not look for. Extracting untagged and mislabelled fences brought it to 0.255.
 - `qwen3.5:0.8b` fell 0.849 -> 0.711, with the losses in validation, not parsing. The
   rescuable ones are the null-item bug below, and `ParseConfig()` prunes them:
-  `sola-yaml-rescue` scores 0.831 (8 -> 4 validation errors).
+  `sola-yaml-rescue` scores 0.926 once the all-null-object repair below is armed too.
 
-So the fix removes a total failure on the 8B model at the cost of roughly 0.02 on
-`qwen3.5:0.8b`, provided YAML mode is used with `ParseConfig()`. Without it that
-regression is 0.14.
+So the fix removes a total failure on the 8B model, and on `qwen3.5:0.8b` it is no longer
+a cost at all: with `ParseConfig()` the cell scores 0.926 against 0.849 before the fix, a
+net gain of 0.077. Without it the regression stands at 0.14. The earlier reading of this
+trade — roughly 0.02 of cost — was taken before the structural repairs landed.
 
 **What parse-time repair is worth.** `sola-jsonish-rescue` differs from
 `sola-jsonish-sections` only by `parse_config=ParseConfig()`, and the offline arm confirms
 the two prompts are token-identical. It converts 6 validation errors into 6 correct
-records on `qwen3.5:0.8b` (0.745 -> 0.929, 24/30 -> 30/30) and is inert everywhere else —
-all six were the same bug, an empty list answered with `[{"email": null, "phone": null}]`.
-`sola-yaml-rescue` is the same comparison for YAML: +0.120 on `qwen3.5:0.8b`, +0.056 on
-`llama3.2:1b`, inert on `granite3.1-moe:1b`. It is the same bug: replayed, all six
+records on `qwen3.5:0.8b` (0.745 -> 0.929, 24/30 -> 30/30) — all six the same bug, an
+empty list answered with `[{"email": null, "phone": null}]`. It is not inert elsewhere:
+`falcon3:1b` goes 0.000 -> 0.720, every one of its 30 cases `parse_error -> ok`, and
+`llama3.2:1b` gains 0.056. It stays inert on `granite3.1-moe:1b`, `smollm2:360m` and
+`gemma3:270m`. `sola-yaml-rescue` is the same comparison for YAML: +0.215 on
+`qwen3.5:0.8b`, +0.102 on `llama3.2:1b`, +0.024 on `granite3.1-moe:1b`. It is the same
+bug in part: replayed, all six
 rescued cases fail on `contacts.0.email = None`. The dspy-integration README therefore
 tells YAML users to pass it. YAML's typed scalars (`postcode: 95014` loads as an int) are
 *not* repaired by it — coercion only reaches scalar output fields, and `record` is a
