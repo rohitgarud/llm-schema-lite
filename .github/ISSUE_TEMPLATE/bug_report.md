@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in schema-lite
+about: Report a bug in llm-schema-lite
 title: '[BUG] '
 labels: bug
 ---
@@ -17,7 +17,7 @@ A clear description of what the bug is.
 What you expected to happen.
 
 ## Environment
-- schema-lite version:
+- llm-schema-lite version:
 - Python version:
 - Pydantic version:
 - OS:

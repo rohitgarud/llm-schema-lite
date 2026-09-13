@@ -1,10 +1,10 @@
 """
-schema-lite: Transform verbose Pydantic schemas into LLM-friendly formats
+llm-schema-lite: Transform verbose Pydantic schemas into LLM-friendly formats
 
-Reduce token usage by 60-85% while preserving essential type information.
+Typically 40-70% fewer schema tokens while preserving essential type information.
 """
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 from .coercion import CoercionMetadata, ParseConfig, coerce_to_schema, coerce_value
 from .core import (

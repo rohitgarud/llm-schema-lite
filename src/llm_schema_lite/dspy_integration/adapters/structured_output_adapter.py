@@ -591,7 +591,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
     - JSON mode: Standard JSON output with verbose schemas
         (compatible with OpenAI structured outputs)
     - JSONish mode: JSON output with simplified BAML-like
-        schemas (60-85% token reduction from verbose JSON schemas)
+        schemas (typically 40-70% fewer tokens than verbose JSON schemas)
     - YAML mode: YAML output with simplified schemas. The rendered schema is
       YAML-flavoured prompt text, not a serialization format.
     - Simplified schemas for complex input fields (Pydantic models)

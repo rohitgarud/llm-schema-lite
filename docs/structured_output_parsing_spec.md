@@ -61,7 +61,7 @@ This specification defines enhancements to llm-schema-lite to support advanced L
 
 ### 1.3 Token Optimization First
 
-**Principle:** Schema simplification and token reduction remain core features. New features should not compromise our 60-85% token reduction.
+**Principle:** Schema simplification and token reduction remain core features. New features should not compromise our measured 40-70% token reduction.
 
 **Rationale:**
 - LLM costs are proportional to token count

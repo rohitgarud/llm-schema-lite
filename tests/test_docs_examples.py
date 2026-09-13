@@ -47,10 +47,14 @@ _SCANNED_DOCS: tuple[str, ...] = (
 tuple, never a ``**/*.md`` glob, so a parallel ticket's untracked markdown
 is never swept in."""
 
-_EXAMPLE_SCRIPTS: tuple[str, ...] = ("examples/basic_usage.py",)
-"""Tracked example scripts executed as subprocesses, repo-root-relative.
-Explicit tuple so the untracked, out-of-scope
-``examples/enum_with_metadata.py`` is never picked up."""
+_EXAMPLE_SCRIPTS: tuple[str, ...] = (
+    "examples/basic_usage.py",
+    "examples/dspy_usage.py",
+    "examples/enum_with_metadata.py",
+)
+"""Tracked example scripts executed as subprocesses, repo-root-relative. An
+explicit tuple, never a ``examples/*.py`` glob, so an untracked scratch script
+dropped into ``examples/`` is never swept in."""
 
 _OPEN_FENCE_RE: re.Pattern[str] = re.compile(r"^(?P<ticks>`{3,})(?P<info>[^`]*)$")
 """Matches a column-0 opening fence. ``info`` (stripped) is the language tag;
@@ -338,6 +342,12 @@ def test_example_script_runs(rel_path: str) -> None:
     """
     script = _REPO_ROOT / rel_path
     assert script.is_file(), f"{rel_path} does not exist"
+    # Same substring-keyed gating the doc blocks get (see module docstring): an
+    # example that imports dspy must not fail the core run in an environment
+    # without the ``[dspy]`` extra. Checked against the script's own source, so
+    # adding a non-dspy example needs no change here.
+    if "dspy" in script.read_text(encoding="utf-8"):
+        pytest.importorskip("dspy", minversion="3.3.1")
     result = subprocess.run(
         [sys.executable, str(script)],
         cwd=_REPO_ROOT,

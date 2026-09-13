@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/rohitgarud/llm-schema-lite/discussions
+    about: Ask a question or float an idea before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/rohitgarud/llm-schema-lite/blob/main/SECURITY.md
+    about: Report privately by email. Do not open a public issue.

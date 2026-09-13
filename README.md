@@ -2,14 +2,39 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/llm-schema-lite)](https://pypi.org/project/llm-schema-lite/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/llm-schema-lite.svg)](https://pypi.org/project/llm-schema-lite/)
-[![CI](https://github.com/rohitgarud/llm-schema-lite/workflows/CI/badge.svg)](https://github.com/rohitgarud/llm-schema-lite/actions)
+[![CI](https://github.com/rohitgarud/llm-schema-lite/actions/workflows/ci.yaml/badge.svg)](https://github.com/rohitgarud/llm-schema-lite/actions/workflows/ci.yaml)
 [![codecov](https://codecov.io/gh/rohitgarud/llm-schema-lite/branch/main/graph/badge.svg)](https://codecov.io/gh/rohitgarud/llm-schema-lite)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-Transform verbose JSON schemas into LLM-friendly formats. Reduce token usage by **60-85%** while preserving essential type information and integrating validation constraints directly into type descriptions for optimal LLM readability. Includes robust JSON/YAML parsing with automatic error recovery and enhanced constraint integration across all formatters.
+Turn a Pydantic model into a compact schema string an LLM can follow, and turn the reply
+back into a validated model. Constraints ride inside the type line instead of a separate
+block, which costs **typically 40-70% fewer schema tokens** than raw JSON Schema — measure
+your own with `compare_tokens()`. Parsing is built for small models that don't quite follow
+instructions: brace-balanced extraction, JSON repair, and opt-in rescue for the mistakes
+1B-class models actually make.
 
 Framework agnostic by construction: the package turns a schema into a string and a reply back into a model, so it drops into the OpenAI SDK, any OpenAI-compatible endpoint, or a framework like DSPy without tying you to any of them.
+
+### Using DSPy?
+
+```python
+import dspy
+
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
+dspy.configure(adapter=StructuredOutputAdapter(output_mode=OutputMode.JSONISH))
+```
+
+That one line swaps DSPy's full JSON Schema prompt for the compact format below and adds
+parse-time repair for small-model replies. Measured on the synthetic extraction benchmark
+with `qwen3.5:0.8b` (30 cases), enabling the rescue tier against an otherwise
+**token-identical prompt** moved field accuracy 0.745 → 0.929 and parsed records 24/30 →
+30/30 — paired bootstrap 95% CI `[+0.061, +0.324]`, with invented values unchanged at
+`[+0.000, +0.000]`. It is not a uniform win: on the `pii` and `patient-notes` corpora the
+same rescue is a statistical tie, and on `insurance-claims` it buys recall by inventing
+more. The corpus-by-corpus tables, including where it loses, are in
+[the DSPy integration README](src/llm_schema_lite/dspy_integration/README.md).
 
 ---
 
@@ -366,9 +391,9 @@ anything different. Hand the model `schema.to_string()`, hand the reply to `load
 
 ## 🤖 DSPy Integration
 
-The DSPy adapter below is a convenience, not the supported path — it wires the same two
-calls into DSPy's adapter protocol so you do not have to. Skip it entirely if you are not
-using DSPy.
+`StructuredOutputAdapter` wires the same two calls into DSPy's adapter protocol, so a DSPy
+program gets the compact schema and the small-model parsing without changing any of its
+signatures. Skip this section if you are not using DSPy.
 
 `pip install "llm-schema-lite[dspy]"` (DSPy `>=3.3.1`) adds `StructuredOutputAdapter`, a
 drop-in DSPy adapter that renders signature schemas in the compact format above instead of
@@ -423,7 +448,52 @@ Every other constructor option — `formatter_config` / `parse_config` forwardin
 `prompt_layout`, the `json_object` response-format flag and its tool-call interaction,
 streaming registration and known limits — is documented in
 [the DSPy integration README](src/llm_schema_lite/dspy_integration/README.md).
-Adapter benchmarks live under `benchmarking/dspy_adapters/` and run with `make bench-dspy`.
+
+### Benchmark results
+
+Six sub-1.2B models × eight adapters × five corpora, 30 labeled cases each, run against a
+local Ollama. Every cell's raw replies are committed under
+`benchmarking/dspy_adapters/results/`, so the numbers below can be re-scored with no model
+and no network: `make bench-dspy BENCH_ARGS="--accuracy --corpus pii --replay <csv>"`.
+
+**Read every corpus against its all-null floor** — the score a reply that extracts nothing
+would get. Field accuracy counts a correct `null` as a match, so on a sparse corpus it pays
+an adapter for extracting nothing; *recall on non-null gold* is the extraction headline and
+has a floor of 0 by construction.
+
+| corpus | all-null floor | best adapter (recall) | `JSONAdapter` |
+|---|---|---|---|
+| synthetic | 0.025 | `sola-jsonish-rescue` **0.936** | 0.889 |
+| insurance-claims | 0.018 | `sola-yaml-rescue` **0.749** | 0.119 |
+| financial-ner | 0.590 | `sola-yaml-sections` **0.529** | 0.069 |
+| pii | **0.949** | `sola-jsonish-rescue` 0.279 | 0.244 |
+| patient-notes | **0.356** | `sola-jsonish-sections` 0.214 | 0.000 |
+
+`qwen3.5:0.8b`, the only model that functions across all five. Paired bootstrap, 5000
+resamples, 95% CI on the difference:
+
+| comparison | corpus | diff (recall) | 95% CI | verdict |
+|---|---|---|---|---|
+| `sola-jsonish-rescue` vs identical prompt without rescue | synthetic | +0.193 | `[+0.065, +0.339]` | **higher** |
+| — its invented rate | synthetic | +0.000 | `[+0.000, +0.000]` | tie |
+| `sola-yaml-rescue` vs `JSONAdapter` | insurance-claims | +0.630 | `[+0.523, +0.722]` | **higher** |
+| — its invented rate | insurance-claims | +0.459 | `[+0.339, +0.574]` | **worse** |
+| `sola-jsonish-rescue` vs `JSONAdapter` | synthetic | +0.047 | `[-0.019, +0.137]` | tie |
+| `sola-jsonish-rescue` vs identical prompt without rescue | pii | +0.012 | `[+0.000, +0.036]` | tie |
+
+Honest reading, because the floors matter more than the wins:
+
+- **The cleanest result is the rescue A/B on synthetic**: same prompt, same tokens, only
+  parse-time repair differs — recall +0.193 with the invented rate provably unchanged.
+- **Nothing beats the all-null floor on `pii` or `patient-notes`.** On those two corpora
+  every adapter, ours included, loses to extracting nothing.
+- **Where we win big we also invent more.** The insurance-claims result buys its recall by
+  filling null-gold fields, and that cost is significant, not noise.
+- Ollama moves a cell by up to 0.02 on identical code, and across dozens of comparisons
+  about one in twenty clears zero by chance. Treat single thin wins accordingly.
+
+Full per-corpus tables, the failure-cause analysis, and the reproduction commands are in
+[the benchmark README](benchmarking/dspy_adapters/README.md).
 
 ---
 

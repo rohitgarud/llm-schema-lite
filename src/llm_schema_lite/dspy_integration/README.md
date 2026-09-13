@@ -5,7 +5,8 @@ This module provides a unified adapter for integrating llm-schema-lite with DSPy
 ## Features
 
 - **Multiple Output Modes**: Support for JSON, JSONish (BAML-like), and YAML output formats
-- **Token Efficiency**: 60-85% reduction in schema token usage with JSONish mode
+- **Token Efficiency**: typically 40-70% fewer schema tokens with JSONish mode (measure
+  your own schema with `compare_tokens()`)
 - **Input Schema Simplification**: Automatically simplifies complex Pydantic models in input fields, gated by `include_input_schemas`
 - **Robust Parsing**: Handles malformed outputs with automatic repair (`repair=True`) and fallback mechanisms
 - **Full DSPy Compatibility**: Works with all DSPy modules (Predict, ChainOfThought, etc.)
@@ -162,7 +163,7 @@ adapter = StructuredOutputAdapter(output_mode=OutputMode.JSON)
 
 ### JSONish Mode (Recommended)
 
-JSON output with simplified BAML-like schemas - 60-85% token reduction.
+JSON output with simplified BAML-like schemas - typically 40-70% fewer schema tokens.
 
 ```python
 from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter

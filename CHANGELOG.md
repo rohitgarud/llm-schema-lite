@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.7.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.7.0) - 2026-09-13
+
+<small>[Compare with v0.6.1](https://github.com/rohitgarud/llm-schema-lite/compare/v0.6.1...v0.7.0)</small>
+
 ### Breaking
 
 - **Private parser helpers are no longer re-exported, and `BaseFormatter` loses two

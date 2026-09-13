@@ -1,4 +1,4 @@
-# Contributing to schema-lite
+# Contributing to llm-schema-lite
 
 ## Development Setup
 
