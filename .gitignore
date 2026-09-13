@@ -159,3 +159,5 @@ Thumbs.db
 
 # JSONSchemaBench dataset (~100 MB) — recreate with: uv run benchmarking/fetch_dataset.py
 /jsonschembench_dataset.json
+
+.claude
