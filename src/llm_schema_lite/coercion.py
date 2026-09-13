@@ -226,6 +226,7 @@ def coerce_recursive(
     schema: dict[str, Any],
     config: ParseConfig,
     field_path: str = "",
+    defs: dict[str, Any] | None = None,
 ) -> tuple[Any, list[CoercionMetadata]]:
     """
     Recursively coerce data to match schema types.
@@ -235,10 +236,28 @@ def coerce_recursive(
         schema: JSON schema dict
         config: ParseConfig with coercion settings
         field_path: Current field path for tracking nested fields
+        defs: The root schema's $defs/definitions, for $ref resolution. Taken from
+            `schema` on the first call and threaded unchanged through the recursion.
+            A nested model is emitted as a bare {"$ref": "#/$defs/Name"}: without the
+            definitions in scope it carries no "type", so every one of its fields fell
+            through to the untyped-object branch below and was coerced to string --
+            including values that already had the right type.
 
     Returns:
         Tuple of (coerced_data, list of CoercionMetadata)
     """
+    # Function-local: a module-level import of validators here is circular.
+    from .validators.enum_aliases import _resolve_ref
+
+    if defs is None:
+        defs = schema.get("$defs") or schema.get("definitions") or {}
+
+    ref = schema.get("$ref")
+    if ref:
+        resolved = _resolve_ref(ref, defs)
+        if resolved is not None:
+            schema = resolved
+
     metadata_list: list[CoercionMetadata] = []
 
     # Handle object (dict) with properties
@@ -247,7 +266,7 @@ def coerce_recursive(
         for key, value in data.items():
             prop_schema = schema["properties"].get(key, {})
             new_path = f"{field_path}.{key}" if field_path else key
-            coerced_value, metadata = coerce_recursive(value, prop_schema, config, new_path)
+            coerced_value, metadata = coerce_recursive(value, prop_schema, config, new_path, defs)
             result_dict[key] = coerced_value
             if metadata:
                 metadata_list.extend(metadata)
@@ -258,7 +277,7 @@ def coerce_recursive(
         result_list: list[Any] = []
         for i, item in enumerate(data):
             new_path = f"{field_path}[{i}]"
-            coerced_item, metadata = coerce_recursive(item, schema["items"], config, new_path)
+            coerced_item, metadata = coerce_recursive(item, schema["items"], config, new_path, defs)
             result_list.append(coerced_item)
             if metadata:
                 metadata_list.extend(metadata)
@@ -270,11 +289,19 @@ def coerce_recursive(
         for key, value in data.items():
             new_path = f"{field_path}.{key}" if field_path else key
             # Try to determine type from value pattern or default to no coercion
-            coerced_value, metadata = coerce_recursive(value, {"type": "string"}, config, new_path)
+            coerced_value, metadata = coerce_recursive(
+                value, {"type": "string"}, config, new_path, defs
+            )
             result_obj[key] = coerced_value
             if metadata:
                 metadata_list.extend(metadata)
         return result_obj, metadata_list
+
+    # null is a value, not a type mismatch to repair. str(None) yields the string
+    # "None", which validates against {"type": "string"} and so hides a missing value
+    # from the validator entirely. Leave it alone and let validation judge it.
+    if data is None:
+        return None, metadata_list
 
     # Scalar value - apply coercion
     target_type = schema.get("type", "string")

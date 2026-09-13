@@ -37,10 +37,20 @@ def _get_json_schema(schema: "type[BaseModel] | dict[str, Any] | str") -> dict[s
     )
 
 
-def _validate_field(value: Any, field_schema: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Validate a single field against its schema."""
+def _validate_field(
+    value: Any, field_schema: dict[str, Any], defs: dict[str, Any] | None = None
+) -> tuple[bool, list[str]]:
+    """Validate a single field against its schema.
+
+    `defs` is the root schema's $defs. A nested model's field_schema is a bare
+    {"$ref": "#/$defs/Name"}; on its own that resolves to nothing, jsonschema raises,
+    the blanket except below swallows it and the field is reported VALID -- so nested
+    content went unchecked. Passing defs puts the definitions back in scope.
+    """
     try:
         format_checker = FormatChecker()
+        if defs:
+            field_schema = {**field_schema, "$defs": defs}
         validator = Draft202012Validator(field_schema, format_checker=format_checker)
         errors = list(validator.iter_errors(value))
         if not errors:
@@ -501,6 +511,10 @@ class SchemaParser(BaseParser):
         # Get required fields
         required_fields = set(self._json_schema.get("required", []))
         properties = self._json_schema.get("properties", {})
+        # A nested model's field schema is a bare $ref into these. Both coercion and
+        # validation need them in scope, or the ref resolves to nothing and the field
+        # is silently stringified and then passed as valid.
+        defs = self._json_schema.get("$defs") or self._json_schema.get("definitions") or {}
 
         # Track results
         result_dict: dict[str, Any] = {}
@@ -527,6 +541,7 @@ class SchemaParser(BaseParser):
                     field_object_schema = {
                         "type": "object",
                         "properties": {field_name: field_schema},
+                        "$defs": defs,
                     }
                     coerced_value, _ = coerce_to_schema(
                         {field_name: value}, field_object_schema, self._parse_config
@@ -536,7 +551,7 @@ class SchemaParser(BaseParser):
                     field_value = value
 
                 # Validate the field
-                is_valid, errors = _validate_field(field_value, field_schema)
+                is_valid, errors = _validate_field(field_value, field_schema, defs)
                 if is_valid:
                     result_dict[field_name] = field_value
                 else:

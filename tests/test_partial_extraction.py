@@ -398,6 +398,72 @@ class TestEdgeCases:
             )
 
 
+class TestNestedModels:
+    """A nested model reaches coercion and validation as a bare $ref.
+
+    Until the ref was resolved, every nested field was coerced against a hardcoded
+    {"type": "string"} and then validated against an unresolvable schema that reported
+    everything valid: correct values were stringified and wrong ones sailed through.
+    """
+
+    @staticmethod
+    def _user_model():
+        from pydantic import BaseModel
+
+        class Address(BaseModel):
+            street: str
+            zipcode: int
+            verified: bool
+
+        class User(BaseModel):
+            name: str
+            address: Address
+
+        return User
+
+    def test_nested_correct_types_are_not_stringified(self):
+        """Nested values that are already correct keep their type."""
+        result, metadata = loads(
+            '{"name": "Alice", "address": '
+            '{"street": "1 Main St", "zipcode": 12345, "verified": true}}',
+            schema=self._user_model(),
+            parse_config=ParseConfig(partial=True),
+        )
+        assert result.address["zipcode"] == 12345
+        assert result.address["verified"] is True
+        assert metadata["failed_fields"] == {}
+
+    def test_nested_values_coerce_to_their_own_type(self):
+        """A nested int sent as a string becomes an int, not a string."""
+        result, _ = loads(
+            '{"name": "Alice", "address": '
+            '{"street": "1 Main St", "zipcode": "12345", "verified": "true"}}',
+            schema=self._user_model(),
+            parse_config=ParseConfig(partial=True),
+        )
+        assert result.address["zipcode"] == 12345
+        assert result.address["verified"] is True
+
+    def test_nested_null_is_not_coerced_to_the_string_none(self):
+        """null in a non-nullable nested field must fail, not become "None"."""
+        with pytest.raises(ConversionError):
+            loads(
+                '{"name": "Alice", "address": {"street": null, "zipcode": 1, "verified": true}}',
+                schema=self._user_model(),
+                parse_config=ParseConfig(partial=True),
+            )
+
+    def test_nested_wrong_type_is_caught(self):
+        """A nested field that cannot be coerced is reported, not passed as valid."""
+        with pytest.raises(ConversionError):
+            loads(
+                '{"name": "Alice", "address": '
+                '{"street": "1 Main St", "zipcode": "not-a-number", "verified": true}}',
+                schema=self._user_model(),
+                parse_config=ParseConfig(partial=True),
+            )
+
+
 class TestRequiredMarkerKeys:
     """SchemaParser normalizes trailing required-marker reply keys (lsl-2026-09-04-008)."""
 
