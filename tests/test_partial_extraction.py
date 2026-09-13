@@ -974,3 +974,133 @@ class TestOptionalFieldIsNotNulledByCoercion:
 
         assert result.address["zipcode"] == 12345
         assert metadata == {"failed_fields": {}}
+
+
+class TestMappingAndBareContainerValues:
+    """dict[str, X] and bare list/dict fields, end to end, on both routes.
+
+    The untyped-object branch hard-coded {"type": "string"} for every dict value
+    instead of consulting additionalProperties, which rejected a correctly-typed
+    dict[str, int] reply outright in partial mode (strict already handled it). The
+    scalar branch's "string" default did the same to bare list items. Both routes must
+    agree on every case where the reply was already correct.
+    """
+
+    def test_dict_str_int_values_survive_partial_mode(self):
+        """A correctly-typed dict[str, int] parses unchanged, with nothing blamed on it."""
+        from pydantic import BaseModel
+
+        class Mapping(BaseModel):
+            counts: dict[str, int]
+
+        result, metadata = loads(
+            '{"counts": {"a": 1, "b": 2}}',
+            parse_config=ParseConfig(partial=True),
+            schema=Mapping,
+        )
+
+        assert result.counts == {"a": 1, "b": 2}
+        assert metadata == {"failed_fields": {}}
+
+    def test_dict_str_int_values_still_coerce_from_strings(self):
+        """The fix repairs as well as preserves."""
+        from pydantic import BaseModel
+
+        class Mapping(BaseModel):
+            counts: dict[str, int]
+
+        result, _ = loads(
+            '{"counts": {"a": "1"}}',
+            parse_config=ParseConfig(partial=True),
+            schema=Mapping,
+        )
+
+        assert result.counts == {"a": 1}
+
+    def test_bare_list_items_are_not_stringified(self):
+        """A bare list annotation has a typeless item schema; its items are left alone."""
+        from pydantic import BaseModel
+
+        class Bare(BaseModel):
+            anything: list
+
+        result, _ = loads(
+            '{"anything": [1, 2]}',
+            parse_config=ParseConfig(partial=True),
+            schema=Bare,
+        )
+
+        assert result.anything == [1, 2]
+
+    def test_list_int_items_still_coerce(self):
+        """A declared item type must keep coercing."""
+        from pydantic import BaseModel
+
+        class LInt(BaseModel):
+            m: list[int]
+
+        result, _ = loads(
+            '{"m": ["1", "2"]}',
+            parse_config=ParseConfig(partial=True),
+            schema=LInt,
+        )
+
+        assert result.m == [1, 2]
+
+    def test_both_routes_agree_on_valid_mapping_and_list_values(self):
+        """The strict route never coerced, so it was always right; they must now match."""
+        from pydantic import BaseModel
+
+        class Mapping(BaseModel):
+            counts: dict[str, int]
+
+        class Bare(BaseModel):
+            anything: list
+
+        mapping_text = '{"counts": {"a": 1, "b": 2}}'
+        strict_mapping, _ = loads(mapping_text, schema=Mapping)
+        partial_mapping, _ = loads(
+            mapping_text, parse_config=ParseConfig(partial=True), schema=Mapping
+        )
+
+        bare_text = '{"anything": [1, 2]}'
+        strict_bare, _ = loads(bare_text, schema=Bare)
+        partial_bare, _ = loads(bare_text, parse_config=ParseConfig(partial=True), schema=Bare)
+
+        assert strict_mapping.counts == partial_mapping.counts == {"a": 1, "b": 2}
+        assert strict_bare.anything == partial_bare.anything == [1, 2]
+
+    def test_dict_str_model_values_are_walked_not_stringified(self):
+        """dict[str, SomeModel]: additionalProperties is a $ref that must still resolve."""
+        from pydantic import BaseModel
+
+        class SomeModel(BaseModel):
+            x: int
+
+        class DModel(BaseModel):
+            m: dict[str, SomeModel]
+
+        text = '{"m": {"k": {"x": 1}}}'
+        result, metadata = loads(text, parse_config=ParseConfig(partial=True), schema=DModel)
+        strict, _ = loads(text, schema=DModel)
+
+        assert result.m["k"]["x"] == 1
+        assert metadata == {"failed_fields": {}}
+        assert strict.m["k"].x == 1
+
+    def test_dict_str_any_values_survive_partial_mode(self):
+        """dict[str, Any] emits additionalProperties: true; values are left alone."""
+        from typing import Any
+
+        from pydantic import BaseModel
+
+        class DAny(BaseModel):
+            m: dict[str, Any]
+
+        result, _ = loads(
+            '{"m": {"a": 5}}',
+            parse_config=ParseConfig(partial=True),
+            schema=DAny,
+        )
+
+        assert result.m == {"a": 5}

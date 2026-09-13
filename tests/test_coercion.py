@@ -2,7 +2,9 @@
 
 import logging
 
-from llm_schema_lite import ParseConfig, coerce, coerce_value
+import pytest
+
+from llm_schema_lite import ConversionError, ParseConfig, coerce, coerce_value
 from llm_schema_lite.core import loads
 
 
@@ -709,3 +711,174 @@ class TestOptionalFieldsAreNotStringified:
 
         assert result["value"] == 7
         assert metadata == []
+
+
+class TestTypelessNodesAreNotStringified:
+    """A schema node with no declared type is left alone, not stringified.
+
+    The untyped-object branch hard-coded {"type": "string"} for every dict value
+    instead of consulting additionalProperties, and the scalar branch defaulted to
+    "string" for any node with no "type" at all. Both silently rewrote a value that
+    was already correct, which then failed validation downstream.
+    """
+
+    def test_dict_values_coerce_to_additional_properties_type(self):
+        """additionalProperties declares the value type; it is consulted, not ignored."""
+        schema = {"type": "object", "additionalProperties": {"type": "integer"}}
+        result, metadata = coerce({"a": "1"}, schema, ParseConfig())
+
+        assert result == {"a": 1}
+        assert [m.coercion_type for m in metadata] == ["to_int"]
+        assert metadata[0].field_path == "a"
+
+    def test_correctly_typed_dict_values_are_untouched(self):
+        """The core symptom: a value that was already correct must not be rewritten."""
+        schema = {"type": "object", "additionalProperties": {"type": "integer"}}
+        result, metadata = coerce({"a": 1, "b": 2}, schema, ParseConfig())
+
+        assert result == {"a": 1, "b": 2}
+        assert metadata == []
+
+    def test_declared_string_values_still_coerce(self):
+        """The fix must not over-decline: a genuinely declared string type still coerces."""
+        schema = {"type": "object", "additionalProperties": {"type": "string"}}
+        result, metadata = coerce({"a": 1}, schema, ParseConfig())
+
+        assert result == {"a": "1"}
+        assert [m.coercion_type for m in metadata] == ["to_string"]
+
+    def test_a_typeless_scalar_node_is_left_alone(self):
+        """A node with no "type" key at all is not assumed to be a string."""
+        schema = {"type": "object", "properties": {"value": {}}}
+        result, metadata = coerce({"value": 5}, schema, ParseConfig())
+
+        assert result["value"] == 5
+        assert metadata == []
+
+    def test_a_typeless_item_schema_leaves_list_items_alone(self):
+        """The bare-list symptom, reached through the array branch."""
+        schema = {"type": "object", "properties": {"items": {"type": "array", "items": {}}}}
+        result, metadata = coerce({"items": [1, 2]}, schema, ParseConfig())
+
+        assert result["items"] == [1, 2]
+        assert metadata == []
+
+    def test_a_typed_item_schema_still_coerces(self):
+        """The scalar default must not reach into a declared item type."""
+        schema = {
+            "type": "object",
+            "properties": {"items": {"type": "array", "items": {"type": "integer"}}},
+        }
+        result, metadata = coerce({"items": ["1", "2"]}, schema, ParseConfig())
+
+        assert result["items"] == [1, 2]
+        assert [m.coercion_type for m in metadata] == ["to_int", "to_int"]
+
+    def test_a_mixed_type_literal_still_coerces_through_its_enum(self):
+        """A mixed Literal emits a typeless enum node; its coercion must survive."""
+        from typing import Literal
+
+        from pydantic import BaseModel
+
+        class Lit(BaseModel):
+            k: Literal[1, "a"]
+
+        result, metadata = coerce({"k": "1"}, Lit, ParseConfig())
+
+        assert result["k"] == 1
+        assert [m.coercion_type for m in metadata] == ["enum_from_string"]
+
+    def test_a_mixed_type_literal_matches_case_insensitively(self):
+        """The second enum coercion mode on the same typeless node."""
+        from typing import Literal
+
+        from pydantic import BaseModel
+
+        class Lit(BaseModel):
+            k: Literal[1, "a"]
+
+        result, metadata = coerce({"k": "A"}, Lit, ParseConfig())
+
+        assert result["k"] == "a"
+        assert [m.coercion_type for m in metadata] == ["enum_case_insensitive"]
+
+    def test_an_optional_mixed_type_literal_still_coerces(self):
+        """The second entry path: the anyOf unwrap lands on the same typeless enum node."""
+        from typing import Literal
+
+        from pydantic import BaseModel
+
+        class LitOpt(BaseModel):
+            k: Literal[1, "a"] | None = None
+
+        result, _ = coerce({"k": "1"}, LitOpt, ParseConfig())
+
+        assert result["k"] == 1
+
+    def test_additional_properties_true_leaves_values_alone(self):
+        """pydantic 2.12's dict[str, Any] shape: additionalProperties is the boolean True."""
+        schema = {"type": "object", "additionalProperties": True}
+        result, metadata = coerce({"a": 5}, schema, ParseConfig())
+
+        assert result == {"a": 5}
+        assert metadata == []
+
+    def test_object_node_with_no_value_schema_leaves_values_alone(self):
+        """pydantic 2.10's shape for dict[str, Any] / bare dict: neither key present."""
+        schema = {"type": "object"}
+        result, metadata = coerce({"a": 5}, schema, ParseConfig())
+
+        assert result == {"a": 5}
+        assert metadata == []
+
+    def test_additional_properties_false_leaves_values_alone(self):
+        """Closed-world additionalProperties constrains keys, not value types."""
+        schema = {"type": "object", "additionalProperties": False}
+        result, metadata = coerce({"a": 5}, schema, ParseConfig())
+
+        assert result == {"a": 5}
+        assert metadata == []
+
+
+class TestNullIsNotCoercedToBoolean:
+    """The recursive walker and the primitive deliberately disagree on None.
+
+    coerce_recursive's None guard returns None untouched before the scalar branch is
+    ever reached, so a boolean field receiving null stays null. The primitive
+    coerce_value(None, "boolean") still returns False -- a separate, already-pinned
+    contract (test_coerce_none_to_bool) that this class does not touch, only restates
+    alongside the walker's contract so both layers' intentional disagreement is
+    documented in one place.
+    """
+
+    def test_null_for_a_boolean_field_is_left_alone(self):
+        """The None guard sits above the scalar branch; it must stay there."""
+        schema = {"type": "object", "properties": {"flag": {"type": "boolean"}}}
+        result, metadata = coerce({"flag": None}, schema, ParseConfig())
+
+        assert result["flag"] is None
+        assert metadata == []
+
+    def test_coerce_value_still_converts_null_to_false(self):
+        """The primitive keeps its opposite contract; the existing test is not modified."""
+        result, metadata = coerce_value(None, "boolean")
+
+        assert result is False
+        assert metadata is not None
+        assert metadata.coercion_type == "none_to_bool"
+
+    def test_null_for_a_boolean_field_is_rejected_by_both_routes(self):
+        """End to end: both parse routes reject a null for a required boolean."""
+        from pydantic import BaseModel
+
+        class Boolish(BaseModel):
+            flag: bool
+
+        with pytest.raises(ConversionError) as strict_exc:
+            loads('{"flag": null}', schema=Boolish)
+
+        with pytest.raises(ConversionError) as partial_exc:
+            loads('{"flag": null}', schema=Boolish, parse_config=ParseConfig(partial=True))
+
+        assert "is not of type 'boolean'" in str(strict_exc.value)
+        assert "is not of type 'boolean'" in str(partial_exc.value)

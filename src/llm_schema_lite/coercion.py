@@ -296,15 +296,15 @@ def coerce_recursive(
                 metadata_list.extend(metadata)
         return result_list, metadata_list
 
-    # Handle object without explicit properties - try to coerce values
+    # Handle object without explicit properties - additionalProperties declares the
+    # value type for every key (dict[str, X]); anything else means no value schema.
     if isinstance(data, dict):
+        additional = schema.get("additionalProperties")
+        value_schema = additional if isinstance(additional, dict) else {}
         result_obj: dict[str, Any] = {}
         for key, value in data.items():
             new_path = f"{field_path}.{key}" if field_path else key
-            # Try to determine type from value pattern or default to no coercion
-            coerced_value, metadata = coerce_recursive(
-                value, {"type": "string"}, config, new_path, defs
-            )
+            coerced_value, metadata = coerce_recursive(value, value_schema, config, new_path, defs)
             result_obj[key] = coerced_value
             if metadata:
                 metadata_list.extend(metadata)
@@ -316,8 +316,11 @@ def coerce_recursive(
     if data is None:
         return None, metadata_list
 
-    # Scalar value - apply coercion
-    target_type = schema.get("type", "string")
+    # No declared type means no target: "" matches no entry in _TYPE_COERCERS, so
+    # coerce_value returns the value untouched instead of inventing a string. An enum
+    # is still honoured -- coerce_value consults enum_values before target_type, which
+    # is how a mixed-type Literal (enum, no "type") keeps its coercion.
+    target_type = schema.get("type", "")
     enum_values = schema.get("enum")
 
     coerced, single_metadata = coerce_value(
