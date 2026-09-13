@@ -265,7 +265,7 @@ class TestCoerceFunction:
         config = ParseConfig(allow_coercion=False)
         result, metadata = coerce(data, schema, config)
 
-        # Should return original data (or empty dict for non-dict input)
+        # Dict input is returned as the same object, with no coercion applied.
         assert result.get("count") == "10" or result == {}
         assert metadata == []
 
@@ -359,6 +359,145 @@ class TestCoerceFunction:
         result, metadata = coerce(data, schema, ParseConfig())
 
         assert result["score"] == 3.14
+
+
+OBJ = {"type": "object", "properties": {"count": {"type": "integer"}}}
+ARR = {"type": "array", "items": {"type": "integer"}}
+
+
+class TestCoerceDisabledNonDict:
+    """coerce()'s non-mapping-root normalisation, both allow_coercion values (design v2)."""
+
+    def test_disabled_json_array_string_is_wrapped_not_dropped(self):
+        """AC #2: a JSON string decoding to a list is wrapped, not dropped, when disabled."""
+        result, metadata = coerce("[1, 2]", OBJ, ParseConfig(allow_coercion=False))
+        assert result == {"value": [1, 2]}
+        assert metadata == []
+
+    def test_disabled_list_is_wrapped_not_dropped(self):
+        """AC #1: a real list is wrapped, not dropped, when disabled."""
+        result, metadata = coerce([1, 2], OBJ, ParseConfig(allow_coercion=False))
+        assert result == {"value": [1, 2]}
+        assert metadata == []
+
+    def test_disabled_scalar_is_wrapped_not_dropped(self):
+        result, metadata = coerce(42, OBJ, ParseConfig(allow_coercion=False))
+        assert result == {"value": 42}
+        assert metadata == []
+
+    def test_disabled_none_is_wrapped_not_dropped(self):
+        result, metadata = coerce(None, OBJ, ParseConfig(allow_coercion=False))
+        assert result == {"value": None}
+        assert metadata == []
+
+    def test_disabled_plain_string_is_wrapped(self):
+        result, metadata = coerce("hello", OBJ, ParseConfig(allow_coercion=False))
+        assert result == {"value": "hello"}
+        assert metadata == []
+
+    def test_disabled_json_object_string_is_parsed_not_dropped(self):
+        """A JSON string decoding to an object is parsed to a dict, not dropped."""
+        result, metadata = coerce('{"count": "10"}', OBJ, ParseConfig(allow_coercion=False))
+        assert result == {"count": "10"}
+        assert metadata == []
+
+    def test_disabled_dict_returned_as_same_object(self):
+        """AC #3: dict input with allow_coercion=False is returned unchanged, same object."""
+        data = {"count": "10"}
+        result, metadata = coerce(data, OBJ, ParseConfig(allow_coercion=False))
+        assert result is data
+        assert metadata == []
+
+    def test_disabled_empty_dict_unchanged(self):
+        result, metadata = coerce({}, OBJ, ParseConfig(allow_coercion=False))
+        assert result == {}
+        assert metadata == []
+
+    def test_array_root_schema_passes_list_through_both_flags(self):
+        """The unconditional-wrap regression guard: an array root is never wrapped."""
+        for flag in (False, True):
+            result, metadata = coerce("[1, 2]", ARR, ParseConfig(allow_coercion=flag))
+            assert result == [1, 2]
+            assert metadata == []
+
+    def test_array_root_without_items_passes_list_through(self):
+        """Fails if `"items" in schema_dict` is added to the predicate."""
+        schema = {"type": "array"}
+        for flag in (False, True):
+            result, metadata = coerce("[1, 2]", schema, ParseConfig(allow_coercion=flag))
+            assert result == [1, 2]
+            assert metadata == []
+
+    def test_nullable_array_root_type_list_passes_through(self):
+        """Fails if the `type`-as-list disjunct is dropped from the predicate."""
+        schema = {"type": ["array", "null"], "items": {"type": "integer"}}
+        for flag in (False, True):
+            result, metadata = coerce("[1, 2]", schema, ParseConfig(allow_coercion=flag))
+            assert result == [1, 2]
+            assert metadata == []
+
+    def test_pydantic_rootmodel_array_passes_through(self):
+        """Pins the Pydantic RootModel[list[...]] spelling of an array root."""
+        from pydantic import RootModel
+
+        class IntList(RootModel[list[int]]):
+            pass
+
+        for flag in (False, True):
+            result, metadata = coerce("[1, 2]", IntList, ParseConfig(allow_coercion=flag))
+            assert result == [1, 2]
+            assert metadata == []
+
+    def test_array_root_with_non_list_value_is_wrapped(self):
+        """Pins the isinstance(data_dict, list) conjunct: a non-list is wrapped even
+        under an array root."""
+        result, metadata = coerce("5", ARR, ParseConfig(allow_coercion=False))
+        assert result == {"value": 5}
+        assert metadata == []
+
+    def test_anyof_array_root_is_wrapped(self):
+        """Documents the deferred case: an array inside anyOf does not exempt the wrap."""
+        schema = {"anyOf": [ARR, {"type": "null"}]}
+        result, metadata = coerce("[1, 2]", schema, ParseConfig(allow_coercion=False))
+        assert result == {"value": [1, 2]}
+        assert metadata == []
+
+    def test_enabled_json_array_string_under_object_schema_is_wrapped(self):
+        """Pins the one accepted Breaking-changelog cell: a bare list is no longer
+        returned on the enabled path under a non-array schema.
+
+        The wrapped value keeps its own types. OBJ declares no "value" property, so the
+        wrap lands on a typeless node, and a typeless node is left alone rather than
+        stringified -- which is why nothing is coerced and the metadata is empty. This
+        expectation matches the CHANGELOG entry for this change ("normalises to
+        {'value': [1, 2]}"); an earlier form of this test asserted the stringified
+        '[1, 2]', which was the untyped-object defect, not the wrap being tested here.
+        """
+        result, metadata = coerce("[1, 2]", OBJ, ParseConfig(allow_coercion=True))
+        assert result == {"value": [1, 2]}
+        assert metadata == []
+
+    def test_wrap_uses_a_real_value_property_when_the_schema_has_one(self):
+        """A schema that happens to declare a "value" property gets the correct
+        coercion for it, not the typeless-node string default."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {"type": "integer"},
+                "other": {"type": "string"},
+            },
+        }
+        result, metadata = coerce(42, schema, ParseConfig(allow_coercion=True))
+        assert result == {"value": 42}
+        assert metadata == []
+
+    def test_invalid_schema_string_raises_when_coercion_disabled(self):
+        """An invalid JSON schema string raises ConversionError regardless of the
+        allow_coercion flag -- a bad schema fails loudly either way (orchestrator-
+        authorised addition: moving the early return below schema parsing makes the
+        disabled path raise here too, matching the already-raising enabled path)."""
+        with pytest.raises(ConversionError):
+            coerce({}, "{not json", ParseConfig(allow_coercion=False))
 
 
 class TestLoadsWithCoercion:

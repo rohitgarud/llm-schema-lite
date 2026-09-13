@@ -216,7 +216,10 @@ for m in metadata:
 ```
 
 `loads(reply, schema=User)` validates against the schema and returns `(instance, metadata)`;
-call `coerce()` directly when you have a dict rather than raw model text.
+call `coerce()` directly when you have a dict rather than raw model text. Input that is not a
+mapping — a list, a scalar, or a JSON string that decodes to one — is wrapped as
+`{"value": ...}` before coercion, so the return is always a dict unless the schema has an
+array at its root, in which case a decoded list is coerced as-is.
 
 ### Tuning the parse with `ParseConfig`
 
@@ -226,7 +229,7 @@ call `coerce()` directly when you have a dict rather than raw model text.
 | Field | Default | Effect |
 |---|---|---|
 | `partial` | `False` | Keep what validates. A failing **optional** field is dropped and listed in `metadata["failed_fields"]`; a failing **required** field still raises `ConversionError`. |
-| `allow_coercion` | `True` | Coerce a field that fails validation instead of rejecting it. |
+| `allow_coercion` | `True` | Coerce a field that fails validation instead of rejecting it. With `False` the input is still normalised as above and returned with an empty metadata list — never dropped. |
 | `coerce_list_single_item` | `False` | Wrap a lone scalar where a list belongs — `"x"` becomes `["x"]`. |
 | `strip_required_marker` | `"*"` | Strip this trailing marker from reply keys, at every nesting level, so a model that echoes `name*` back is still understood. Set to `""` to disable. |
 | `log_coercions` | `True` | Log coercion events for debugging. |

@@ -354,7 +354,9 @@ def coerce_to_schema(
         config: ParseConfig with coercion settings (optional, uses default if None)
 
     Returns:
-        Tuple of (coerced_data, list of CoercionMetadata)
+        Tuple of (coerced_data, list of CoercionMetadata). coerced_data is always a dict
+        unless the root schema is an array and the decoded value is a list, in which case
+        the list is returned as-is (see the array-root exception in the function body).
 
     Raises:
         ConversionError: If the schema is invalid
@@ -381,9 +383,6 @@ def coerce_to_schema(
     """
     if config is None:
         config = ParseConfig()
-
-    if not config.allow_coercion:
-        return data if isinstance(data, dict) else {}, []
 
     # Parse schema if it's a string
     schema_dict: dict[str, Any]
@@ -421,6 +420,29 @@ def coerce_to_schema(
         data_dict = data
     else:
         data_dict = {"value": data}
+
+    # A non-mapping root is wrapped into {"value": ...} so the declared dict return
+    # type holds on the disabled path too -- UNLESS the root schema is itself an
+    # array and the value is a list, which is a legitimate array root, not a wrap
+    # candidate. root_type comes from schema_dict (already normalised above, never
+    # the raw `schema` parameter -- all three schema spellings converge on
+    # schema_dict, so no isinstance dispatch on BaseModel/RootModel is needed here).
+    #
+    # Do NOT add `"items" in schema_dict` to this predicate: it regresses
+    # {"type": "array"} with no "items" key (test_array_root_without_items_...).
+    # Do NOT drop the `isinstance(root_type, list)` disjunct: it regresses
+    # {"type": ["array", "null"]}, the ordinary nullable-array JSON Schema spelling
+    # (test_nullable_array_root_type_list_...).
+    if not isinstance(data_dict, dict):
+        root_type = schema_dict.get("type")
+        is_array_root = isinstance(data_dict, list) and (
+            root_type == "array" or (isinstance(root_type, list) and "array" in root_type)
+        )
+        if not is_array_root:
+            data_dict = {"value": data_dict}
+
+    if not config.allow_coercion:
+        return data_dict, []
 
     # Apply recursive coercion
     return coerce_recursive(data_dict, schema_dict, config)

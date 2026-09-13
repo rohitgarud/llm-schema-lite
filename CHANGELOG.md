@@ -89,6 +89,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FormatterConfig(hoist_classes=...)` now raises `TypeError` instead of quietly doing
   nothing; delete the argument. Hoisting is not a supported rendering mode and none is
   planned. (`lsl-2026-04-29-002`)
+- **`coerce()` wraps a JSON array string under a non-array schema.** `coerce("[1, 2]",
+  Model)` returned the bare list `[1, 2]`, which its own return type
+  (`tuple[dict[str, Any], ...]`) says it cannot; it now normalises to `{"value": [1, 2]}`
+  like every other non-mapping input before coercion runs. A root array schema is
+  unaffected and still returns a list on both paths — including the `{"type": ["array",
+  "null"]}` spelling and a Pydantic `RootModel[list[...]]`. (`lsl-2026-09-13-002`)
+- **`coerce(data, schema, ParseConfig(allow_coercion=False))` now raises `ConversionError`
+  for an invalid schema, matching the enabled path.** The disabled path's early return sat
+  above the schema-parsing block, so an invalid JSON schema string used to return
+  `({}, [])` quietly instead of raising when coercion was off — the one code path where a
+  malformed schema didn't fail loudly. Both flag values now run the same schema-parsing
+  step, so both raise. (`lsl-2026-09-13-002`)
 
 ### Added
 
@@ -654,6 +666,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extra, so `make format` and the hook agree on formatting, and
   `benchmarking/dspy_adapters` is now type-checked by `make lint` and CI.
   (`lsl-2026-09-05-014`, `560cf64`)
+- **`coerce()` no longer silently drops non-dict input when coercion is disabled.**
+  `ParseConfig(allow_coercion=False)` returned an empty dict for a list, a scalar, `None`,
+  or any string — including a JSON string that decodes to an object — so turning coercion
+  off destroyed data that leaving it on preserved. Both flag values now share one
+  normalisation: a non-mapping input is wrapped as `{"value": ...}`, and
+  `allow_coercion=False` returns that shape unchanged with an empty metadata list. Dict
+  input is still returned as the same object. (`lsl-2026-09-13-002`)
 
 <!--
   Everything above this marker is hand-written. `make changelog` (git-changelog, in-place via
