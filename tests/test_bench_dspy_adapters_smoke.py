@@ -111,6 +111,37 @@ def _seeded_lm_factory(
     return factory
 
 
+class _ResponseFormatCapableDummyLM(DummyLM):  # type: ignore[misc]
+    """`DummyLM` that accepts `response_format` but denies schema support.
+
+    Exactly what litellm reports for a locally-served model it does not recognise, and the
+    only configuration in which `force_response_schema` is observable: plain `DummyLM` has
+    an empty `supported_params`, so gate 0 answers NONE before the flag is consulted and
+    every arm below would look identical.
+    """
+
+    @property
+    def supported_params(self) -> set[str]:
+        """Advertise `response_format`, so gate 0 passes."""
+        return {"response_format", "temperature", "max_tokens"}
+
+    @property
+    def supports_response_schema(self) -> bool:
+        """Deny schema support, which is the clause the flag suppresses."""
+        return False
+
+
+def _schema_capable_lm_factory(
+    answers: list[dict[str, Any]],
+) -> Callable[[Adapter], BaseLM]:
+    """`_seeded_lm_factory`, but the LM advertises `response_format`."""
+
+    def factory(adapter: Adapter) -> BaseLM:
+        return _ResponseFormatCapableDummyLM(list(answers), adapter=adapter)
+
+    return factory
+
+
 def _validation_error() -> pydantic.ValidationError:
     """Build a real pydantic.ValidationError (it subclasses ValueError)."""
 
@@ -176,7 +207,7 @@ def cold_encoding_memo() -> Iterator[None]:
 
 def test_benchmarking_package_imports() -> None:
     """The `benchmarking.dspy_adapters` import mechanism works under pytest."""
-    assert len(ADAPTERS) == 16
+    assert len(ADAPTERS) == 17
     assert len(SIGNATURES) == 6
 
 
@@ -197,11 +228,11 @@ def test_every_signature_cell_builds() -> None:
 
 
 def test_offline_arm_covers_full_matrix() -> None:
-    """run_offline_arm() returns exactly 96 unique PromptRows (16 adapters x 6 sigs)."""
+    """run_offline_arm() returns exactly 102 unique PromptRows (17 adapters x 6 sigs)."""
     rows = run_offline_arm()
-    assert len(rows) == 96
+    assert len(rows) == 102
     assert all(isinstance(row, PromptRow) for row in rows)
-    assert len({(row.adapter, row.signature) for row in rows}) == 96
+    assert len({(row.adapter, row.signature) for row in rows}) == 102
 
 
 def test_offline_arm_reports_positive_tokens() -> None:
@@ -339,14 +370,25 @@ def test_constrained_arm_sends_a_schema_not_json_object() -> None:
     measuring the same thing as the `json` arm and every comparison drawn from it is void.
     """
     rows = run_live_arm(
-        _seeded_lm_factory([{"answer": "blue", "confidence": "0.9"}]),
-        adapter_ids=["json", "json-constrained"],
+        _schema_capable_lm_factory([{"answer": "blue", "confidence": "0.9"}] * 4),
+        adapter_ids=[
+            "json",
+            "json-constrained",
+            "sola-jsonish-rescue",
+            "sola-jsonish-constrained",
+        ],
         signature_ids=["flat"],
         disable_cache=False,
     )
     sent = {row.adapter: row.response_format_sent for row in rows}
     assert sent["json-constrained"] == "json_schema", sent
     assert sent["json"] != "json_schema", sent
+    # The composed arm is `sola-jsonish-rescue` plus a grammar and nothing else: same
+    # prompt, same parse_config, one different response_format. If the twin ever stops
+    # sending json_object, or the composed cell stops sending json_schema, the pair no
+    # longer isolates the grammar and the composed comparison means nothing.
+    assert sent["sola-jsonish-constrained"] == "json_schema", sent
+    assert sent["sola-jsonish-rescue"] == "json_object", sent
 
 
 def test_repro_1871_capability_vector() -> None:

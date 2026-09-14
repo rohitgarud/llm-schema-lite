@@ -263,6 +263,7 @@ adapter = StructuredOutputAdapter(
     use_json_object_response_format=True,     # Request {"type": "json_object"} in JSONish
     parallel_tool_calls=None,                 # Forwarded to the DSPy adapter base
     parse_config=None,                        # ParseConfig for the parse-time rescue tier
+    force_response_schema=False,              # Send the schema even if litellm says unsupported
     callbacks=None,                            # Optional callbacks
 )
 ```
@@ -362,6 +363,24 @@ adapter = StructuredOutputAdapter(
     mode, `response_format` is omitted when the signature carries `dspy.Tool` /
     `dspy.ToolCalls` fields
   - Default: `True`
+
+- **force_response_schema**: `bool`
+  - Sends the signature's JSON Schema as `response_format` even when litellm reports the
+    LM cannot accept one
+  - litellm answers `supports_response_schema=False` for every locally-served model it does
+    not recognise — `ollama/*`, `ollama_chat/*` **and** `openai/<local-model>` — so both
+    upstream `JSONAdapter` and this adapter downgrade to `{"type": "json_object"}`, which
+    constrains the reply to valid JSON of *any* shape rather than yours, and log nothing
+  - Set `True` when you know the endpoint honours a `json_schema` `response_format`. Ollama
+    does; so do vLLM and llama.cpp servers
+  - Applies to JSON and JSONish modes. YAML never sends `response_format`, and a
+    tool-carrying signature still backs off. The flag suppresses **only** the capability
+    check: an open-ended mapping or a `ToolCalls` output still falls back to `json_object`,
+    because those schemas genuinely cannot be sent
+  - Measured over three sub-1.2B models and five corpora, JSONish plus a schema cut this
+    adapter's failure rate from 37% to 2.4% of 450 cells. Note that a grammar constrains
+    structure, not termination — keep a parse-failure path
+  - Default: `False`
 
 - **parallel_tool_calls**: `bool | None`
   - Forwarded unchanged to the DSPy adapter base. When not `None` and native function

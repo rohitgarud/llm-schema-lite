@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`StructuredOutputAdapter(force_response_schema=...)`, default `False`.** Sends the
+  signature's JSON Schema as `response_format` even when litellm reports the LM cannot
+  accept one. litellm answers `supports_response_schema=False` for every locally-served
+  model it does not recognise — `ollama/*`, `ollama_chat/*` and `openai/<local-model>`
+  alike — so both upstream `JSONAdapter` and this adapter silently downgrade to
+  `{"type": "json_object"}`, constraining the reply to valid JSON of *any* shape rather
+  than yours. The flag suppresses only that capability clause: an open-ended mapping or a
+  `ToolCalls` output still falls back, YAML still sends nothing, and a tool-carrying
+  signature still backs off. Measured over three sub-1.2B models and five corpora, JSONish
+  plus a schema cut the adapter's failure rate from 37% to 2.4% of 450 cells. A grammar
+  constrains structure, not termination — keep a parse-failure path.
+
 ## [v0.7.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.7.0) - 2026-09-13
 
 <small>[Compare with v0.6.1](https://github.com/rohitgarud/llm-schema-lite/compare/v0.6.1...v0.7.0)</small>

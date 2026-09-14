@@ -640,6 +640,20 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             JSONAdapter's structured-outputs behaviour, and in YAML mode, which never sets
             response_format. Even in JSONish mode, response_format is omitted when the
             signature carries dspy.Tool / dspy.ToolCalls fields.
+        force_response_schema: Send the signature's JSON Schema as response_format even when
+            litellm reports the LM cannot accept one. Default False. litellm answers
+            supports_response_schema=False for every locally-served model it does not
+            recognise -- ollama/*, ollama_chat/*, and openai/<local-model> alike -- so DSPy
+            and this adapter both downgrade to {"type": "json_object"}, which constrains the
+            reply to valid JSON of ANY shape rather than yours, and log nothing. Set True
+            when you know the endpoint honours a json_schema response_format (Ollama does;
+            so do vLLM and llama.cpp servers). Applies to JSON and JSONish modes; YAML never
+            sends response_format, and a tool-carrying signature still backs off. The flag
+            suppresses ONLY the capability check: an open-ended mapping or a ToolCalls output
+            still falls back to json_object, because those schemas genuinely cannot be sent.
+            Measured on three sub-1.2B models over five corpora: JSONish plus a schema cut
+            this adapter's failure rate from 37% to 2.4% of 450 cells. Note that a grammar
+            constrains structure, not termination -- keep a parse-failure path.
         parallel_tool_calls: Forwarded unchanged to the DSPy adapter base. When not None and
             native function calling is active on an LM that supports it, DSPy sets
             lm_kwargs["parallel_tool_calls"]. None (default) leaves the provider option unset.
@@ -670,6 +684,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         use_json_object_response_format: bool = True,
         parallel_tool_calls: bool | None = None,
         parse_config: ParseConfig | None = None,
+        force_response_schema: bool = False,
     ):
         super().__init__(
             callbacks=callbacks,
@@ -683,6 +698,7 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
         self.prompt_layout = prompt_layout
         self.use_json_object_response_format = use_json_object_response_format
         self.parse_config = parse_config
+        self.force_response_schema = force_response_schema
         # parallel_tool_calls is stored by Adapter.__init__ (dspy/adapters/base.py:73);
         # do not re-assign it here.
 
@@ -712,24 +728,33 @@ class StructuredOutputAdapter(JSONAdapter):  # type: ignore[misc]
             return _ResponseFormatPlan.NONE
 
         if self.output_mode == OutputMode.JSONISH:
-            if not self.use_json_object_response_format:
-                return _ResponseFormatPlan.NONE
             # BROAD predicate (design D5): tools + json_object is the combination that
             # 400s on OpenAI-compatible servers, so JSONish backs off for *any*
             # tool-carrying signature, not just the ToolCalls-output case upstream checks.
             # JSONish deliberately does NOT consult _has_open_ended_mapping: an open-ended
             # mapping is still a JSON object, and no schema is ever sent in this mode.
+            # Checked ahead of the two flags below: when a tool-carrying signature meets
+            # either flag the answer was NONE before this reordering too, so the backoff
+            # keeps winning and force_response_schema cannot talk us into a known 400.
             if _has_tool_fields(signature):
+                return _ResponseFormatPlan.NONE
+            if self.force_response_schema:
+                return _ResponseFormatPlan.SCHEMA
+            if not self.use_json_object_response_format:
                 return _ResponseFormatPlan.NONE
             return _ResponseFormatPlan.JSON_OBJECT
 
-        # JSON mode - must equal upstream JSONAdapter 3.3.1 exactly. Same three
-        # conditions, same left-to-right order, NARROW predicate (design D5), and no
-        # consultation of use_json_object_response_format.
+        # JSON mode - equals upstream JSONAdapter 3.3.1 exactly unless
+        # force_response_schema is set: same conditions, same left-to-right order, NARROW
+        # predicate (design D5), and no consultation of use_json_object_response_format.
+        # The flag suppresses ONLY the capability clause. The open-ended-mapping and
+        # ToolCalls clauses still force json_object, because those describe schemas that
+        # cannot be built or that the provider rejects -- not a capability table that is
+        # merely out of date.
         if (
             _has_open_ended_mapping(signature)
             or (not self.use_native_function_calling and _has_tool_calls_output(signature))
-            or not lm.supports_response_schema
+            or not (self.force_response_schema or lm.supports_response_schema)
         ):
             return _ResponseFormatPlan.JSON_OBJECT
 

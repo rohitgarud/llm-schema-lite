@@ -286,6 +286,59 @@ class TestResponseFormat:
         )
 
 
+class TestForceResponseSchema:
+    """`force_response_schema` suppresses the capability clause and nothing else."""
+
+    @pytest.mark.parametrize(
+        ("mode", "lm_class", "signature", "force", "expected"),
+        [
+            (OutputMode.JSON, JsonObjectOnlyDummyLM, QA, False, _JSON_OBJECT),
+            (OutputMode.JSON, JsonObjectOnlyDummyLM, QA, True, _SCHEMA_ANSWER),
+            (OutputMode.JSONISH, JsonObjectOnlyDummyLM, QA, False, _JSON_OBJECT),
+            (OutputMode.JSONISH, JsonObjectOnlyDummyLM, QA, True, _SCHEMA_ANSWER),
+            (OutputMode.YAML, JsonObjectOnlyDummyLM, QA, True, None),
+            (OutputMode.JSON, DummyLM, QA, True, None),
+            (OutputMode.JSON, JsonObjectOnlyDummyLM, _DictOut, True, _JSON_OBJECT),
+        ],
+        ids=[
+            "json-off-downgrades",
+            "json-on-sends-schema",
+            "jsonish-off-sends-json-object",
+            "jsonish-on-sends-schema",
+            "yaml-ignores-flag",
+            "gate0-still-wins",
+            "open-ended-mapping-still-downgrades",
+        ],
+    )
+    def test_force_response_schema_is_narrow(self, mode, lm_class, signature, force, expected):
+        """The flag overrides the capability check only; every other gate still holds.
+
+        `JsonObjectOnlyDummyLM` is the case the flag exists for: it advertises
+        `response_format` in `supported_params` but reports `supports_response_schema`
+        False, exactly as litellm does for every locally-served model it does not
+        recognise. The off/on pairs prove the flag is what moves those rows.
+
+        The last three rows are the reason this is the "narrow" version, and each one
+        failing would ship a different bug:
+
+        - `yaml-ignores-flag`: YAML never sends `response_format`. Forcing a JSON schema
+          under a YAML prompt asks the model for two syntaxes at once.
+        - `gate0-still-wins`: plain `DummyLM` has an empty `supported_params`, so gate 0
+          returns NONE before the flag is ever consulted. The flag overrides a stale
+          capability *table*, never an endpoint that says it cannot accept the parameter.
+        - `open-ended-mapping-still-downgrades`: a `dict[str, Any]` output field cannot be
+          expressed as a structured-output schema at all, so that clause must survive.
+        """
+        adapter = make_adapter(mode, force_response_schema=force)
+        lm = lm_class([_SIG_ANSWER[signature]] * 4, adapter=adapter)
+        adapter(lm, {}, signature, [], _SIG_INPUTS[signature])
+        got = response_format_projection(recorded_response_format(lm))
+        assert got == expected, (
+            f"{mode}/{lm_class.__name__}/{signature.__name__}/force={force}: "
+            f"expected {expected!r}, got {got!r}"
+        )
+
+
 class TestResponseFormatMatrix:
     """The design v2 response_format truth table, and JSON-mode parity with upstream."""
 

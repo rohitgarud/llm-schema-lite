@@ -123,6 +123,24 @@ ADAPTERS: dict[str, AdapterCell] = {
     "sola-jsonish-block": _sola(OutputMode.JSONISH, PromptLayout.JSON_BLOCK),
     "sola-json-rescue": _sola(OutputMode.JSON, PromptLayout.SECTIONS, rescue=True),
     "sola-jsonish-rescue": _sola(OutputMode.JSONISH, PromptLayout.SECTIONS, rescue=True),
+    # The composed arm: our compact schema in the PROMPT *and* the signature's JSON Schema
+    # as response_format. Nothing else in the matrix runs both layers at once, so without
+    # this cell the sweep cannot tell "this package loses to constrained decoding" from
+    # "this package is a layer under constrained decoding". Uses the shipped flag rather
+    # than a local subclass: the flag keeps gate 0, which passes on Ollama, so what runs
+    # here is the same code path users get.
+    "sola-jsonish-constrained": AdapterCell(
+        factory=lambda: StructuredOutputAdapter(
+            output_mode=OutputMode.JSONISH,
+            prompt_layout=PromptLayout.SECTIONS,
+            parse_config=ParseConfig(),
+            force_response_schema=True,
+        ),
+        config_repr=(
+            "StructuredOutputAdapter(output_mode=JSONISH, prompt_layout=SECTIONS, "
+            "parse_config=ParseConfig(), force_response_schema=True)"
+        ),
+    ),
     "sola-yaml-rescue": _sola(OutputMode.YAML, PromptLayout.SECTIONS, rescue=True),
     "sola-json-partial": _sola(OutputMode.JSON, PromptLayout.SECTIONS, partial=True),
     "sola-jsonish-partial": _sola(OutputMode.JSONISH, PromptLayout.SECTIONS, partial=True),
