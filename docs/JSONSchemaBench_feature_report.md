@@ -30,7 +30,7 @@ features survive into the simplified output* — validation separately enforces 
 | **Median token reduction** | **46.2%** across those 300 |
 | **Schemas that compact** | **294/300**, median reduction **46.6%** |
 | **Schemas that still expand** | **4/300**, worst case **−2012%** (see §4) |
-| **Feature coverage** | JSONish **28/39**, YAML **33/39**, TypeScript **31/39** |
+| **Feature coverage** | JSONish **30/39**, YAML **33/39**, TypeScript **31/39** |
 | **Validation** | Full Draft 2020-12 via `jsonschema` — every keyword enforced regardless of whether it renders |
 
 **Read that first row carefully.** The flat dump's first 300 records are all `Github_trivial`
@@ -78,11 +78,11 @@ still enforces it).
 | minLength / maxLength | ✅ | ✅ | ✅ |
 | minimum / maximum | ✅ | ✅ | ✅ |
 | exclusiveMinimum / exclusiveMaximum | ✅ | ✅ | ✅ |
-| **multipleOf** | ❌ | ✅ | ✅ |
+| multipleOf | ✅ | ✅ | ✅ |
 | minItems / maxItems | ✅ | ✅ | ✅ |
 | uniqueItems | ✅ | ✅ | ✅ |
 | prefixItems (tuple) | ✅ | ✅ | ✅ |
-| **contains** | ❌ | ✅ | ✅ |
+| contains | ✅ | ✅ | ✅ |
 | boolean schema `true` | ✅ | ✅ | ✅ |
 | boolean schema `false` | ✅ | ✅ | ✅ |
 | items: true (boolean schema) | ✅ | ✅ | ✅ |
@@ -99,7 +99,7 @@ still enforces it).
 | default | ✅ | ✅ | ✅ |
 | examples (opt-in) | ❌ | ❌ | ❌ |
 | nullable (`anyOf` + null) | ✅ | ✅ | ✅ |
-| **Total** | **28/39** | **33/39** | **31/39** |
+| **Total** | **30/39** | **33/39** | **31/39** |
 
 `examples` is excluded by default for token savings and renders when enabled
 (`FormatterConfig(metadata_inclusion={"examples": True})`); it is listed ❌ because the
@@ -107,13 +107,45 @@ default output omits it.
 
 ### Why JSONish trails
 
-`JSONishFormatter.add_metadata` is a pass-through — it returns the representation
-unchanged. JSONish therefore surfaces only keywords that have a **dedicated inline token**
-(pattern, format, length/numeric ranges, item counts, uniqueItems, enum, const, default,
-description, title). Everything else in `BaseFormatter.METADATA_MAP` is live for YAML and
-TypeScript and dead for JSONish. That single fact explains `multipleOf`, `contains`,
-`patternProperties` and `propertyNames` in one line, and it is why closing the gap is a
-contained change rather than five separate features.
+JSONish surfaces only keywords that have a **dedicated inline token** (pattern, format,
+length/numeric ranges, item counts, uniqueItems, enum, const, default, description, title).
+Everything else in `BaseFormatter.METADATA_MAP` is live for YAML and TypeScript and absent
+from JSONish.
+
+An earlier revision of this report blamed `JSONishFormatter.add_metadata` being a
+pass-through, and called the fix "one contained change". **That was wrong.** `add_metadata`
+has exactly one caller — the last line of `BaseFormatter.process_property` — and JSONish
+never calls `process_property`: it renders object bodies in its own
+`_process_schema_recursive_inner` loop. Instrumenting a full JSONish render confirms it,
+with both counters at zero:
+
+```
+rendered: // Fields marked with * are required { a*: int, b: string [] }
+call counts: {'add_metadata': 0, 'process_property': 0}
+```
+
+(`multipleOf: 5` and `contains` are both absent from that output.) JSONish's
+`add_metadata` is a dead override on a path JSONish does not use; implementing it would
+change nothing observable.
+
+The real cause is structural: that loop emits each property's token directly across ~10
+branches, so a keyword with no inline token has nowhere to appear. Closing a gap means
+adding a fragment on the path each mode actually uses — which is a larger change than this
+report previously claimed, and larger than it looks: `multipleOf` alone needed the token
+joined at **three** separate call sites (`jsonish_formatter.py`, `typescript_formatter.py`,
+and YAML's `_format_number_range_jsonish`), because none of the three modes reaches
+`BaseFormatter.process_type_value` for a scalar number.
+
+**Closed since that finding:** `multipleOf` and `contains` now render in all three modes,
+with one shared spelling — `int (multiple of 5)`, `list[string] (contains "z")` — from a
+single owner each (`multiple_of_token`, `array_constraint_tokens`). `contains` previously
+had three live emitters, printing two or three times on one YAML line, and leaked a raw
+Python dict repr (`contains: {'const': 'z'}`) whenever the target carried a `const`.
+
+**Still open in JSONish:** `patternProperties`, `propertyNames`, and `not: true`. All three
+are key-position or node-position rather than value-position, so they need
+`classify_container` to classify them (it currently returns `kind='object'`,
+`key_schema=None` for the first two) rather than a new token.
 
 ---
 
@@ -238,9 +270,12 @@ is a materially cheaper problem, and it is the honest form of the claim.
    back-references have already done their work, and 801 MB resident to produce. Changes
    output shape for every ref-bearing schema, so it wants its own decision — but the
    evidence for it is now much stronger than the easy-slice sample suggested.
-2. **Give `JSONishFormatter` real `add_metadata` behaviour.** One change closes
-   `multipleOf`, `contains`, `patternProperties`, `propertyNames` and `not: true` at once,
-   and `patternProperties` alone appears in 6.7% of real schemas.
+2. **Surface the three remaining keywords in JSONish.** `patternProperties`,
+   `propertyNames` and `not: true` — `patternProperties` alone appears in 6.7% of real
+   schemas. `multipleOf` and `contains` are done. Note this is *not* a matter of
+   implementing `add_metadata`: that method is unreachable from JSONish (see §2). These
+   three are key/node-position, so they need `classify_container` to classify them, which
+   changes a shared classifier used by all three modes.
 3. **`minProperties` / `maxProperties` / `dependentRequired`** — absent from all three
    formatters; `dependentRequired` is not in `METADATA_MAP` at all.
 4. **`if/then/else`** — `_format_conditional` exists but never fires from a root-level `if`.

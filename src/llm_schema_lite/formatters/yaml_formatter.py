@@ -293,11 +293,15 @@ class YAMLFormatter(BaseFormatter):
     def _format_number_range_jsonish(self, type_value: dict[str, Any]) -> str:
         """Format number range like JSONish: (min to max), (>= min), (<= max).
 
-        Delegates to `BaseFormatter.numeric_range_token`; output is byte-identical to
-        the previous inline implementation.
+        Delegates to `BaseFormatter.numeric_range_token`, and carries `multipleOf` in the
+        SAME group so all three modes spell it identically -- YAML builds its numeric
+        token here and never reaches `BaseFormatter.process_type_value`, so this is the
+        only place the token can be joined.
         """
         range_tok = self.numeric_range_token(type_value)
-        return f"({range_tok})" if range_tok else ""
+        multiple_of = self.multiple_of_token(type_value)
+        parts = [p for p in (range_tok, multiple_of) if p]
+        return f"({', '.join(parts)})" if parts else ""
 
     def process_type_value(self, type_value: dict[str, Any]) -> str:
         """
@@ -360,8 +364,6 @@ class YAMLFormatter(BaseFormatter):
 
             if self.include_metadata:
                 type_str += self.format_array_constraints(type_value)
-                if "contains" in type_value:
-                    type_str += self.process_contains(type_value)
             # ``str(...)`` mirrors the fallthrough return below: ``type_str`` starts life as
             # ``TYPE_MAP.get(type_name, type_name)`` with an ``Any``-typed key, and the
             # ``add_metadata`` call that used to launder it here is gone (D9).

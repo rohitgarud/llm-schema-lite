@@ -215,9 +215,14 @@ class TypeScriptFormatter(BaseFormatter):
             if length_range:
                 type_str = f"{type_str} ({length_range})"
         elif type_name in ["number", "integer"]:
+            # One group, same spelling as the other two modes: TypeScript builds its
+            # numeric token here and never reaches `BaseFormatter.process_type_value`,
+            # so `multipleOf` has to be joined on THIS path to appear at all.
             range_info = self.numeric_range_token(type_value)
-            if range_info:
-                type_str = f"{type_str} ({range_info})"
+            multiple_of = self.multiple_of_token(type_value)
+            parts = [p for p in (range_info, multiple_of) if p]
+            if parts:
+                type_str = f"{type_str} ({', '.join(parts)})"
 
         # Handle array type (consolidate both "Array" and "array" cases)
         if type_str == "Array" or type_name == "array":
@@ -257,8 +262,6 @@ class TypeScriptFormatter(BaseFormatter):
 
             if self.include_metadata:
                 array_type += self.format_array_constraints(type_value)
-                if "contains" in type_value:
-                    array_type += self.process_contains(type_value)
 
             return array_type
 

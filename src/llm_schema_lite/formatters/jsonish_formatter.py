@@ -483,6 +483,18 @@ class JSONishFormatter(BaseFormatter):
                 type_name = "float" if value["type"] == "number" else "int"
                 range_tok = self.numeric_range_token(value)
                 value_range = f" ({range_tok})" if range_tok else ""
+                # JSONish builds its numeric token here rather than in
+                # `process_type_value`, so `multipleOf` has to be appended on THIS path to
+                # reach the default mode at all.
+                multiple_of_tok = self.multiple_of_token(value)
+                if multiple_of_tok:
+                    # One parenthesised group, not two: `float (0 to 10, multiple of 0.5)`
+                    # matches the house style set by `int (0 to 120)`.
+                    value_range = (
+                        f" ({range_tok}, {multiple_of_tok})"
+                        if range_tok
+                        else f" ({multiple_of_tok})"
+                    )
                 if title or description or default_value or example:
                     comment = f" {self.comment_prefix}"
                 return self._defer_comment_body(

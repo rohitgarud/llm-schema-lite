@@ -59,6 +59,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scoped to `$ref`-free recursion so it never interferes with the sanctioned
   expand-twice-then-placehold contract.
 
+- **`contains` renders once, in every mode, without leaking a Python dict repr.** It had
+  three live emitters — `METADATA_MAP`, `process_contains`, and the array-constraint token
+  channel — so a single YAML line could carry it two or three times
+  (`'list[string] (contains "z") //contains: "z"' # contains: "z"`), while JSONish never
+  showed it at all. `array_constraint_tokens` is now the single owner and `process_contains`
+  is gone. `_format_contains` also grew a `const` arm: a target like `{"const": "z"}`
+  matched neither `enum` nor `type` and fell through to `str(...)`, putting
+  `contains: {'const': 'z'}` — single quotes and all — straight into the prompt.
+
+- **`multipleOf` reaches all three modes, spelled the same way.** JSONish dropped it
+  entirely; YAML and TypeScript restated it from `METADATA_MAP` as `# multipleOf: 5`. It is
+  now a `multiple_of_token` sharing the numeric group: `int (multiple of 5)`,
+  `float (0 to 10, multiple of 0.5)`. The token had to be joined at three separate call
+  sites, because none of the three modes reaches `BaseFormatter.process_type_value` for a
+  scalar number — JSONish, TypeScript and YAML each build that token themselves. Feature
+  coverage moves JSONish 28/39 -> 30/39.
+
 - **Repeated `$ref`s are named instead of inlined again.** A definition already rendered in
   full is replaced at later occurrences by `object // defined above: <Name>`, when its body
   exceeds `BaseFormatter.BACKREFERENCE_MIN_CHARS` (200). One corpus schema carrying 244

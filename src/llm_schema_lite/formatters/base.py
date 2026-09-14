@@ -478,7 +478,10 @@ class BaseFormatter(ABC):
             actual_key = k if k in value else f"_{k}"
 
             if k == "contains":
-                formatted_parts.append(f"contains: {self._format_contains(value[actual_key])}")
+                # Skip everywhere: `array_constraint_tokens` is the single owner, and it
+                # reaches all three modes. This arm plus the old `process_contains` call
+                # sites printed `contains` two or three times on one line.
+                continue
             elif k == "additionalItems" and classify_container(value).kind == "tuple":
                 # Skip: the tuple renderer already consumed this as the variadic tail.
                 continue
@@ -516,7 +519,7 @@ class BaseFormatter(ABC):
                 # Skip these for strings as they're integrated into the type description
                 continue
             elif (
-                k in ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"]
+                k in ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"]
                 and "type" in value
                 and value["type"] in ["number", "integer"]
             ):
@@ -1319,9 +1322,14 @@ class BaseFormatter(ABC):
             if length_range:
                 type_str = f"{type_str} ({length_range})"
         elif type_name in ["number", "integer"]:
+            # One group, and the same spelling JSONish uses on its own numeric path --
+            # otherwise `multipleOf` reads `(multiple of 5)` in one mode and
+            # `# multipleOf: 5` in the other two.
             range_info = self.numeric_range_token(type_value)
-            if range_info:
-                type_str = f"{type_str} ({range_info})"
+            multiple_of = self.multiple_of_token(type_value)
+            parts = [p for p in (range_info, multiple_of) if p]
+            if parts:
+                type_str = f"{type_str} ({', '.join(parts)})"
 
         if type_str == "array":
             shape = classify_container(type_value)
@@ -1357,9 +1365,6 @@ class BaseFormatter(ABC):
                 type_str = "array"  # Fallback for unknown array item type
 
             type_str += self.format_array_constraints(type_value)
-
-            if "contains" in type_value:
-                type_str += self.process_contains(type_value)
 
         return type_str  # type: ignore[no-any-return]
 
@@ -1733,11 +1738,17 @@ class BaseFormatter(ABC):
             return f" //{result}"
         return ""
 
-    def process_contains(self, schema: dict[str, Any]) -> str:
-        """Process contains constraint for arrays."""
-        contains = schema.get("contains")
-        if contains:
-            return f" //contains: {self._format_contains(contains)}"
+    def multiple_of_token(self, schema: dict[str, Any]) -> str:
+        """Already-gated `multipleOf` fragment for the type-token channel.
+
+        Returns ``"multiple of <n>"`` or ``""``. Already filtered through
+        `config.includes`; callers must not re-gate. Lives here rather than in one
+        formatter so all three modes agree -- JSONish previously dropped `multipleOf`
+        entirely while YAML and TypeScript restated it from `METADATA_MAP`.
+        """
+        value = schema.get("multipleOf")
+        if value is not None and self.config.includes("multipleOf"):
+            return f"multiple of {value}"
         return ""
 
     def pattern_token(self, schema: dict[str, Any]) -> str:
@@ -1841,8 +1852,8 @@ class BaseFormatter(ABC):
     def array_constraint_tokens(self, schema: dict[str, Any]) -> list[str]:
         """Ordered, already-gated constraint words for an array-ish schema.
 
-        Order is fixed: uniqueness first, then the length range. Every token is already
-        filtered through ``config.includes`` (itself False whenever
+        Order is fixed: uniqueness first, then the length range, then ``contains``. Every
+        token is already filtered through ``config.includes`` (itself False whenever
         ``include_metadata`` is False), so callers must not re-gate.
         """
         tokens: list[str] = []
@@ -1859,6 +1870,13 @@ class BaseFormatter(ABC):
             tokens.append(f">= {schema['minItems']} items")
         elif has_max:
             tokens.append(f"<= {schema['maxItems']} items")
+
+        # `contains` rides the same channel so JSONish gets it too; it previously reached
+        # only YAML/TypeScript, via METADATA_MAP, as a raw Python dict repr
+        # (`//contains: {'const': 'z'}`). `_format_contains` renders the value properly.
+        contains = schema.get("contains")
+        if contains is not None and self.config.includes("contains"):
+            tokens.append(f"contains {self._format_contains(contains)}")
 
         return tokens
 
@@ -1899,14 +1917,24 @@ class BaseFormatter(ABC):
         return ""
 
     def _format_contains(self, contains_schema: Any) -> str:
-        """Format contains constraint in user-friendly way."""
+        """Format contains constraint in user-friendly way.
+
+        A boolean schema and a ``const`` are handled ahead of the fallback: without the
+        ``const`` arm a schema like ``{"const": "z"}`` matched neither ``enum`` nor
+        ``type`` and fell through to ``str(...)``, leaking a raw Python dict repr
+        (``contains: {'const': 'z'}``, single quotes and all) straight into the prompt.
+        """
+        if isinstance(contains_schema, bool):
+            return "any" if contains_schema else "never"
         if isinstance(contains_schema, dict):
             if "enum" in contains_schema:
                 return f"string ({', '.join(contains_schema['enum'])})"
-            elif "type" in contains_schema:
+            if "const" in contains_schema:
+                return format_literal_value(contains_schema["const"])
+            if "type" in contains_schema:
                 return str(contains_schema["type"])
-            else:
-                return str(contains_schema)
+            # Still a dict, but nothing renderable: say so rather than dumping the repr.
+            return "object"
         return str(contains_schema)
 
     def _format_type_simple(self, schema: Any) -> str:
