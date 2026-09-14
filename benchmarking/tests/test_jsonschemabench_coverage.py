@@ -67,8 +67,9 @@ def test_analyze_schema_features_descends_into_definitions() -> None:
 
     The recursion walked a hand-written subset of the subschema slots that omitted both,
     so anything living in a definition was missed. Measured on `patternProperties` across
-    JSONSchemaBench: 416 schemas (4.4%) against a true 716 (7.5%), with 934 of the missed
-    occurrences under `definitions`. Every other keyword undercounted the same way.
+    JSONSchemaBench: 416 schemas (4.4%) against the 687 (7.2%) the fixed walk finds, with
+    934 of the missed occurrences under `definitions`. Every other keyword undercounted
+    the same way.
     """
     schema = {
         "type": "object",
@@ -84,6 +85,29 @@ def test_analyze_schema_features_descends_into_definitions() -> None:
     assert "patternProperties" in found  # under `definitions`
     assert "minLength" in found  # under `$defs`
     assert "multipleOf" in found  # under `additionalProperties`
+
+
+def test_per_schema_timeout_is_counted_apart_from_an_error(monkeypatch) -> None:
+    """A schema that blows the budget is "slow", not "broken".
+
+    Ten schemas in the corpus render for 20-25 minutes apiece, so the sweep caps each one.
+    The distinction matters to the report: a timeout means "too slow to use at prompt
+    time", an exception means "the library failed on this input". A real slow schema would
+    make this test take minutes, so the render is stubbed out with a sleep.
+    """
+    import time
+
+    from benchmarking.jsonschemabench import base
+
+    monkeypatch.setattr(base, "simplify_schema", lambda *a, **kw: time.sleep(5))
+
+    result = base.analyze_dataset_coverage([{"type": "object"}], timeout_s=0.2, ids=["o27039"])
+
+    assert result["timeouts"] == 1
+    assert result["slow_ids"] == ["o27039"]
+    assert result["failures"] == []  # not an exception
+    assert result["supported_schemas"] == 0
+    assert result["coverage_percentage"] == 0.0
 
 
 def test_get_feature_statistics_totals_agree() -> None:

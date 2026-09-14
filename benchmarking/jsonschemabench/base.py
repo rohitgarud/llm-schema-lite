@@ -1,6 +1,8 @@
 import json
 import logging
+import signal
 import statistics
+from types import FrameType
 from typing import Any
 
 import tiktoken
@@ -12,11 +14,34 @@ logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler())
 
 
-def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> dict[str, Any]:
+class SchemaTimeout(Exception):
+    """One schema exceeded the per-schema render budget."""
+
+
+def _on_alarm(signum: int, frame: FrameType | None) -> None:
+    """SIGALRM handler: turn the timer into an exception the render loop can catch."""
+    raise SchemaTimeout
+
+
+def analyze_dataset_coverage(
+    dataset: list[dict[str, Any]],
+    timeout_s: float | None = None,
+    ids: list[str] | None = None,
+) -> dict[str, Any]:
     """Analyze feature coverage of a given dataset.
 
     Returns the measurements as well as logging them, so a per-config sweep can aggregate
     without re-deriving them -- the display below and any caller read the same numbers.
+
+    ``timeout_s`` caps each schema individually. Ten schemas in this corpus render for
+    20-25 minutes apiece (quadratic string post-processing under inline ``$ref``
+    expansion, see the report's section 4), so an unbounded sweep does not finish in a
+    sitting. A timeout is counted separately from an exception: the first is "too slow to
+    use at prompt time", the second is "the library is broken on this input", and
+    collapsing them would hide the distinction the report is built on.
+
+    ponytail: SIGALRM, so this is Unix-only and main-thread-only. That is where the sweep
+    runs; use a subprocess pool if it ever needs to be portable or threaded.
     """
 
     # Handle invalid input
@@ -29,9 +54,15 @@ def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> dict[str, Any]:
     supported_schemas = 0
     token_reductions = []
     failures: list[str] = []
+    slow_ids: list[str] = []
     encoder = tiktoken.encoding_for_model("gpt-4o")
+    if timeout_s:
+        signal.signal(signal.SIGALRM, _on_alarm)
 
-    for schema in dataset:
+    for index, schema in enumerate(dataset):
+        schema_id = ids[index] if ids is not None and index < len(ids) else str(index)
+        if timeout_s:
+            signal.setitimer(signal.ITIMER_REAL, timeout_s)
         try:
             # Test if our formatter can handle this schema
             original_token_count = len(encoder.encode(json.dumps(schema)))
@@ -42,9 +73,15 @@ def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> dict[str, Any]:
                 (original_token_count - simplified_token_count) / original_token_count
             )
 
+        except SchemaTimeout:
+            logger.error(f"Timed out after {timeout_s}s: {schema_id}")
+            slow_ids.append(schema_id)
         except Exception as e:
             logger.error(f"Failed to process schema: {e}")
-            failures.append(f"{type(e).__name__}: {e}")
+            failures.append(f"{schema_id}: {type(e).__name__}: {e}")
+        finally:
+            if timeout_s:
+                signal.setitimer(signal.ITIMER_REAL, 0)
         total_schemas += 1
 
     coverage_percentage = supported_schemas / total_schemas * 100 if total_schemas > 0 else 0
@@ -84,6 +121,8 @@ def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> dict[str, Any]:
         "max_token_reduction": max(token_reductions) * 100 if token_reductions else None,
         "min_token_reduction": min(token_reductions) * 100 if token_reductions else None,
         "failures": failures,
+        "timeouts": len(slow_ids),
+        "slow_ids": slow_ids,
     }
 
 
@@ -190,8 +229,8 @@ def analyze_schema_features(schema: dict) -> list[str]:
         #
         # This was a hand-written subset of those slots, and it omitted `definitions` and
         # `$defs` -- so any keyword living inside a definition was invisible to the count.
-        # Measured on `patternProperties`: 416 schemas (4.4%) against a true 716 (7.5%),
-        # with 934 of the missed occurrences sitting under `definitions`, 19 under `$defs`
+        # Measured on `patternProperties`: 416 schemas (4.4%) against the 687 (7.2%) the
+        # fixed walk finds, with 934 of the missed occurrences under `definitions`, 19 under `$defs`
         # and 3 under `defs`. Every other keyword in the same table was a lower bound for
         # the same reason, so the fix is the whole slot list rather than the two keys that
         # happened to be noticed.
