@@ -30,7 +30,7 @@ features survive into the simplified output* — validation separately enforces 
 | **Schemas that raise** | **0** — every remaining failure is a timeout, not an exception |
 | **Median token reduction** | **47.6%** (median of the ten per-config medians; range 31.4%–58.5%) |
 | **Schemas too slow to render** | **10/9,542**, at a 10 s/schema budget (see §4) |
-| **Feature coverage** | JSONish **30/39**, YAML **33/39**, TypeScript **31/39** |
+| **Feature coverage** | JSONish **31/39**, YAML **33/39**, TypeScript **31/39** |
 | **Validation** | Full Draft 2020-12 via `jsonschema` — every keyword enforced regardless of whether it renders |
 
 Earlier revisions of this report quoted "300/300, 46.2%". That was the flat dump's first 300
@@ -106,7 +106,7 @@ still enforces it).
 | boolean schema `false` | ✅ | ✅ | ✅ |
 | items: true (boolean schema) | ✅ | ✅ | ✅ |
 | **patternProperties** | ❌ | ✅ | ✅ |
-| **propertyNames** | ❌ | ✅ | ❌ |
+| **propertyNames** (open mapping) | ✅ | ✅ | ❌ |
 | minProperties | ❌ | ❌ | ❌ |
 | maxProperties | ❌ | ❌ | ❌ |
 | dependencies | ✅ | ✅ | ❌ |
@@ -118,7 +118,7 @@ still enforces it).
 | default | ✅ | ✅ | ✅ |
 | examples (opt-in) | ❌ | ❌ | ❌ |
 | nullable (`anyOf` + null) | ✅ | ✅ | ✅ |
-| **Total** | **30/39** | **33/39** | **31/39** |
+| **Total** | **31/39** | **33/39** | **31/39** |
 
 `examples` is excluded by default for token savings and renders when enabled
 (`FormatterConfig(metadata_inclusion={"examples": True})`); it is listed ❌ because the
@@ -161,10 +161,33 @@ single owner each (`multiple_of_token`, `array_constraint_tokens`). `contains` p
 had three live emitters, printing two or three times on one YAML line, and leaked a raw
 Python dict repr (`contains: {'const': 'z'}`) whenever the target carried a `const`.
 
-**Still open in JSONish:** `patternProperties`, `propertyNames`, and `not: true`. All three
-are key-position or node-position rather than value-position, so they need
-`classify_container` to classify them (it currently returns `kind='object'`,
-`key_schema=None` for the first two) rather than a new token.
+**Corrected:** an earlier revision listed `propertyNames` as a JSONish gap needing a
+`classify_container` change. That was wrong on both counts. `classify_container` already
+populates `key_schema` from `propertyNames` (rules 6 and 7), `key_token` already renders it,
+and JSONish already calls both — so for an **open mapping** JSONish emits the key constraint
+today:
+
+```
+{"type": "object", "additionalProperties": {"type": "integer"},
+ "propertyNames": {"enum": ["alpha", "beta"]}}
+
+jsonish     { <alpha OR beta>: int }
+yaml        <alpha OR beta>: int
+typescript  interface Schema { [key: string]: number; }   <- drops it
+```
+
+TypeScript is the mode that loses the constraint, not JSONish. A `propertyNames` sitting
+alongside `properties` still does not surface in any mode, but that is Decision C1 holding
+(a schema declaring `properties` is an object, never a mapping), not a defect.
+
+**Still open in JSONish:** `patternProperties` and `not: true`. `patternProperties` is the
+substantive one: JSONish renders `{"type":"object","patternProperties":{"^S_":{...}}}` as a
+bare `{}`, silently dropping the keys, while YAML and TypeScript surface it through
+`BaseFormatter.process_property` — a method JSONish never calls, since it renders object
+bodies in its own `_process_schema_recursive_inner` loop. The attach point is therefore that
+loop's empty-object base case, not the classifier: Decision C1 excludes `patternProperties`
+from `mapping` deliberately, and loosening it would silently reclassify these nodes in YAML
+and TypeScript too.
 
 ---
 
@@ -327,7 +350,8 @@ so this compares *what reaches the model* — their grammar vs our prompt text.
 | patternProperties | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ YAML/TS only |
 | not | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | if / then / else | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| contains | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ YAML/TS only |
+| contains | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| propertyNames | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ JSONish/YAML only |
 
 The asymmetry worth noting: their gaps are **architectural** — an FSM/grammar cannot express
 `if/then/else`, `not`, or unbounded recursion. Ours are **implementation debt**: the
@@ -339,17 +363,21 @@ is a materially cheaper problem, and it is the honest form of the claim.
 ## 6. Recommendations, in measured priority order
 
 1. **Emit a `$defs` section.** Render each definition once and name every use site. This is
-   the only fix for transitive expansion, and `o48404` moves it from "a four-schema tail" to
-   the dominant failure mode at the hard end of the corpus: 45× the input after
-   back-references have already done their work, and 801 MB resident to produce. Changes
-   output shape for every ref-bearing schema, so it wants its own decision — but the
-   evidence for it is now much stronger than the easy-slice sample suggested.
-2. **Surface the three remaining keywords in JSONish.** `patternProperties`,
-   `propertyNames` and `not: true` — `patternProperties` alone appears in 6.7% of real
-   schemas. `multipleOf` and `contains` are done. Note this is *not* a matter of
-   implementing `add_metadata`: that method is unreachable from JSONish (see §2). These
-   three are key/node-position, so they need `classify_container` to classify them, which
-   changes a shared classifier used by all three modes.
+   the only fix for transitive expansion, and the full-corpus run makes it the dominant
+   failure mode at the hard end: worst cases of **−6064%** (JsonSchemaStore) and **−2884%**
+   (Github_medium), plus the **10 schemas** too slow to render inside 10 s. `o48404` is
+   still 45× its input after back-references have done their work. Changes output shape for
+   every ref-bearing schema, so it wants its own decision — but the evidence is far stronger
+   than the easy-slice sample suggested.
+2. **Surface `patternProperties` in JSONish.** It appears in **4.4%** of corpus schemas
+   (416 of 9,542) and JSONish drops it silently, rendering the node as a bare `{}`.
+   `multipleOf`, `contains` and `propertyNames` are done (see §2). Note this is *not* a
+   matter of implementing `add_metadata`: that method is unreachable from JSONish. Nor is
+   it a `classify_container` change — Decision C1 excludes `patternProperties` from
+   `mapping` deliberately, and loosening it would reclassify these nodes in YAML and
+   TypeScript too. The attach point is JSONish's own empty-object base case in
+   `_process_schema_recursive_inner`. `not: true` remains open and is rarer (`not` totals
+   0.6%).
 3. **`minProperties` / `maxProperties` / `dependentRequired`** — absent from all three
    formatters; `dependentRequired` is not in `METADATA_MAP` at all.
 4. **`if/then/else`** — `_format_conditional` exists but never fires from a root-level `if`.
@@ -366,6 +394,6 @@ is a materially cheaper problem, and it is the honest form of the claim.
 
 ---
 
-*Measured against `benchmarking/jsonschemabench/` on the first 300 corpus schemas (token
-figures, `cl100k_base`) and 3,000 schemas (keyword frequency). Regenerate with the commands
-at the top of this file.*
+*Measured against `benchmarking/jsonschemabench/` over all **9,542** corpus schemas in all
+10 configs — token figures (`cl100k_base`) and keyword frequency alike, at a 10 s/schema
+budget. Regenerate with the commands at the top of this file.*
