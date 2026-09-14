@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`{"type": "object", "allOf": [...]}` with no `properties` no longer recurses until the
+  interpreter stops it.** `_process_schema_recursive_inner` tested `type` before `allOf`,
+  so such a node took the `type` arm, and `process_types`' object branch calls straight
+  back into the dispatcher with the SAME node. Nothing could break the cycle: the
+  empty-object base case excludes `allOf` nodes explicitly, and the inline `id()` cycle
+  guard is switched off while a `$ref` is expanding. `allOf` now dispatches before `type`,
+  exactly as `$ref` already does for what turned out to be the identical bug -- this is
+  that fix's untreated sibling. Four JSONSchemaBench `Github_easy` schemas (o68471, o5966,
+  o74547, o64856) died with `RecursionError` on this shape and now render.
+
 - **Exclusive numeric bounds (pydantic `gt`/`lt`) now render, and render the same way in
   every mode.** `numeric_range_token` read only `minimum`/`maximum`, so a
   `Field(gt=0.0, lt=500.0)` rendered as a bare `float` in JSONish and TypeScript while

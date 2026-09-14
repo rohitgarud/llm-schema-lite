@@ -853,10 +853,16 @@ class JSONishFormatter(BaseFormatter):
             # empty-object base case above cannot catch it either: it deliberately
             # excludes `$ref` nodes.
             return self.process_ref(schema)
+        elif "allOf" in schema and schema["allOf"]:
+            # BEFORE `type`, for the same reason `$ref` is. `{"type": "object", "allOf":
+            # [...]}` with no `properties` is the `$ref` bug's untreated sibling: it took
+            # the `type` arm below, and `process_types`' object branch calls straight back
+            # here with the SAME node. The empty-object base case above cannot catch it --
+            # it excludes `allOf` nodes explicitly -- and the inline cycle guard is off
+            # during ref expansion, so this recursed until the interpreter stopped it.
+            return self.process_allof(schema)
         elif "type" in schema and schema["type"]:
             return self.process_types(schema)
-        elif "allOf" in schema and schema["allOf"]:
-            return self.process_allof(schema)
 
         return output
 
