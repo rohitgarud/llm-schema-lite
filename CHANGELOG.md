@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus a schema cut the adapter's failure rate from 37% to 2.4% of 450 cells. A grammar
   constrains structure, not termination — keep a parse-failure path.
 
+### Changed
+
+- **The JSONSchemaBench sweep enforces a per-schema render budget (`--timeout`, default
+  10 s).** The report has quoted a "10 s/schema budget" and a slow-schema table for several
+  revisions, but no such budget existed in `benchmarking/`: `--all-configs` rendered
+  unbounded, so a full sweep met the ten schemas that take 20-25 minutes apiece and did not
+  finish in a sitting. A timeout is counted and reported separately from an exception --
+  "too slow to use at prompt time" is a different claim from "the library failed on this
+  input", and the report rests on that distinction. `parse_records` now carries each
+  record's `unique_id` alongside its schema so slow schemas can be named rather than
+  counted, and `--out` flushes after every config instead of once at the end, so a sweep
+  that dies partway leaves its finished configs behind. Uses `signal.setitimer`, so it is
+  Unix- and main-thread-only; that is where the sweep runs.
+
 ### Fixed
 
 - **`patternProperties` now renders structurally in all three modes instead of being dropped
@@ -39,6 +53,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the 9,542 corpus schemas (7.2%) carry the keyword; over a 400-schema pattern-bearing
   sample 78.7% now expose a pattern key, the remainder being C1 holding (513 of the 2,401
   pattern nodes co-declare `properties`).
+
+  **This costs tokens, measured.** A pattern's value schema is now materialised once per
+  regex, so a value schema carrying `$ref`s expands once per pattern. A/B against the
+  preceding commit over JSONSchemaBench, same budget and machine, runs serialised: of 141
+  pattern-bearing schemas measured under both, **114 render larger**. Per-config medians on
+  pattern-bearing schemas fall 79.5%->47.7% (Github_trivial), 57.0%->47.8%
+  (JsonSchemaStore), 37.6%->32.2% (Github_hard) and 17.2%->**-441.5%** (Github_ultra, a
+  5.4x expansion where there had been compaction); worst single case
+  `JsonSchemaStore/tmlanguage` -195.3%->-1822.9%. Schemas *without* the keyword are
+  byte-identical across the two commits, and the two configs containing none at all
+  (`Glaiveai2K`, `Kubernetes`) are unchanged to the decimal across 2,771 schemas, which is
+  what isolates the cause. The trade is deliberate -- a pattern key that reaches the model
+  beats one that silently does not -- but the mitigation (fall back to the comment form
+  when a structural render exceeds some multiple of its input) is NOT implemented. See the
+  feature report, section 4.
 
 - **`{"type": "object", "allOf": [...]}` with no `properties` no longer recurses until the
   interpreter stops it.** `_process_schema_recursive_inner` tested `type` before `allOf`,

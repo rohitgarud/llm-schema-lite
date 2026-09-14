@@ -28,9 +28,9 @@ features survive into the simplified output* — validation separately enforces 
 |--------|----------|
 | **Ingestion** | **9,532/9,542 (99.9%)** — the *whole* corpus, all 10 configs |
 | **Schemas that raise** | **0** — every remaining failure is a timeout, not an exception |
-| **Median token reduction** | **47.6%** (median of the ten per-config medians; range 31.4%–58.5%) |
-| **Schemas too slow to render** | **10/9,542**, at a 10 s/schema budget (see §4) |
-| **Feature coverage** | JSONish **31/39**, YAML **33/39**, TypeScript **31/39** |
+| **Median token reduction** | **46.8%** (median of the ten per-config medians; range 31.4%–57.0%) |
+| **Schemas too slow to render** | **9–10/9,542** at a 10 s/schema budget — the count is not stable, see §4 |
+| **Feature coverage** | JSONish **32/39**, YAML **33/39**, TypeScript **31/39** |
 | **Validation** | Full Draft 2020-12 via `jsonschema` — every keyword enforced regardless of whether it renders |
 
 Earlier revisions of this report quoted "300/300, 46.2%". That was the flat dump's first 300
@@ -39,32 +39,38 @@ corpus. The table below is every schema in every config:
 
 | Config | Schemas | Ingested | Median ↓ | Mean ↓ | Worst | Slow |
 |--------|--------:|---------:|---------:|-------:|------:|-----:|
-| Github_trivial | 444 | 100% | **58.5%** | 56.7% | −250% | 0 |
-| Github_easy | 1938 | 100% | **53.3%** | 53.6% | −34% | 0 |
-| Github_medium | 1969 | 100% | **47.2%** | 44.9% | −2884% | 0 |
-| Github_hard | 1236 | 99.8% | **40.9%** | 35.0% | −1601% | 3 |
-| Github_ultra | 164 | 97.0% | **47.6%** | 38.9% | −354% | 5 |
+| Github_trivial | 444 | 100% | **57.0%** | 55.0% | −250% | 0 |
+| Github_easy | 1938 | 100% | **52.9%** | 53.1% | −34% | 0 |
+| Github_medium | 1969 | 100% | **46.7%** | 43.8% | −2884% | 0 |
+| Github_hard | 1236 | 99.8% | **40.1%** | −51.3% | −4770% | 3 |
+| Github_ultra | 164 | 97.0% | **46.9%** | −38.2% | −1015% | 5 |
 | Glaiveai2K | 1707 | 100% | **45.6%** | 45.9% | +21% | 0 |
-| JsonSchemaStore | 492 | 99.6% | **45.5%** | 18.0% | −6064% | 2 |
+| JsonSchemaStore | 492 | 99.6% | **43.6%** | 10.7% | −6064% | 2 |
 | Kubernetes | 1064 | 100% | **31.4%** | 27.4% | −1019% | 0 |
-| Snowplow | 403 | 100% | **53.6%** | 53.1% | +24% | 0 |
-| WashingtonPost | 125 | 100% | **49.1%** | −51.0% | −1436% | 0 |
+| Snowplow | 403 | 100% | **53.5%** | 52.6% | +24% | 0 |
+| WashingtonPost | 125 | 100% | **49.1%** | −51.4% | −1437% | 0 |
 | **TOTAL** | **9542** | **99.9%** | — | — | — | **10** |
+
+The `Github_hard` and `Github_ultra` means are negative where they were positive, and the
+per-config medians are 0.4–1.9 pp lower than the previous revision of this table. That is
+not drift: it is the measured price of the `patternProperties` fix, isolated by A/B in §4.
 
 Three things this table says that the 300-schema sample could not.
 
 **The compaction claim holds across difficulty.** Every config's *median* is a real
-reduction, from 31.4% (Kubernetes) to 58.5% (Github_trivial). It erodes with difficulty
-(58.5 → 53.3 → 47.2 → 40.9 across the Github ladder) but never inverts.
+reduction, from 31.4% (Kubernetes) to 57.0% (Github_trivial). It erodes with difficulty
+(57.0 → 52.9 → 46.7 → 40.1 across the Github ladder) but never inverts.
 
 **Quote the median, never the mean.** `WashingtonPost` has a median of **+49.1%** and a mean
-of **−51.0%**: the typical schema compacts by half while a few catastrophic expansions drag
-the average below zero. `JsonSchemaStore` shows the same split (45.5% vs 18.0%). A mean over
-this corpus is a statement about the worst tail, not about typical behaviour.
+of **−51.4%**: the typical schema compacts by half while a few catastrophic expansions drag
+the average below zero. `Github_hard` now shows the same split even more starkly (40.1% vs
+−51.3%). A mean over this corpus is a statement about the worst tail, not about typical
+behaviour.
 
 **The tail is a real defect, not noise.** Worst cases reach **−6064%** (JsonSchemaStore) and
-**−2884%** (Github_medium) — schemas rendering ~29–61× *larger* than their own JSON. Same
-root cause as the 10 slow schemas: repeated inline `$ref` expansion (§4).
+**−4770%** (Github_hard) — schemas rendering ~48–61× *larger* than their own JSON. Two
+distinct causes now feed it: repeated inline `$ref` expansion, and structural
+`patternProperties` rendering (both in §4).
 
 The headline gap is **not** breadth, it is that JSONish — the default mode — renders five
 fewer keywords than YAML, despite all three sharing `base.py`. Every one of those five is
@@ -288,7 +294,7 @@ reachable definition graph is materialised, while raw JSON Schema stores each de
 once and points at it.
 
 Across the full corpus the worst case per config reaches **−6064%** (JsonSchemaStore),
-**−2884%** (Github_medium), **−1601%** (Github_hard) and **−1436%** (WashingtonPost) — up to
+**−4770%** (Github_hard), **−2884%** (Github_medium) and **−1437%** (WashingtonPost) — up to
 61× the input. Only `Glaiveai2K` and `Snowplow`, the two configs with *no* cyclic `$ref`
 graphs, stay positive throughout. (This run recorded each config's worst case, not a count
 of how many schemas expand; that count is not claimed here.)
@@ -333,6 +339,49 @@ Back-references did real work here — 49 MB down to 9 MB — and still left 45�
 *distinct* definitions are each materialised transitively. Repeat-suppression cannot reach
 this by construction; only rendering each definition once, in a `$defs` section, can.
 
+### The `patternProperties` fix cost tokens, and the bill is measured
+
+`efb7b16` made `patternProperties` render structurally rather than being dropped or reduced
+to a one-line comment (§2). That is a coverage win and a token loss, and the loss is large
+enough to state rather than bury. A/B against the immediately preceding commit (`afa03f4`),
+same harness, same 10 s budget, same machine, the two runs serialised so neither contends
+for CPU:
+
+| Config | pattern-bearing schemas | median ↓ before → after |
+|--------|------------------------:|------------------------:|
+| Github_trivial | 25 | 79.5% → **47.7%** |
+| JsonSchemaStore | 119 | 57.0% → **47.8%** |
+| Github_hard | 291 | 37.6% → **32.2%** |
+| Github_ultra | 30 | 17.2% → **−441.5%** |
+
+The attribution is isolated, not inferred. Schemas *without* the keyword are byte-identical
+across the two commits — same medians, same means, same timeout sets — and `Glaiveai2K` and
+`Kubernetes`, the two configs carrying **no** `patternProperties` at all, come through
+unchanged to the decimal across 2,771 schemas. Of 141 pattern-bearing schemas measured
+individually under both commits, **114 regressed** and 27 did not. Worst named cases:
+
+| Schema | before | after |
+|--------|-------:|------:|
+| `JsonSchemaStore/tmlanguage` | −195.3% | **−1822.9%** |
+| `Github_ultra/o21307` | +40.6% | **−780.8%** |
+| `Github_ultra/o21193` | +17.8% | **−674.0%** |
+
+The mechanism is the one described above, multiplied: a pattern's *value schema* is now
+materialised once per regex, so when that value schema carries `$ref`s the expansion is
+taken once per pattern. The `o21xxx` cluster are variants of a single pattern-heavy shape,
+which is why they move together.
+
+Whether the trade is right is a product decision, not a measurement one — the stated goal is
+small-model reliability rather than token count, and a pattern key that reaches the model is
+worth more than one that silently does not. But turning 17% compaction into a 5.4×
+expansion on `Github_ultra`'s pattern tail is not free, and the obvious mitigation — fall
+back to the comment form when the structural render exceeds some multiple of its input — is
+**not implemented**.
+
+(Group sizes above come from a structural walk that descends every dict value; the stricter
+keyword counter of §3 gives 25 / 118 / 285 / 30 for the same four configs. The medians are
+computed over the groups as listed.)
+
 ### The cost is CPU, not memory
 
 An earlier revision of this report attributed full-corpus sweep stalls to memory, citing
@@ -363,13 +412,26 @@ hundreds of thousands of times. But they are not the cost. The cost is quadratic
 post-processing: a character-at-a-time scanner re-walking a string that inline `$ref`
 expansion keeps regrowing, 118 million list appends deep.
 
-**10 of 9,542 schemas (0.1%) exceed a 10 s/schema budget**, all for this reason:
+**9 or 10 of 9,542 schemas (0.1%) exceed a 10 s/schema budget**, all for this reason:
 
 | Config | Slow schemas |
 |--------|--------------|
-| Github_hard | `o27039`, `o69207`, `o13029` |
+| Github_hard | `o27039`, `o13029`, and `o69207` *only sometimes* |
 | Github_ultra | `o39449`, `o48404`, `o50639`, `o69209`, `o21764` |
 | JsonSchemaStore | `meta`, `accelerator` |
+
+**The count is 9 or 10, not 10, and the difference is one schema sitting on the fence.**
+Timed alone, `o69207` renders in **7.8 s** before the `patternProperties` change and
+**8.9–9.4 s** after — both under the budget — but it crosses 10 s inside a full sweep, under
+the memory pressure of nine other configs. So it is excluded from some runs and included in
+others, and because it expands to **6,086,552 characters from a 62 KB input (98×)** its
+presence or absence swings that config's mean and worst case violently: `Github_hard`'s
+worst case reads **−30089%** on runs where it completes and **−4770%** on runs where it
+times out. Its render is byte-identical across both commits, so this is a pre-existing
+`$ref` monster, not a pattern casualty.
+
+Treat `Github_hard`'s mean and worst as unstable statistics. The medians, and every other
+config, are reproducible.
 
 Note what is *not* on this list: cyclic schemas as a class. 371 of 9,542 (3.9%) have cyclic
 `$ref` graphs — 189 in `Github_hard` alone — and the re-entry guard handles them. Cycles are
@@ -414,12 +476,22 @@ is a materially cheaper problem, and it is the honest form of the claim.
 
 1. **Emit a `$defs` section.** Render each definition once and name every use site. This is
    the only fix for transitive expansion, and the full-corpus run makes it the dominant
-   failure mode at the hard end: worst cases of **−6064%** (JsonSchemaStore) and **−2884%**
-   (Github_medium), plus the **10 schemas** too slow to render inside 10 s. `o48404` is
+   failure mode at the hard end: worst cases of **−6064%** (JsonSchemaStore) and **−4770%**
+   (Github_hard), plus the **9–10 schemas** too slow to render inside 10 s. `o48404` is
    still 45× its input after back-references have done their work. Changes output shape for
    every ref-bearing schema, so it wants its own decision — but the evidence is far stronger
    than the easy-slice sample suggested.
-2. ~~**Surface `patternProperties` in JSONish.**~~ **Done**, and the reasoning that stood
+
+   This is now also the fix for the `patternProperties` regression below it: that keyword
+   expands badly *because* each pattern's value schema re-materialises the refs it carries.
+   Rendering definitions once would collapse both tails at the same time.
+
+2. **Cap the `patternProperties` structural render.** New, and the only *regression* on this
+   list: pattern-bearing schemas lost 5–459 pp of compaction (§4), with 114 of 141 measured
+   schemas rendering larger. Falling back to the one-line comment form when a structural
+   render exceeds some multiple of its input would keep the coverage win on ordinary
+   schemas and bound the tail. Measure the multiple before picking it.
+3. ~~**Surface `patternProperties` in JSONish.**~~ **Done**, and the reasoning that stood
    here was wrong. This item asserted it was *not* a `classify_container` change, because
    Decision C1 excludes `patternProperties` from `mapping` deliberately. That conclusion
    does not follow: C1 forbids calling these nodes a **mapping**, not giving them a kind of
@@ -429,9 +501,9 @@ is a materially cheaper problem, and it is the honest form of the claim.
    that standing. Measured at **7.2%** of corpus schemas (691 of 9,542), not the 4.4% quoted
    here; see §3 on why the old counter undercounted. `not: true` remains open, and is rarer
    (`not` totals 1.6%).
-3. **`minProperties` / `maxProperties` / `dependentRequired`** — absent from all three
+4. **`minProperties` / `maxProperties` / `dependentRequired`** — absent from all three
    formatters; `dependentRequired` is not in `METADATA_MAP` at all.
-4. **`if/then/else`** — `_format_conditional` exists but never fires from a root-level `if`.
+5. **`if/then/else`** — `_format_conditional` exists but never fires from a root-level `if`.
 
 ---
 
@@ -447,4 +519,7 @@ is a materially cheaper problem, and it is the honest form of the claim.
 
 *Measured against `benchmarking/jsonschemabench/` over all **9,542** corpus schemas in all
 10 configs — token figures (`cl100k_base`) and keyword frequency alike, at a 10 s/schema
-budget. Regenerate with the commands at the top of this file.*
+budget (`--timeout`, now enforced by the sweep rather than only described here). The
+before/after figures in §4 come from a matched run of the same harness against `afa03f4`,
+the commit preceding the `patternProperties` change, serialised so the two runs never
+contend for CPU. Regenerate with the commands at the top of this file.*
