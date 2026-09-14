@@ -5,7 +5,14 @@ import json
 import re
 from typing import Any
 
-from .base import DEFERRED_CLOSE, DEFERRED_OPEN, IDENTITY_TAG, BaseFormatter, classify_container
+from .base import (
+    DEFERRED_CLOSE,
+    DEFERRED_OPEN,
+    IDENTITY_TAG,
+    BaseFormatter,
+    as_subschema,
+    classify_container,
+)
 from .config import FormatterConfig, with_format_default_separator
 
 
@@ -44,6 +51,16 @@ class JSONishFormatter(BaseFormatter):
         # pending_prefix are "<marked property name><identity token>", NOT a bare property
         # name — do not match against these keys without the token (see _mint_identity).
         self.processed_ref_cache: dict[str, dict[str, Any] | str | list[Any]] = {}
+        self._inline_expansion_path: set[int] = set()
+        """Ids of the schema nodes on the ACTIVE inline recursion path.
+
+        Distinct from ``_ref_expansion_path``, which counts named ``$ref`` re-entries:
+        this catches a node that reaches itself without any resolvable ``$ref`` at all
+        (``type: object`` with no ``properties``, whose ``process_types`` branch calls
+        straight back into ``_process_schema_recursive``). Add/discard is balanced in a
+        ``finally``, so it is empty between renders; ``transform_schema`` clears it anyway
+        alongside the other per-render state.
+        """
         self.pending_postfix: dict[str, str] = {}
         self.pending_recursion: dict[str, str] = {}
         self.pending_prefix: dict[str, str] = {}
@@ -226,6 +243,18 @@ class JSONishFormatter(BaseFormatter):
             # so use the block form, which is terminated and cannot.
             return f"object /* recursive: {_ref} */"
 
+        if _ref in self.processed_ref_cache and self._backreference_instead_of_body(
+            _ref, self.processed_ref_cache[_ref]
+        ):
+            # Body already rendered in full above, and large enough to be worth naming.
+            # Mirrors the truncation branch's two forms: a keyed field hangs the note on
+            # `pending_recursion` (which renders on the CLOSING line), while an unkeyed
+            # position needs the terminated block form so a `//` cannot swallow the line.
+            if key is not None:
+                self.pending_recursion[key] = f"defined above: {_ref}"
+                return "object"
+            return f"object /* defined above: {_ref} */"
+
         if _ref in self.processed_ref_cache:
             output = self.processed_ref_cache[_ref]
         else:
@@ -238,6 +267,7 @@ class JSONishFormatter(BaseFormatter):
                     self._ref_expansion_path.pop()
             if self._truncation_epoch == entry_epoch:
                 self.processed_ref_cache[_ref] = output
+                self._emitted_refs.add(_ref)
         if "default" in value and self.config.includes("default"):
             if isinstance(output, str):
                 output = output + f" (default='{value['default']}')"
@@ -489,8 +519,10 @@ class JSONishFormatter(BaseFormatter):
                     # element ``any``, so the list must render ``any []``, not ``[]``.
                     items = "any"
                 elif "items" in value and value["items"]:
-                    item_schema = value["items"]
-                    if isinstance(item_schema, dict) and item_schema.get("$ref"):
+                    # `items: true` is a boolean schema, not a dict; normalizing here keeps
+                    # the dict-only recursion below from crashing on `schema.get(...)`.
+                    item_schema = as_subschema(value["items"])
+                    if item_schema.get("$ref"):
                         items = self.process_ref(item_schema, key)
                     else:
                         items = self._process_schema_recursive(item_schema)
@@ -654,6 +686,39 @@ class JSONishFormatter(BaseFormatter):
         Returns:
             Processed schema as dict or string.
         """
+        # A boolean schema may reach any recursion slot; normalize before the dict-only
+        # body below touches it.
+        schema = as_subschema(schema)
+
+        # Inline self-cycle guard, for $ref-FREE recursion only. `process_types`' object
+        # branch calls straight back here with the SAME node, so an object node carrying
+        # no `properties` and no resolvable `$ref` recurses without bound (seen on two
+        # JSONSchemaBench schemas whose refs point at `defs`/`refs`, not `$defs`/`$refs`,
+        # and so resolve to nothing).
+        #
+        # Scoped to `not self._ref_expansion_path` deliberately. A `$defs` entry is ONE
+        # shared dict, so `id()` is the same object on a legitimate second expansion as on
+        # a true cycle -- guarding by identity while a `$ref` is in flight truncates the
+        # sanctioned expand-twice-then-placehold contract to a single expansion and, by
+        # returning a bare "object", loses the `recursive:` marker that
+        # `_reentry_truncated`/`pending_recursion` would have attached. `$ref` re-entry is
+        # already governed correctly by `_reentry_truncated`; this guard only covers the
+        # case that machinery cannot see, where no `$ref` is being expanded at all.
+        if not self._ref_expansion_path:
+            node_id = id(schema)
+            if node_id in self._inline_expansion_path:
+                return "object"
+            self._inline_expansion_path.add(node_id)
+            try:
+                return self._process_schema_recursive_inner(schema)
+            finally:
+                self._inline_expansion_path.discard(node_id)
+        return self._process_schema_recursive_inner(schema)
+
+    def _process_schema_recursive_inner(
+        self, schema: dict[str, Any]
+    ) -> dict[str, Any] | str | list[Any]:
+        """The body of ``_process_schema_recursive``, called with the cycle guard held."""
         output: dict[str, Any] = {}
         required = schema.get("required", [])
 
@@ -703,6 +768,14 @@ class JSONishFormatter(BaseFormatter):
                 else:
                     processed_prop_name = f"{prop_name}{self.config.optional_marker}"
                 processed_prop_name = self._mint_identity(processed_prop_name)
+                if isinstance(value, bool):
+                    # JSON Schema boolean form: a property whose schema is `true` permits
+                    # any value, `false` permits none. Matches `process_ref`'s existing
+                    # convention for a boolean `$ref` target. Without this every branch
+                    # below crashes on `"$ref" in value` -- 28 such sites in 3,000
+                    # JSONSchemaBench schemas.
+                    output[processed_prop_name] = "any" if value else "never"
+                    continue
                 if "$ref" in value and value["$ref"]:
                     output[processed_prop_name] = self.process_ref(value, processed_prop_name)
                 elif "anyOf" in value and value["anyOf"]:
@@ -758,12 +831,20 @@ class JSONishFormatter(BaseFormatter):
             return self.process_oneof(schema)
         elif "enum" in schema and schema["enum"]:
             return self.process_enum(schema)
+        elif "$ref" in schema and schema["$ref"]:
+            # BEFORE `type`, matching the property loop above, which has always tested
+            # `$ref` first. A node carrying BOTH `$ref` and `type: object` (legal since
+            # 2019-09, where `$ref` may have siblings) otherwise reached `process_types`,
+            # whose object branch calls straight back into this method with the SAME node
+            # -- an unbounded self-cycle that no `$ref` guard can see, because
+            # `_ref_expansion_path` is only ever pushed inside `process_ref`. The
+            # empty-object base case above cannot catch it either: it deliberately
+            # excludes `$ref` nodes.
+            return self.process_ref(schema)
         elif "type" in schema and schema["type"]:
             return self.process_types(schema)
         elif "allOf" in schema and schema["allOf"]:
             return self.process_allof(schema)
-        elif "$ref" in schema and schema["$ref"]:
-            return self.process_ref(schema)
 
         return output
 
@@ -1261,6 +1342,7 @@ class JSONishFormatter(BaseFormatter):
             return self._add_prefix(self.simplified_schema)
         self._reset_ref_state()
         self.processed_ref_cache.clear()
+        self._inline_expansion_path.clear()
         self.pending_postfix.clear()
         self.pending_prefix.clear()
         self.pending_recursion.clear()

@@ -21,6 +21,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus a schema cut the adapter's failure rate from 37% to 2.4% of 450 cells. A grammar
   constrains structure, not termination — keep a parse-failure path.
 
+### Fixed
+
+- **Exclusive numeric bounds (pydantic `gt`/`lt`) now render, and render the same way in
+  every mode.** `numeric_range_token` read only `minimum`/`maximum`, so a
+  `Field(gt=0.0, lt=500.0)` rendered as a bare `float` in JSONish and TypeScript while
+  YAML leaked the identical constraint as a raw `exclusiveMin: 0.0, exclusiveMax: 500.0`
+  keyword comment — one schema, three different answers. All three modes now share
+  `_bounded_range_token`, which marks a strict bound so it can never be read as its
+  inclusive twin: `float (>0.0 to <500.0)` beside `int (0 to 120)`, `> 1` beside `>= 1`.
+  Schemas carrying only inclusive bounds render byte-identically to before, and a schema
+  carrying both forms still prefers the inclusive one. The bounds are metadata, not
+  structure, so `include_metadata=False` and `include_constraints=False` remove them as
+  they always did.
+
+- **Boolean schemas no longer crash, and no longer claim the wrong type.** JSON Schema lets
+  `true`/`false` stand anywhere a schema object may stand; `true` permits any value and
+  `false` permits none. A boolean *property* crashed JSONish outright
+  (`argument of type 'bool' is not iterable`), `items: true` raised `AttributeError`, and
+  `not: true` raised in YAML and TypeScript. Where it did render, it rendered as `bool` --
+  asserting the value had to BE a boolean, the opposite of the truth. All three formatters
+  now agree on `any`/`never`, matching the convention `process_ref` already used for a
+  boolean `$ref` target. Measured over 3,000 JSONSchemaBench schemas: 7,132
+  `additionalProperties` sites, 110 `additionalItems`, and 28 boolean-valued properties.
+
+- **A `$ref` alongside `type: object` no longer recurses forever.** `$ref` is now tested
+  before `type` in `_process_schema_recursive`, matching the property loop, which has always
+  tested it first. Legal since 2019-09 (`$ref` may carry siblings); previously such a node
+  reached `process_types`, whose object branch called straight back in with the same node.
+  The `$ref` depth machinery could not see it, because `_ref_expansion_path` is pushed only
+  inside `process_ref`.
+
+- **Self-cycling inline nodes terminate.** An object node with no `properties` and no
+  resolvable `$ref` could revisit itself without bound -- reached in the corpus by schemas
+  whose references point at `defs`/`refs` rather than `$defs`/`$refs`, so none resolve. A
+  node-identity guard now covers exactly the case the `$ref` machinery cannot see, and is
+  scoped to `$ref`-free recursion so it never interferes with the sanctioned
+  expand-twice-then-placehold contract.
+
+- **Repeated `$ref`s are named instead of inlined again.** A definition already rendered in
+  full is replaced at later occurrences by `object // defined above: <Name>`, when its body
+  exceeds `BaseFormatter.BACKREFERENCE_MIN_CHARS` (200). One corpus schema carrying 244
+  references over 9 definitions rendered 55,828 tokens from 8,485 tokens of input; it now
+  renders 4,215, a 50.3% reduction. Below the threshold a definition is simply inlined
+  again, which is what the sibling-inline behaviour requires -- the two populations separate
+  cleanly, the largest body those tests rely on being 158 chars against that schema's
+  smallest definition at 409. Across the first 300 corpus schemas: ingestion 98.3% -> 100%,
+  median token reduction 46.2%, 294/300 compacting. Schemas carrying 70+ *distinct*
+  definitions nested 7 deep still expand; that needs a `$defs` section, not
+  repeat-suppression.
+
 ## [v0.7.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.7.0) - 2026-09-13
 
 <small>[Compare with v0.6.1](https://github.com/rohitgarud/llm-schema-lite/compare/v0.6.1...v0.7.0)</small>

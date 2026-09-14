@@ -45,10 +45,29 @@ class ContainerShape:
 
 
 def _as_schema(value: Any) -> dict[str, Any] | None:
-    """Return ``value`` when it is a non-empty schema dict, else ``None``."""
+    """Return ``value`` when it is a non-empty schema dict, else ``None``.
+
+    A boolean schema (``items: true``, ``not: false``) is NOT a dict and yields ``None``,
+    which every caller already reads as "nothing to render here".
+    """
     if isinstance(value, dict) and value:
         return value
     return None
+
+
+def as_subschema(value: Any) -> dict[str, Any]:
+    """Normalize one nested schema slot to a dict so dict-only code paths cannot crash.
+
+    JSON Schema lets ``true``/``false`` stand anywhere a schema object may stand. ``true``
+    permits any value and becomes ``{}`` (the empty schema, which every formatter already
+    renders as ``any``); ``false`` permits nothing and becomes ``{"not": {}}``, its
+    standard equivalent. Non-dict junk degrades to ``{}`` rather than raising.
+    """
+    if isinstance(value, bool):
+        return {} if value else {"not": {}}
+    if isinstance(value, dict):
+        return value
+    return {}
 
 
 def classify_container(schema: Any) -> ContainerShape:
@@ -219,6 +238,11 @@ class BaseFormatter(ABC):
         "additionalItems": lambda v: f"additionalItems: {v}" if isinstance(v, dict) else "",
     }
 
+    # Smallest rendered body worth replacing with a named back-reference on a REPEAT
+    # occurrence. Below this a definition is simply inlined again, which is what the
+    # sibling-inline acceptance criterion requires. See `_backreference_instead_of_body`.
+    BACKREFERENCE_MIN_CHARS: int = 200
+
     # Type mapping dictionary for the formatter.
     TYPE_MAP: dict[str, str]
     # Comment prefix for the formatter (e.g. "//" for JSONish/TypeScript, "#" for YAML).
@@ -268,6 +292,18 @@ class BaseFormatter(ABC):
         self._global_expansion_budget = 150  # Max total $ref expansions across entire schema
         self._global_expansion_count = 0  # Track total expansions
         self._ref_expansion_path: list[str] = []  # Active $ref expansion path (the depth counter)
+        self._emitted_refs: set[str] = set()
+        """Definitions whose body has already been rendered IN FULL somewhere in this output.
+
+        A second occurrence of the same ``$ref`` renders a named back-reference instead of
+        another copy of the body: a schema with 244 references over 9 definitions was
+        emitting 244 inlined bodies, which is how a 7,482-token schema rendered as 329,124
+        tokens. Membership is added under the SAME ``_truncation_epoch`` guard that gates
+        ``_ref_cache``, so a rendering that truncated mid-way never counts as emitted and a
+        later sibling still gets its full body (see
+        ``test_truncated_rendering_is_not_cached``). Distinct from ``_ref_expansion_path``,
+        which tracks what is *currently* being expanded, i.e. cycles.
+        """
         self._truncation_epoch = 0  # Monotonic count of recursion truncations
         self._root_ref_key: str | None = None  # def name adopted by _adopt_root_ref()
         self._nested_required_stack: list[set[str]] = []
@@ -357,10 +393,35 @@ class BaseFormatter(ABC):
         """Placeholder token emitted where a recursive $ref is truncated."""
         return f"object  {self.comment_prefix} recursive: {type_name}"
 
+    def backreference_placeholder(self, type_name: str) -> str:
+        """Token emitted where a definition already rendered in full earlier in the output.
+
+        Sibling of ``recursion_placeholder`` and deliberately worded differently: this is
+        not a cycle, the body is simply already above. Overridden wherever a bare ``//``
+        would swallow the rest of a line.
+        """
+        return f"object  {self.comment_prefix} defined above: {type_name}"
+
+    def _backreference_instead_of_body(self, ref_key: str, body: Any) -> bool:
+        """Whether a REPEAT occurrence of ``ref_key`` should be named rather than inlined.
+
+        Only bodies above ``BACKREFERENCE_MIN_CHARS`` are worth naming. Duplicating a small
+        definition costs almost nothing and reads better in place, which is the standing
+        acceptance criterion (two sibling fields sharing a ``$ref`` both render inline);
+        duplicating a large one is what turned a 34,293-char schema with 244 references
+        over 9 definitions into 55,828 tokens of output.
+
+        The two populations separate cleanly, which is where the constant comes from: the
+        largest body the sibling-inline tests rely on is 158 chars, while the smallest
+        definition in that 244-reference schema is 409.
+        """
+        return ref_key in self._emitted_refs and len(str(body)) > self.BACKREFERENCE_MIN_CHARS
+
     def _reset_ref_state(self) -> None:
         """Reset per-render $ref expansion state so the depth budget is deterministic."""
         self._ref_cache.clear()
         self._ref_expansion_path.clear()
+        self._emitted_refs.clear()
         self._global_expansion_count = 0
         self._truncation_epoch = 0
 
@@ -618,6 +679,14 @@ class BaseFormatter(ABC):
         if self._reentry_truncated(ref_key):
             return self.recursion_placeholder(ref_key)
 
+        # Already rendered in full earlier, and big enough to be worth naming rather than
+        # inlining a second copy. Consulted BEFORE the cache, which holds the body itself
+        # and would otherwise replay it verbatim at every occurrence.
+        if ref_key in self._ref_cache and self._backreference_instead_of_body(
+            ref_key, self._ref_cache[ref_key]
+        ):
+            return self.backreference_placeholder(ref_key)
+
         # Check cache first (only untruncated renderings are ever cached)
         if ref_key in self._ref_cache:
             return self._ref_cache[ref_key]
@@ -704,6 +773,7 @@ class BaseFormatter(ABC):
             # Taint-and-skip: never cache a rendering that truncated.
             if self._truncation_epoch == entry_epoch:
                 self._ref_cache[ref_key] = ref_str
+                self._emitted_refs.add(ref_key)
             return ref_str
         finally:
             if self._ref_expansion_path and self._ref_expansion_path[-1] == ref_key:
@@ -1387,7 +1457,12 @@ class BaseFormatter(ABC):
 
     def process_not(self, not_schema: dict[str, Any]) -> str:
         """Process not (negation) schemas."""
-        not_def = not_schema.get("not", {})
+        raw = not_schema.get("not", {})
+        # `not: true` / `not: false` are boolean schemas; `process_type_value` is
+        # dict-only and raised AttributeError on them.
+        if isinstance(raw, bool):
+            return "never" if raw else "any"
+        not_def = as_subschema(raw)
         if not_def:
             return f"not: {self.process_type_value(not_def)}"
         return "string"
@@ -1405,7 +1480,11 @@ class BaseFormatter(ABC):
         # Handle non-dictionary property values (like booleans, strings, numbers)
         if not isinstance(_property, dict):
             if isinstance(_property, bool):
-                return "bool"
+                # A boolean SCHEMA, not a boolean type: `true` permits any value, `false`
+                # permits none. Rendering it as `bool` claimed the opposite -- that the
+                # value had to be a boolean. Agrees with `process_ref`, which already
+                # renders a boolean `$ref` target as "any"/"never".
+                return "any" if _property else "never"
             elif isinstance(_property, str):
                 return "string"
             elif isinstance(_property, int | float):

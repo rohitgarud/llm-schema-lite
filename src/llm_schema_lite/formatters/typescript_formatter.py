@@ -268,6 +268,10 @@ class TypeScriptFormatter(BaseFormatter):
         """Block-comment form: a `//` inside an inline object literal swallows the line."""
         return f"object /* recursive: {type_name} */"
 
+    def backreference_placeholder(self, type_name: str) -> str:
+        """Block-comment form, same reason as ``recursion_placeholder``."""
+        return f"object /* defined above: {type_name} */"
+
     @staticmethod
     def _member_line(label: str, token: str) -> str:
         """One interface member line, with ``;`` bound to the type, never after a ``//``.
