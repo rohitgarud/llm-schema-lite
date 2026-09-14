@@ -35,8 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Record<string, V /* keys: ... */>`, because an index signature takes a key *type*, not a
   regex, and a `//` comment there would swallow the `;` that `type Schema = ...;` appends.
   Decision C1 is untouched -- a node declaring `properties` is still an object. This also
-  retires the 20-line `object  //pattern: [...]` string hack in `process_property`. 716 of
-  the 9,542 corpus schemas (7.5%) carry the keyword.
+  retires the 20-line `object  //pattern: [...]` string hack in `process_property`. 691 of
+  the 9,542 corpus schemas (7.2%) carry the keyword; over a 400-schema pattern-bearing
+  sample 78.7% now expose a pattern key, the remainder being C1 holding (513 of the 2,401
+  pattern nodes co-declare `properties`).
 
 - **`{"type": "object", "allOf": [...]}` with no `properties` no longer recurses until the
   interpreter stops it.** `_process_schema_recursive_inner` tested `type` before `allOf`,

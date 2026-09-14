@@ -62,6 +62,30 @@ def test_analyze_schema_features_finds_nested_keywords() -> None:
     assert {"oneOf", "const"} <= found
 
 
+def test_analyze_schema_features_descends_into_definitions() -> None:
+    """Keywords inside `definitions`/`$defs` are counted; they used to be invisible.
+
+    The recursion walked a hand-written subset of the subschema slots that omitted both,
+    so anything living in a definition was missed. Measured on `patternProperties` across
+    JSONSchemaBench: 416 schemas (4.4%) against a true 716 (7.5%), with 934 of the missed
+    occurrences under `definitions`. Every other keyword undercounted the same way.
+    """
+    schema = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/definitions/Env"}},
+        "definitions": {
+            "Env": {"type": "object", "patternProperties": {"^[A-Z]+$": {"type": "string"}}}
+        },
+        "$defs": {"Tag": {"type": "string", "minLength": 3}},
+        # A subschema slot the old allowlist also never descended into.
+        "additionalProperties": {"type": "number", "multipleOf": 5},
+    }
+    found = set(analyze_schema_features(schema))
+    assert "patternProperties" in found  # under `definitions`
+    assert "minLength" in found  # under `$defs`
+    assert "multipleOf" in found  # under `additionalProperties`
+
+
 def test_get_feature_statistics_totals_agree() -> None:
     """Counts, percentages and the per-schema map stay consistent."""
     dataset = [

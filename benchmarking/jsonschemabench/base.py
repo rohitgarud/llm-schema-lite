@@ -87,6 +87,36 @@ def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# Every slot that holds a subschema directly, or a list of subschemas.
+_SUBSCHEMA_SLOTS = (
+    "items",
+    "prefixItems",
+    "additionalItems",
+    "unevaluatedItems",
+    "contains",
+    "not",
+    "if",
+    "then",
+    "else",
+    "propertyNames",
+    "additionalProperties",
+    "unevaluatedProperties",
+    "oneOf",
+    "anyOf",
+    "allOf",
+)
+
+# Every slot that holds a ``{name: subschema}`` mapping.
+_SUBSCHEMA_MAP_SLOTS = (
+    "properties",
+    "patternProperties",
+    "definitions",
+    "$defs",
+    "dependencies",
+    "dependentSchemas",
+)
+
+
 def analyze_schema_features(schema: dict) -> list[str]:
     """Analyze which JSON Schema features are used in a schema (recursively)."""
     features = []
@@ -156,69 +186,35 @@ def analyze_schema_features(schema: dict) -> list[str]:
             if check_func(schema_obj) and feature_name not in features:
                 features.append(feature_name)
 
-        # Recursively check nested schemas
-        if "properties" in schema_obj:
-            for prop_schema in schema_obj["properties"].values():
-                _check_schema_recursive(prop_schema)
+        # Recurse into every slot that can hold a subschema.
+        #
+        # This was a hand-written subset of those slots, and it omitted `definitions` and
+        # `$defs` -- so any keyword living inside a definition was invisible to the count.
+        # Measured on `patternProperties`: 416 schemas (4.4%) against a true 716 (7.5%),
+        # with 934 of the missed occurrences sitting under `definitions`, 19 under `$defs`
+        # and 3 under `defs`. Every other keyword in the same table was a lower bound for
+        # the same reason, so the fix is the whole slot list rather than the two keys that
+        # happened to be noticed.
+        for slot in _SUBSCHEMA_SLOTS:
+            _recurse(schema_obj.get(slot))
+        for slot in _SUBSCHEMA_MAP_SLOTS:
+            mapping = schema_obj.get(slot)
+            if isinstance(mapping, dict):
+                for sub_schema in mapping.values():
+                    _recurse(sub_schema)
 
-        # Fixed: Handle both dict and array items
-        if "items" in schema_obj:
-            if isinstance(schema_obj["items"], dict):
-                _check_schema_recursive(schema_obj["items"])
-            elif isinstance(schema_obj["items"], list):
-                for item_schema in schema_obj["items"]:
-                    if isinstance(item_schema, dict):
-                        _check_schema_recursive(item_schema)
+    def _recurse(value: Any) -> None:
+        """Descend one subschema slot, which may hold a schema or a list of schemas.
 
-        if "oneOf" in schema_obj:
-            for oneof_schema in schema_obj["oneOf"]:
-                _check_schema_recursive(oneof_schema)
-
-        if "anyOf" in schema_obj:
-            for anyof_schema in schema_obj["anyOf"]:
-                _check_schema_recursive(anyof_schema)
-
-        if "allOf" in schema_obj:
-            for allof_schema in schema_obj["allOf"]:
-                _check_schema_recursive(allof_schema)
-
-        # Always recurse into if/then/else schemas to detect nested features
-        if "if" in schema_obj and isinstance(schema_obj["if"], dict):
-            _check_schema_recursive(schema_obj["if"])
-
-        if "then" in schema_obj and isinstance(schema_obj["then"], dict):
-            _check_schema_recursive(schema_obj["then"])
-
-        if "else" in schema_obj and isinstance(schema_obj["else"], dict):
-            _check_schema_recursive(schema_obj["else"])
-
-        if "contains" in schema_obj and isinstance(schema_obj["contains"], dict):
-            _check_schema_recursive(schema_obj["contains"])
-
-        if "patternProperties" in schema_obj and isinstance(schema_obj["patternProperties"], dict):
-            for pattern_schema in schema_obj["patternProperties"].values():
-                if isinstance(pattern_schema, dict):
-                    _check_schema_recursive(pattern_schema)
-
-        # Added: Recursively check not schema
-        if "not" in schema_obj and isinstance(schema_obj["not"], dict):
-            _check_schema_recursive(schema_obj["not"])
-
-        # Added: Recursively check dependencies
-        if "dependencies" in schema_obj and isinstance(schema_obj["dependencies"], dict):
-            for dep_value in schema_obj["dependencies"].values():
-                if isinstance(dep_value, dict):
-                    _check_schema_recursive(dep_value)
-
-        # Added: Recursively check propertyNames
-        if "propertyNames" in schema_obj and isinstance(schema_obj["propertyNames"], dict):
-            _check_schema_recursive(schema_obj["propertyNames"])
-
-        # Added: Recursively check unevaluatedProperties
-        if "unevaluatedProperties" in schema_obj and isinstance(
-            schema_obj["unevaluatedProperties"], dict
-        ):
-            _check_schema_recursive(schema_obj["unevaluatedProperties"])
+        A boolean schema (`additionalProperties: true`) and a `dependentRequired`-style
+        list of property names are neither, and are skipped.
+        """
+        if isinstance(value, dict):
+            _check_schema_recursive(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _check_schema_recursive(item)
 
     # Start recursive checking from root schema
     _check_schema_recursive(schema)

@@ -105,7 +105,7 @@ still enforces it).
 | boolean schema `true` | ✅ | ✅ | ✅ |
 | boolean schema `false` | ✅ | ✅ | ✅ |
 | items: true (boolean schema) | ✅ | ✅ | ✅ |
-| **patternProperties** | ❌ | ✅ | ✅ |
+| **patternProperties** | ✅ | ✅ | ✅ |
 | **propertyNames** (open mapping) | ✅ | ✅ | ❌ |
 | minProperties | ❌ | ❌ | ❌ |
 | maxProperties | ❌ | ❌ | ❌ |
@@ -118,7 +118,7 @@ still enforces it).
 | default | ✅ | ✅ | ✅ |
 | examples (opt-in) | ❌ | ❌ | ❌ |
 | nullable (`anyOf` + null) | ✅ | ✅ | ✅ |
-| **Total** | **31/39** | **33/39** | **31/39** |
+| **Total** | **32/39** | **33/39** | **31/39** |
 
 `examples` is excluded by default for token savings and renders when enabled
 (`FormatterConfig(metadata_inclusion={"examples": True})`); it is listed ❌ because the
@@ -180,53 +180,103 @@ TypeScript is the mode that loses the constraint, not JSONish. A `propertyNames`
 alongside `properties` still does not surface in any mode, but that is Decision C1 holding
 (a schema declaring `properties` is an object, never a mapping), not a defect.
 
-**Still open in JSONish:** `patternProperties` and `not: true`. `patternProperties` is the
-substantive one: JSONish renders `{"type":"object","patternProperties":{"^S_":{...}}}` as a
-bare `{}`, silently dropping the keys, while YAML and TypeScript surface it through
-`BaseFormatter.process_property` — a method JSONish never calls, since it renders object
-bodies in its own `_process_schema_recursive_inner` loop. The attach point is therefore that
-loop's empty-object base case, not the classifier: Decision C1 excludes `patternProperties`
-from `mapping` deliberately, and loosening it would silently reclassify these nodes in YAML
-and TypeScript too.
+**Corrected again — `patternProperties` (now fixed).** The paragraph that stood here called
+this a JSONish-only gap whose attach point was "that loop's empty-object base case, **not**
+the classifier". Measuring all three modes showed that was wrong twice over. JSONish did
+render a bare `{}`, but YAML and TypeScript were not fine either — they emitted `object`
+plus a comment that leaked JSONish's `//` marker into a `#` context and, on the property
+path, a raw Python dict repr:
+
+```
+env: 'object  //pattern: [^[A-Z]+$]: string'  # patternProperties: {'^[A-Z]+$': {'type': 'string'}}
+```
+
+So all three modes lost it, and a JSONish-local patch would have left the other two leaking.
+The fix is a shared classifier change after all: `classify_container` gained a
+`pattern_mapping` kind (rule 7b) holding one `(regex, value schema)` pair per pattern. It is
+**not** a `mapping` — a mapping carries one value schema for all keys, so reusing it would
+have kept only the first pattern. Decision C1 is untouched: `properties` still wins, so only
+a `patternProperties`-only node reaches rule 7b.
+
+```
+{"type": "object", "patternProperties": {"^S_": {"type": "string"},
+                                         "^N_": {"type": "integer"}}}
+
+jsonish     { <^S_>: string, <^N_>: int }
+yaml        <^S_>: string
+            <^N_>: int
+typescript  type Schema = Record<string, string | number /* keys: ^S_, ^N_ */>;
+```
+
+TypeScript names the regexes in a **block** comment rather than rendering them structurally:
+an index signature takes a key *type*, not a regex, and a `//` comment would swallow the `;`
+that `type Schema = ...;` appends. Measured over a 400-schema pattern-bearing sample, **78.7%**
+now expose a pattern key; the remaining 21.3% is Decision C1 holding, not a gap — corpus-wide,
+**513 of the 2,401** pattern nodes co-declare `properties` (21.4%).
+
+**Still open in JSONish:** `not: true` only, and it is rare (`not` totals 1.6%).
 
 ---
 
 ## 3. Keyword frequency in the corpus
 
 All **9,542** corpus schemas (share containing the keyword at least once, counted
-recursively):
+recursively through every subschema slot — `definitions` and `$defs` included):
 
 | Keyword | Schemas | Share | Keyword | Schemas | Share |
 |---------|--------:|------:|---------|--------:|------:|
-| type | 9256 | 97.0% | maximum | 454 | 4.8% |
-| properties | 9050 | 94.8% | **patternProperties** | 416 | 4.4% |
-| description | 6924 | 72.6% | maxItems | 340 | 3.6% |
-| required | 6819 | 71.5% | additionalItems | 196 | 2.1% |
-| items | 3900 | 40.9% | allOf | 179 | 1.9% |
-| **additionalProperties** | 3483 | 36.5% | minProperties | 117 | 1.2% |
-| title | 3403 | 35.7% | uniqueItems | 90 | 0.9% |
-| enum | 2826 | 29.6% | const | 81 | 0.8% |
-| $ref | 2701 | 28.3% | dependencies | 68 | 0.7% |
-| default | 1319 | 13.8% | not | 57 | 0.6% |
-| pattern | 1232 | 12.9% | multipleOf | 44 | 0.5% |
-| format | 1151 | 12.1% | maxProperties | 43 | 0.5% |
-| minimum | 885 | 9.3% | if / then | 27 | 0.3% |
-| minLength | 850 | 8.9% | exclusiveMinimum | 21 | 0.2% |
-| maxLength | 812 | 8.5% | **propertyNames** | 20 | 0.2% |
-| oneOf | 638 | 6.7% | else | 7 | 0.1% |
-| minItems | 616 | 6.5% | exclusiveMaximum | 6 | 0.1% |
-| anyOf | 480 | 5.0% | contains | 3 | 0.0% |
+| type | 9500 | 99.6% | maximum | 601 | 6.3% |
+| properties | 9335 | 97.8% | maxItems | 421 | 4.4% |
+| required | 7437 | 77.9% | allOf | 325 | 3.4% |
+| description | 7136 | 74.8% | additionalItems | 216 | 2.3% |
+| items | 4630 | 48.5% | not | 155 | 1.6% |
+| **additionalProperties** | 4179 | 43.8% | minProperties | 153 | 1.6% |
+| title | 3481 | 36.5% | dependencies | 134 | 1.4% |
+| enum | 3436 | 36.0% | const | 128 | 1.3% |
+| $ref | 2759 | 28.9% | uniqueItems | 117 | 1.2% |
+| pattern | 1768 | 18.5% | multipleOf | 61 | 0.6% |
+| format | 1549 | 16.2% | maxProperties | 58 | 0.6% |
+| default | 1516 | 15.9% | if | 52 | 0.5% |
+| oneOf | 1375 | 14.4% | then | 52 | 0.5% |
+| minimum | 1156 | 12.1% | **propertyNames** | 30 | 0.3% |
+| minLength | 1025 | 10.7% | exclusiveMinimum | 26 | 0.3% |
+| minItems | 934 | 9.8% | else | 15 | 0.2% |
+| maxLength | 922 | 9.7% | exclusiveMaximum | 8 | 0.1% |
+| anyOf | 839 | 8.8% | contains | 4 | 0.0% |
+| **patternProperties** | 687 | 7.2% | unevaluatedProperties | 2 | 0.0% |
 
-Only 37 of the 39 tracked keywords appear anywhere in the corpus.
+Only 38 of the 39 tracked keywords appear anywhere in the corpus.
 
 Boolean schemas, separately: `additionalProperties: false` 6,597 sites, `: true` 535,
 `additionalItems: false` 82 / `: true` 28, and 28 boolean-valued *properties*. The last of
 those used to crash JSONish outright.
 
-This is what makes `patternProperties` (**4.4%**, 416 schemas) the highest-value JSONish gap
-— it is not an exotic keyword, and it outweighs the other two open gaps by an order of
-magnitude (`propertyNames` 0.2%, `not` 0.6%). An earlier revision quoted 6.7% here from the
-3,000-schema sample; 6.7% is `oneOf`'s share, not `patternProperties`'.
+**These counts replace an earlier table that undercounted every row.**
+`analyze_schema_features` used to recurse into a hand-written subset of the subschema slots
+that omitted `definitions` and `$defs`, so any keyword living inside a definition was
+invisible to it. The counter now walks every slot that can hold a subschema, and the
+difference is large and uneven — `oneOf` +737, `items` +730, `required` +618, `enum` +610,
+`pattern` +536, `not` nearly tripled (57 → 155). `then` and `unevaluatedProperties` did not
+appear in the old table **at all**. Anything read from the previous revision is a lower
+bound, not a measurement.
+
+⚠️ **One residual gap, stated rather than hidden.** A handful of schemas nest subschemas
+under non-standard container keys (`openscad`, `vega`, `bolts`, `defs`) that no allowlist can
+anticipate. A schema-aware walk that descends into unknown keys too finds **691** schemas
+carrying `patternProperties` against the counter's 687 — about 5 schemas, ~0.05%. The table
+is accurate to roughly that margin.
+
+**Correction — two of my own earlier figures were wrong here.** A previous revision quoted
+`patternProperties` at 6.7% (that is `oneOf`'s share), then at 4.4% (the undercount above),
+then at **7.5% / 716 schemas**. That last one was also wrong, and the cause was my own
+measuring script rather than the counter: it treated `name → schema` maps as schema nodes, so
+a **JSON Schema meta-schema** — one whose root `properties` are literally `$schema`,
+`additionalItems`, `allOf`, `patternProperties`, … — was counted as *using* the keyword when
+it only *documents* it. The true figure is **691 schemas (7.2%)**.
+
+The ordering conclusion survives all of it: `patternProperties` was the highest-value JSONish
+gap by an order of magnitude over the alternatives (`propertyNames` 0.3%, `not` 1.6%), and it
+is **now closed** (see §2).
 
 ---
 
@@ -347,7 +397,7 @@ so this compares *what reaches the model* — their grammar vs our prompt text.
 | min/max (integer) | ✔ | ✔ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | minItems/maxItems | ✔ | ✔ | ✔ | ❌ | ❌ | ❌ | ✅ |
 | const | ✔ | ✔ | ✔ | ✔ | ✔ | ❌ | ✅ |
-| patternProperties | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ YAML/TS only |
+| patternProperties | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | not | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | if / then / else | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | contains | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
@@ -369,15 +419,16 @@ is a materially cheaper problem, and it is the honest form of the claim.
    still 45× its input after back-references have done their work. Changes output shape for
    every ref-bearing schema, so it wants its own decision — but the evidence is far stronger
    than the easy-slice sample suggested.
-2. **Surface `patternProperties` in JSONish.** It appears in **4.4%** of corpus schemas
-   (416 of 9,542) and JSONish drops it silently, rendering the node as a bare `{}`.
-   `multipleOf`, `contains` and `propertyNames` are done (see §2). Note this is *not* a
-   matter of implementing `add_metadata`: that method is unreachable from JSONish. Nor is
-   it a `classify_container` change — Decision C1 excludes `patternProperties` from
-   `mapping` deliberately, and loosening it would reclassify these nodes in YAML and
-   TypeScript too. The attach point is JSONish's own empty-object base case in
-   `_process_schema_recursive_inner`. `not: true` remains open and is rarer (`not` totals
-   0.6%).
+2. ~~**Surface `patternProperties` in JSONish.**~~ **Done**, and the reasoning that stood
+   here was wrong. This item asserted it was *not* a `classify_container` change, because
+   Decision C1 excludes `patternProperties` from `mapping` deliberately. That conclusion
+   does not follow: C1 forbids calling these nodes a **mapping**, not giving them a kind of
+   their own. The fix is a new `pattern_mapping` kind (rule 7b) that leaves C1 exactly as
+   written, and it had to be shared rather than JSONish-local because YAML and TypeScript
+   were leaking a raw dict repr on the same nodes — a JSONish-only patch would have left
+   that standing. Measured at **7.2%** of corpus schemas (691 of 9,542), not the 4.4% quoted
+   here; see §3 on why the old counter undercounted. `not: true` remains open, and is rarer
+   (`not` totals 1.6%).
 3. **`minProperties` / `maxProperties` / `dependentRequired`** — absent from all three
    formatters; `dependentRequired` is not in `METADATA_MAP` at all.
 4. **`if/then/else`** — `_format_conditional` exists but never fires from a root-level `if`.
