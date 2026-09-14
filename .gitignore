@@ -157,7 +157,11 @@ Thumbs.db
 /thoughts/
 /.shared/
 
-# JSONSchemaBench dataset (~100 MB) — recreate with: uv run benchmarking/fetch_dataset.py
+# JSONSchemaBench datasets (~100 MB each). Recreate with:
+#   uv run python -m benchmarking.jsonschemabench.fetch_dataset
+# The *_by_config file carries the config/split labels, so a measurement can be sliced by
+# difficulty (Github_trivial..Github_ultra) or source (Kubernetes, Snowplow, ...).
 /jsonschembench_dataset.json
+/jsonschemabench_by_config.json
 
 .claude

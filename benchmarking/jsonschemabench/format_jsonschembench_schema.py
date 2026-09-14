@@ -12,7 +12,8 @@ FormatType = Literal["jsonish", "typescript", "yaml"]
 
 
 def main() -> None:
-    dataset_path = Path(__file__).resolve().parent.parent / "jsonschembench_dataset.json"
+    # benchmarking/jsonschemabench/format_jsonschembench_schema.py -> repo root
+    dataset_path = Path(__file__).resolve().parents[2] / "jsonschembench_dataset.json"
     if not dataset_path.exists():
         print(f"Dataset not found: {dataset_path}", file=sys.stderr)
         sys.exit(1)
@@ -22,11 +23,15 @@ def main() -> None:
 
     # First record by default (JSON Patch schema)
     index = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-    format_type: FormatType = (
-        sys.argv[2]
-        if len(sys.argv) > 2 and sys.argv[2] in ("jsonish", "typescript", "yaml")
-        else "jsonish"
-    )
+    # Narrowed via an explicit membership test so the Literal assignment type-checks;
+    # `sys.argv[2] in (...)` alone does not narrow a plain `str` for mypy.
+    format_type: FormatType = "jsonish"
+    if len(sys.argv) > 2:
+        requested = sys.argv[2]
+        if requested == "typescript":
+            format_type = "typescript"
+        elif requested == "yaml":
+            format_type = "yaml"
 
     record = records[index]
     schema = json.loads(record["json_schema"])
