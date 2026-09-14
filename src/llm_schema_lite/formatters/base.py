@@ -13,7 +13,7 @@ from typing import Any, Final, Literal
 from ..schema_normalization import normalize_schema_titles
 from .config import FormatterConfig
 
-ContainerKind = Literal["mapping", "tuple", "list", "any", "object", "scalar"]
+ContainerKind = Literal["mapping", "pattern_mapping", "tuple", "list", "any", "object", "scalar"]
 
 _COMPOSITION_KEYS = ("$ref", "enum", "const", "anyOf", "oneOf", "allOf", "not")
 
@@ -42,6 +42,10 @@ class ContainerShape:
     prefix_schemas: tuple[dict[str, Any], ...] = ()
     rest_schema: dict[str, Any] | None = None
     item_schema: dict[str, Any] | None = None
+    # ``patternProperties`` as ordered ``(regex, value schema)`` pairs. Only ever non-empty
+    # for kind "pattern_mapping"; a regex constrains the KEY, so these cannot collapse into
+    # ``key_schema``, which holds one schema for all keys.
+    pattern_schemas: tuple[tuple[str, dict[str, Any]], ...] = ()
 
 
 def _as_schema(value: Any) -> dict[str, Any] | None:
@@ -124,6 +128,21 @@ def classify_container(schema: Any) -> ContainerShape:
         return ContainerShape(
             kind="mapping",
             value_schema=None,
+            key_schema=_as_schema(schema.get("propertyNames")),
+        )
+
+    # Rule 7b -- pattern mapping: keys are constrained by regex rather than enumerated.
+    # Decision C1 is untouched: a node declaring ``properties`` is still an object, so only
+    # a ``patternProperties``-ONLY node reaches here. It is deliberately its own kind rather
+    # than a "mapping" because a mapping has ONE key schema and ONE value schema, while this
+    # has one value schema per pattern -- collapsing them would drop every pattern but one.
+    pattern_properties = schema.get("patternProperties")
+    if not schema.get("properties") and isinstance(pattern_properties, dict) and pattern_properties:
+        return ContainerShape(
+            kind="pattern_mapping",
+            pattern_schemas=tuple(
+                (p, s) for p, s in pattern_properties.items() if isinstance(s, dict)
+            ),
             key_schema=_as_schema(schema.get("propertyNames")),
         )
 
@@ -225,7 +244,13 @@ class BaseFormatter(ABC):
         "else": lambda v: f"else: {v}",
         "contains": lambda v: f"contains: {v}",
         "dependencies": lambda v: f"dependencies: {v}",
-        "patternProperties": lambda v: f"patternProperties: {v}",
+        # The regexes, not a raw Python dict repr: `{'^[A-Z]+$': {'type': 'string'}}` was
+        # leaking verbatim into YAML and TypeScript comments.
+        "patternProperties": lambda v: (
+            f"patternProperties: {', '.join(v)}"
+            if isinstance(v, dict)
+            else f"patternProperties: {v}"
+        ),
         "propertyNames": lambda v: f"propertyNames: {v}",
         "unevaluatedProperties": lambda v: f"unevaluatedProperties: {v}",
         "minItems": lambda v: f"minItems: {v}",
@@ -484,6 +509,10 @@ class BaseFormatter(ABC):
                 continue
             elif k == "additionalItems" and classify_container(value).kind == "tuple":
                 # Skip: the tuple renderer already consumed this as the variadic tail.
+                continue
+            elif k == "patternProperties" and classify_container(value).kind == "pattern_mapping":
+                # Skip: the pattern-mapping renderer already consumed these as key
+                # placeholders, exactly as the tuple arm above consumes additionalItems.
                 continue
             elif k == "additionalItems":
                 formatted_parts.append(
@@ -1258,6 +1287,19 @@ class BaseFormatter(ABC):
             value_token = "any"
         return f"{{ <{self.key_token(shape)}>: {value_token} }}"
 
+    def render_pattern_mapping(self, shape: ContainerShape) -> str:
+        """One-line pattern-mapping token, e.g. ``"{ <^S_>: string, <^N_>: int }"``.
+
+        The regex goes inside the key placeholder because ``<...>`` already means "any key
+        of this shape" -- which is exactly what ``patternProperties`` says. One entry per
+        pattern: unlike a mapping, the value type may differ between them.
+        """
+        pairs = ", ".join(
+            f"<{pattern}>: {self.render_type_token(value_schema)}"
+            for pattern, value_schema in shape.pattern_schemas
+        )
+        return f"{{ {pairs} }}" if pairs else "{}"
+
     def render_tuple(self, shape: ContainerShape) -> str:
         """One-line tuple token, e.g. ``"[int, string]"`` / ``"[int, string, ...string]"``."""
         tokens = [self.render_type_token(s) for s in shape.prefix_schemas]
@@ -1519,6 +1561,8 @@ class BaseFormatter(ABC):
             shape = classify_container(_property)
             if shape.kind == "mapping":
                 prop_str = self.render_mapping(shape)
+            elif shape.kind == "pattern_mapping":
+                prop_str = self.render_pattern_mapping(shape)
             elif shape.kind == "tuple":
                 prop_str = self.render_tuple(shape)
             elif shape.kind == "any":
@@ -1532,26 +1576,6 @@ class BaseFormatter(ABC):
                 # Expand nested object properties
                 nested_props = self.process_properties(_property["properties"])
                 prop_str = self.dict_to_string(nested_props, indent=1)
-            # Check if this is an object with patternProperties
-            elif _property.get("type") == "object" and "patternProperties" in _property:
-                # Process patternProperties and show the structure
-                pattern_props = _property["patternProperties"]
-                pattern_results = []
-                for pattern, pattern_def in list(pattern_props.items())[:2]:  # Limit to 2
-                    if isinstance(pattern_def, dict):
-                        if "$ref" in pattern_def:
-                            pattern_type = self.process_ref(pattern_def)
-                        elif "properties" in pattern_def:
-                            nested_props = self.process_properties(pattern_def["properties"])
-                            pattern_type = self.dict_to_string(nested_props, indent=1)
-                        elif "type" in pattern_def:
-                            pattern_type = self.process_type_value(pattern_def)
-                        else:
-                            pattern_type = "object"
-                    else:
-                        pattern_type = str(pattern_def)
-                    pattern_results.append(f"[{pattern}]: {pattern_type}")
-                prop_str = f"object  //pattern: {', '.join(pattern_results)}"
             else:
                 prop_str = self.process_type_value(_property)
         else:
@@ -1671,7 +1695,9 @@ class BaseFormatter(ABC):
         """Every schema-level constraint comment of the root, concatenated in fixed order."""
         schema = self.schema
         features = ""
-        if "patternProperties" in schema:
+        if "patternProperties" in schema and classify_container(schema).kind != "pattern_mapping":
+            # Same split as process_additional_properties' pure-mapping guard: when the shape
+            # is rendered structurally, the comment would only repeat it.
             features += self.process_pattern_properties(schema)
         if "dependencies" in schema:
             features += self.process_dependencies(schema)

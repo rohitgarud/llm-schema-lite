@@ -743,7 +743,7 @@ class JSONishFormatter(BaseFormatter):
         # Base-case: an empty object schema like {"type": "object"} should render as
         # an empty object rather than recursing via process_types("object") and back here.
         if (
-            schema.get("type") == "object"
+            (schema.get("type") == "object" or schema.get("patternProperties"))
             and not schema.get("properties")
             and not schema.get("anyOf")
             and not schema.get("oneOf")
@@ -752,6 +752,18 @@ class JSONishFormatter(BaseFormatter):
             and not schema.get("$ref")
         ):
             shape = classify_container(schema)
+            if shape.kind == "pattern_mapping":
+                # One placeholder key per regex. Renders structurally for the same reason a
+                # mapping does -- a trailing comment cannot carry a nested value shape.
+                for pattern, value_schema in shape.pattern_schemas:
+                    output[f"<{pattern}>"] = self._render_mapping_value(value_schema)
+                # Unlike a plain mapping -- whose note design 4.1 drops as redundant, since a
+                # mapping is open by definition -- a pattern mapping with
+                # ``additionalProperties: false`` really is closed, so the note is information.
+                additional_props_comment = self.process_additional_properties(schema)
+                if additional_props_comment:
+                    output[self._additional_properties_key(schema)] = additional_props_comment
+                return output
             if shape.kind == "mapping":
                 key = f"<{self.key_token(shape)}>"
                 output[key] = (

@@ -204,6 +204,8 @@ class TypeScriptFormatter(BaseFormatter):
         shape = classify_container(type_value)
         if shape.kind == "mapping":
             return self.render_mapping(shape)
+        if shape.kind == "pattern_mapping":
+            return self.render_pattern_mapping(shape)
         if shape.kind == "tuple":
             return self.render_tuple_token(shape, type_value)
 
@@ -327,6 +329,19 @@ class TypeScriptFormatter(BaseFormatter):
         value_token = self._inline_comment(value_token)
         return f"Record<{self.key_token(shape)}, {value_token}>"
 
+    def render_pattern_mapping(self, shape: ContainerShape) -> str:
+        """``Record<string, V /* keys: ^a, ^b */>`` for a PATTERN_MAPPING shape.
+
+        A TypeScript index signature takes a key TYPE, not a regex, so the key constraint
+        cannot be expressed structurally the way JSONish and YAML express it. It is named in
+        a BLOCK comment rather than dropped: a ``//`` comment would swallow the rest of the
+        line, including the ``;`` that ``type Schema = ...;`` appends at the root.
+        """
+        tokens = [self.render_type_token(s) for _, s in shape.pattern_schemas]
+        value_token = " | ".join(dict.fromkeys(tokens)) or "any"
+        patterns = ", ".join(p for p, _ in shape.pattern_schemas)
+        return f"Record<string, {value_token} /* keys: {patterns} */>"
+
     def render_tuple(self, shape: ContainerShape) -> str:
         """One-line ``[A, B]`` / ``[A, B, ...C[]]`` token for a TUPLE shape."""
         tokens = [self.render_type_token(s) for s in shape.prefix_schemas]
@@ -406,7 +421,12 @@ class TypeScriptFormatter(BaseFormatter):
                         if additional_comment and self.include_metadata:
                             result += f"\n{additional_comment}"
                         return result
-                    if not schema_level_features:
+                    if (
+                        not schema_level_features
+                        and classify_container(self.schema).kind != "pattern_mapping"
+                    ):
+                        # A pattern mapping has no schema-level comment any more (it renders
+                        # structurally), so this early return would drop it entirely.
                         return "interface Schema {}"
                 body = f"type Schema = {self.process_type_value(self.schema)};"
             elif "oneOf" in self.schema:

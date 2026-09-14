@@ -23,6 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`patternProperties` now renders structurally in all three modes instead of being dropped
+  or leaked.** A `patternProperties`-only node classified as a plain OBJECT, and each mode
+  lost the keys its own way: JSONish emitted a bare `{}`; YAML and TypeScript emitted
+  `object` plus a comment that leaked JSONish's `//` marker and, on the property path, a raw
+  Python dict repr (`patternProperties: {'^[A-Z]+$': {'type': 'string'}}`).
+  `classify_container` gains a `pattern_mapping` kind (rule 7b) carrying one
+  `(regex, value schema)` pair per pattern. It is deliberately NOT a `mapping`: a mapping
+  holds one value schema for every key, so reusing it would have kept only the first
+  pattern. JSONish and YAML render one `<regex>` key slot per pattern; TypeScript renders
+  `Record<string, V /* keys: ... */>`, because an index signature takes a key *type*, not a
+  regex, and a `//` comment there would swallow the `;` that `type Schema = ...;` appends.
+  Decision C1 is untouched -- a node declaring `properties` is still an object. This also
+  retires the 20-line `object  //pattern: [...]` string hack in `process_property`. 716 of
+  the 9,542 corpus schemas (7.5%) carry the keyword.
+
 - **`{"type": "object", "allOf": [...]}` with no `properties` no longer recurses until the
   interpreter stops it.** `_process_schema_recursive_inner` tested `type` before `allOf`,
   so such a node took the `type` arm, and `process_types`' object branch calls straight

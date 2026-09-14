@@ -142,6 +142,19 @@ class YAMLFormatter(BaseFormatter):
                 self._nested_required_stack.pop()
         return pairs
 
+    def _pattern_mapping_block(self, shape: ContainerShape) -> dict[str, Any]:
+        """``{"<^a>": <nested block or one-line token>}``, one entry per ``patternProperties``
+        regex -- the block form of `render_pattern_mapping`, reusing the mapping machinery.
+        """
+        return {
+            f"<{pattern}>": (
+                self._build_mapping_block(value_schema)
+                if self._mapping_value_is_structural(value_schema)
+                else self.render_type_token(value_schema)
+            )
+            for pattern, value_schema in shape.pattern_schemas
+        }
+
     def _build_mapping_block(self, value_schema: dict[str, Any]) -> dict[str, Any] | str:
         """Build the nested dict `yaml.dump` will render for a *structural* mapping value.
 
@@ -327,6 +340,8 @@ class YAMLFormatter(BaseFormatter):
         shape = classify_container(type_value)
         if shape.kind == "mapping":
             return self.render_mapping(shape)
+        if shape.kind == "pattern_mapping":
+            return self.render_pattern_mapping(shape)
         if shape.kind == "tuple":
             return self.render_tuple_token(shape, type_value)
 
@@ -745,6 +760,9 @@ class YAMLFormatter(BaseFormatter):
                     processed_properties[key] = block
                     continue
                 shape = classify_container(value)
+                if shape.kind == "pattern_mapping":
+                    processed_properties[formatted_name] = self._pattern_mapping_block(shape)
+                    continue
                 if shape.kind == "mapping":
                     key = f"<{self.key_token(shape)}>"
                     if shape.value_schema is not None and self._mapping_value_is_structural(
@@ -877,8 +895,17 @@ class YAMLFormatter(BaseFormatter):
             if rendered is not None:
                 return rendered
             # Check for complex additionalProperties in empty object schemas
-            if self.schema.get("type") == "object":
+            if self.schema.get("type") == "object" or self.schema.get("patternProperties"):
                 shape = classify_container(self.schema)
+                if shape.kind == "pattern_mapping":
+                    body = self._dump_yaml(self._pattern_mapping_block(shape))
+                    # See the JSONish branch: a pattern mapping can genuinely be closed.
+                    note = self.process_additional_properties(self.schema)
+                    if note and (
+                        self.include_metadata or self.emits_closed_world_marker(self.schema)
+                    ):
+                        body = f"{note.strip()}\n{body}"
+                    return self._add_prefix(body)
                 if shape.kind == "mapping":
                     key = f"<{self.key_token(shape)}>"
                     output_dict: dict[str, Any]

@@ -183,15 +183,37 @@ def test_rule6c_c1_guard_properties_wins_over_mapping() -> None:
     assert shape.kind == "object"
 
 
-def test_rule6d_pattern_properties_is_object() -> None:
+def test_rule6d_pattern_properties_is_its_own_kind() -> None:
+    """Rule 7b: ``patternProperties`` without ``properties`` is a PATTERN_MAPPING.
+
+    It is not a "mapping" because a mapping has one value schema for every key, while this
+    has one per pattern -- collapsing them would keep only the first.
+    """
     shape = classify_container(
         {
             "type": "object",
-            "patternProperties": {"^a": {}},
+            "patternProperties": {"^a": {"type": "integer"}, "^b": {"type": "string"}},
             "additionalProperties": {"type": "string"},
         }
     )
+    assert shape.kind == "pattern_mapping"
+    assert shape.pattern_schemas == (
+        ("^a", {"type": "integer"}),
+        ("^b", {"type": "string"}),
+    )
+
+
+def test_rule6d_c1_still_holds_when_properties_are_declared() -> None:
+    """Decision C1 is untouched: ``properties`` still wins, even beside patternProperties."""
+    shape = classify_container(
+        {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "patternProperties": {"^a": {"type": "integer"}},
+        }
+    )
     assert shape.kind == "object"
+    assert shape.pattern_schemas == ()
 
 
 def test_rule7_additional_properties_true_is_open_mapping() -> None:
@@ -241,7 +263,7 @@ def test_classify_container_never_raises() -> None:
         {"additionalProperties": None},
         {"type": "array", "prefixItems": "nope"},
     ]
-    valid_kinds = {"mapping", "tuple", "list", "any", "object", "scalar"}
+    valid_kinds = {"mapping", "pattern_mapping", "tuple", "list", "any", "object", "scalar"}
     for bad in bad_inputs:
         assert classify_container(bad).kind in valid_kinds
 
