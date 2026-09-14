@@ -11,7 +11,7 @@ Reproduce with:
 
 ```bash
 uv run python -m benchmarking.jsonschemabench.fetch_dataset   # ~100 MB, 9,542 schemas, 10 configs
-uv run python -m benchmarking.jsonschemabench.coverage --limit 2000
+uv run python -m benchmarking.jsonschemabench.coverage --all-configs
 ```
 
 **Scope.** llm-schema-lite is a **schema simplification and validation** library: it turns
@@ -26,26 +26,45 @@ features survive into the simplified output* — validation separately enforces 
 
 | Aspect | Measured |
 |--------|----------|
-| **Ingestion** | **300/300 (100%)** of the first 300 corpus schemas simplify without raising |
-| **Median token reduction** | **46.2%** across those 300 |
-| **Schemas that compact** | **294/300**, median reduction **46.6%** |
-| **Schemas that still expand** | **4/300**, worst case **−2012%** (see §4) |
+| **Ingestion** | **9,532/9,542 (99.9%)** — the *whole* corpus, all 10 configs |
+| **Schemas that raise** | **0** — every remaining failure is a timeout, not an exception |
+| **Median token reduction** | **47.6%** (median of the ten per-config medians; range 31.4%–58.5%) |
+| **Schemas too slow to render** | **10/9,542**, at a 10 s/schema budget (see §4) |
 | **Feature coverage** | JSONish **30/39**, YAML **33/39**, TypeScript **31/39** |
 | **Validation** | Full Draft 2020-12 via `jsonschema` — every keyword enforced regardless of whether it renders |
 
-**Read that first row carefully.** The flat dump's first 300 records are all `Github_trivial`
-and `Github_easy`, so those figures describe the *easiest* slice of the corpus and must not
-be quoted as a whole-corpus result. Sampled per config instead (45 schemas each, `train`):
+Earlier revisions of this report quoted "300/300, 46.2%". That was the flat dump's first 300
+records, which are *all* `Github_trivial` and `Github_easy` — the easiest slice of the
+corpus. The table below is every schema in every config:
 
-| Config | Median reduction | Compact | Expand | Worst |
-|--------|------------------|---------|--------|-------|
-| Github_hard | **42.8%** | 44/44 | 0 | +2% |
-| Github_ultra | **47.9%** | 40/44 | 2 | **−979%** |
+| Config | Schemas | Ingested | Median ↓ | Mean ↓ | Worst | Slow |
+|--------|--------:|---------:|---------:|-------:|------:|-----:|
+| Github_trivial | 444 | 100% | **58.5%** | 56.7% | −250% | 0 |
+| Github_easy | 1938 | 100% | **53.3%** | 53.6% | −34% | 0 |
+| Github_medium | 1969 | 100% | **47.2%** | 44.9% | −2884% | 0 |
+| Github_hard | 1236 | 99.8% | **40.9%** | 35.0% | −1601% | 3 |
+| Github_ultra | 164 | 97.0% | **47.6%** | 38.9% | −354% | 5 |
+| Glaiveai2K | 1707 | 100% | **45.6%** | 45.9% | +21% | 0 |
+| JsonSchemaStore | 492 | 99.6% | **45.5%** | 18.0% | −6064% | 2 |
+| Kubernetes | 1064 | 100% | **31.4%** | 27.4% | −1019% | 0 |
+| Snowplow | 403 | 100% | **53.6%** | 53.1% | +24% | 0 |
+| WashingtonPost | 125 | 100% | **49.1%** | −51.0% | −1436% | 0 |
+| **TOTAL** | **9542** | **99.9%** | — | — | — | **10** |
 
-The medians survive the difficulty jump — the compaction claim is real on hard schemas. What
-does not survive is the tail: `Github_ultra` contains schemas the easy slice never reaches,
-including one that renders 45× larger than its input (§4). Any headline number should carry
-both halves.
+Three things this table says that the 300-schema sample could not.
+
+**The compaction claim holds across difficulty.** Every config's *median* is a real
+reduction, from 31.4% (Kubernetes) to 58.5% (Github_trivial). It erodes with difficulty
+(58.5 → 53.3 → 47.2 → 40.9 across the Github ladder) but never inverts.
+
+**Quote the median, never the mean.** `WashingtonPost` has a median of **+49.1%** and a mean
+of **−51.0%**: the typical schema compacts by half while a few catastrophic expansions drag
+the average below zero. `JsonSchemaStore` shows the same split (45.5% vs 18.0%). A mean over
+this corpus is a statement about the worst tail, not about typical behaviour.
+
+**The tail is a real defect, not noise.** Worst cases reach **−6064%** (JsonSchemaStore) and
+**−2884%** (Github_medium) — schemas rendering ~29–61× *larger* than their own JSON. Same
+root cause as the 10 slow schemas: repeated inline `$ref` expansion (§4).
 
 The headline gap is **not** breadth, it is that JSONish — the default mode — renders five
 fewer keywords than YAML, despite all three sharing `base.py`. Every one of those five is
@@ -151,39 +170,55 @@ are key-position or node-position rather than value-position, so they need
 
 ## 3. Keyword frequency in the corpus
 
-From 3,000 corpus schemas (share of schemas containing the keyword at least once):
+All **9,542** corpus schemas (share containing the keyword at least once, counted
+recursively):
 
-| Keyword | Schemas | Keyword | Schemas |
-|---------|---------|---------|---------|
-| type | 97.0% | oneOf | 7.7% |
-| properties | 96.0% | **patternProperties** | 6.7% |
-| description | 70.7% | minItems | 6.0% |
-| required | 70.3% | maximum | 5.7% |
-| items | 41.7% | maxItems / anyOf | 4.0% |
-| enum | 38.0% | allOf | 2.0% |
-| title | 35.0% | additionalItems | 1.7% |
-| **additionalProperties** | 32.3% | uniqueItems / const | 1.0% |
-| $ref | 27.7% | dependencies | 0.7% |
-| pattern | 16.3% | exclusiveMaximum | 0.3% |
-| default | 13.7% | propertyNames / not | 0.3% |
-| format | 12.0% | minProperties / maxProperties | 0.3% |
-| minimum / minLength / maxLength | ~10% | | |
+| Keyword | Schemas | Share | Keyword | Schemas | Share |
+|---------|--------:|------:|---------|--------:|------:|
+| type | 9256 | 97.0% | maximum | 454 | 4.8% |
+| properties | 9050 | 94.8% | **patternProperties** | 416 | 4.4% |
+| description | 6924 | 72.6% | maxItems | 340 | 3.6% |
+| required | 6819 | 71.5% | additionalItems | 196 | 2.1% |
+| items | 3900 | 40.9% | allOf | 179 | 1.9% |
+| **additionalProperties** | 3483 | 36.5% | minProperties | 117 | 1.2% |
+| title | 3403 | 35.7% | uniqueItems | 90 | 0.9% |
+| enum | 2826 | 29.6% | const | 81 | 0.8% |
+| $ref | 2701 | 28.3% | dependencies | 68 | 0.7% |
+| default | 1319 | 13.8% | not | 57 | 0.6% |
+| pattern | 1232 | 12.9% | multipleOf | 44 | 0.5% |
+| format | 1151 | 12.1% | maxProperties | 43 | 0.5% |
+| minimum | 885 | 9.3% | if / then | 27 | 0.3% |
+| minLength | 850 | 8.9% | exclusiveMinimum | 21 | 0.2% |
+| maxLength | 812 | 8.5% | **propertyNames** | 20 | 0.2% |
+| oneOf | 638 | 6.7% | else | 7 | 0.1% |
+| minItems | 616 | 6.5% | exclusiveMaximum | 6 | 0.1% |
+| anyOf | 480 | 5.0% | contains | 3 | 0.0% |
+
+Only 37 of the 39 tracked keywords appear anywhere in the corpus.
 
 Boolean schemas, separately: `additionalProperties: false` 6,597 sites, `: true` 535,
 `additionalItems: false` 82 / `: true` 28, and 28 boolean-valued *properties*. The last of
 those used to crash JSONish outright.
 
-This is what makes `patternProperties` (6.7%) the highest-value JSONish gap — it is not an
-exotic keyword.
+This is what makes `patternProperties` (**4.4%**, 416 schemas) the highest-value JSONish gap
+— it is not an exotic keyword, and it outweighs the other two open gaps by an order of
+magnitude (`propertyNames` 0.2%, `not` 0.6%). An earlier revision quoted 6.7% here from the
+3,000-schema sample; 6.7% is `oneOf`'s share, not `patternProperties`'.
 
 ---
 
 ## 4. Where output still expands instead of compacting
 
-4 of 300 schemas render **larger** than their raw JSON Schema. The cause is structural and
+Some schemas render **larger** than their raw JSON Schema. The cause is structural and
 worth stating plainly: a `$ref` is expanded **inline at its use site**, so the whole
 reachable definition graph is materialised, while raw JSON Schema stores each definition
 once and points at it.
+
+Across the full corpus the worst case per config reaches **−6064%** (JsonSchemaStore),
+**−2884%** (Github_medium), **−1601%** (Github_hard) and **−1436%** (WashingtonPost) — up to
+61× the input. Only `Glaiveai2K` and `Snowplow`, the two configs with *no* cyclic `$ref`
+graphs, stay positive throughout. (This run recorded each config's worst case, not a count
+of how many schemas expand; that count is not claimed here.)
 
 Repeated references are now handled. A definition rendered once is replaced at later
 occurrences by a named back-reference (`object // defined above: Address`) whenever its body
@@ -225,8 +260,47 @@ Back-references did real work here — 49 MB down to 9 MB — and still left 45�
 *distinct* definitions are each materialised transitively. Repeat-suppression cannot reach
 this by construction; only rendering each definition once, in a `$defs` section, can.
 
-This case also has a practical cost beyond token count: rendering it took resident memory
-from 240 MB to 801 MB, which is enough to make a full-corpus sweep look like it has hung.
+### The cost is CPU, not memory
+
+An earlier revision of this report attributed full-corpus sweep stalls to memory, citing
+`o48404` taking resident memory from 240 MB to 801 MB. **That was the wrong diagnosis.**
+Instrumenting a full `Github_hard` pass shows RSS pinned flat at **233 MB** from start to
+finish, and a bounded render of the worst offender is killed by its 300 s clock
+(`timeout -s KILL 300` → exit 137), never by the OOM killer.
+
+These schemas do not exhaust memory, and they do **terminate** — the same `o27039` render
+left unbounded exited cleanly after roughly 20–25 minutes of wall time (with CPU contention
+from concurrent runs). They are unusably slow, not hung: a 300 s cap kills them, an
+unbounded run eventually returns. The practical consequence is the same for a prompt-time
+renderer, but the distinction matters for diagnosis — nothing here is deadlocked.
+
+Profiling `o27039` (42 definitions, 109 refs, 3 mutually-recursive `$ref` cycles) names the
+hot path exactly:
+
+```
+   ncalls  tottime  cumtime  function
+   322749   25.874   42.897  jsonish_formatter.py:989(_scan_remove_string_delimiters)
+118791893   16.127   16.127  {method 'append' of 'list' objects}
+   302699    1.062   59.997  jsonish_formatter.py:207(process_ref)
+```
+
+`process_ref` is called 302,699 times even though `_global_expansion_budget` is 150 — the
+budget caps *expansions*, not *calls*, so the cheap cache/"return object" paths still run
+hundreds of thousands of times. But they are not the cost. The cost is quadratic string
+post-processing: a character-at-a-time scanner re-walking a string that inline `$ref`
+expansion keeps regrowing, 118 million list appends deep.
+
+**10 of 9,542 schemas (0.1%) exceed a 10 s/schema budget**, all for this reason:
+
+| Config | Slow schemas |
+|--------|--------------|
+| Github_hard | `o27039`, `o69207`, `o13029` |
+| Github_ultra | `o39449`, `o48404`, `o50639`, `o69209`, `o21764` |
+| JsonSchemaStore | `meta`, `accelerator` |
+
+Note what is *not* on this list: cyclic schemas as a class. 371 of 9,542 (3.9%) have cyclic
+`$ref` graphs — 189 in `Github_hard` alone — and the re-entry guard handles them. Cycles are
+survivable; unbounded *width* of distinct-definition expansion is what is not.
 
 ---
 

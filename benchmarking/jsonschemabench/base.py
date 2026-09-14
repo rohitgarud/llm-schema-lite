@@ -1,5 +1,6 @@
 import json
 import logging
+import statistics
 from typing import Any
 
 import tiktoken
@@ -11,8 +12,12 @@ logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler())
 
 
-def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> None:
-    """Analyze feature coverage of a given dataset."""
+def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> dict[str, Any]:
+    """Analyze feature coverage of a given dataset.
+
+    Returns the measurements as well as logging them, so a per-config sweep can aggregate
+    without re-deriving them -- the display below and any caller read the same numbers.
+    """
 
     # Handle invalid input
     if dataset is None:
@@ -23,17 +28,15 @@ def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> None:
     total_schemas = 0
     supported_schemas = 0
     token_reductions = []
+    failures: list[str] = []
+    encoder = tiktoken.encoding_for_model("gpt-4o")
 
     for schema in dataset:
         try:
             # Test if our formatter can handle this schema
-            original_token_count = len(
-                tiktoken.encoding_for_model("gpt-4o").encode(json.dumps(schema))
-            )
+            original_token_count = len(encoder.encode(json.dumps(schema)))
             simplified_schema = simplify_schema(schema, format_type="jsonish")
-            simplified_token_count = len(
-                tiktoken.encoding_for_model("gpt-4o").encode(simplified_schema.to_string())
-            )
+            simplified_token_count = len(encoder.encode(simplified_schema.to_string()))
             supported_schemas += 1
             token_reductions.append(
                 (original_token_count - simplified_token_count) / original_token_count
@@ -41,6 +44,7 @@ def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> None:
 
         except Exception as e:
             logger.error(f"Failed to process schema: {e}")
+            failures.append(f"{type(e).__name__}: {e}")
         total_schemas += 1
 
     coverage_percentage = supported_schemas / total_schemas * 100 if total_schemas > 0 else 0
@@ -66,6 +70,21 @@ def analyze_dataset_coverage(dataset: list[dict[str, Any]]) -> None:
         logger.info("Average token reduction: N/A (no successful schemas)")
         logger.info("Max token reduction: N/A (no successful schemas)")
         logger.info("Min token reduction: N/A (no successful schemas)")
+
+    return {
+        "total_schemas": total_schemas,
+        "supported_schemas": supported_schemas,
+        "coverage_percentage": coverage_percentage,
+        "mean_token_reduction": (
+            sum(token_reductions) / len(token_reductions) * 100 if token_reductions else None
+        ),
+        "median_token_reduction": (
+            statistics.median(token_reductions) * 100 if token_reductions else None
+        ),
+        "max_token_reduction": max(token_reductions) * 100 if token_reductions else None,
+        "min_token_reduction": min(token_reductions) * 100 if token_reductions else None,
+        "failures": failures,
+    }
 
 
 def analyze_schema_features(schema: dict) -> list[str]:

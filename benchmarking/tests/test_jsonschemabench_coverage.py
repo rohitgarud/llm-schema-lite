@@ -2,16 +2,44 @@
 
 Deliberately tiny: the 1,307 lines of tests deleted alongside this package in `0432dda`
 tested the analysis helpers exhaustively and nothing called them. What matters here is
-that feature detection recurses, that the aggregation totals line up, and that the
-loader survives a record it cannot parse -- the three things a coverage run depends on.
+that feature detection recurses, that the aggregation totals line up, that the loader
+survives a record it cannot parse, and that the per-config sweep splits by config -- the
+four things a coverage run depends on.
 """
 
 from __future__ import annotations
 
 import json
 
+import pytest
+
 from benchmarking.jsonschemabench.base import analyze_schema_features, get_feature_statistics
-from benchmarking.jsonschemabench.coverage import load_schemas
+from benchmarking.jsonschemabench.coverage import load_schemas, sweep_configs
+
+
+@pytest.fixture
+def local_dataset(tmp_path, monkeypatch):
+    """Install `records` as a local dataset file and hide the other one.
+
+    `load_records` prefers the config-labelled file, and the real one is a 98 MB file in
+    the repo root -- patching only `LOCAL_DATASET` would silently measure that instead.
+    """
+
+    def _install(records: list, by_config: bool = False):
+        path = tmp_path / "dataset.json"
+        path.write_text(json.dumps(records))
+        missing = tmp_path / "missing.json"
+        monkeypatch.setattr(
+            "benchmarking.jsonschemabench.coverage.LOCAL_BY_CONFIG",
+            path if by_config else missing,
+        )
+        monkeypatch.setattr(
+            "benchmarking.jsonschemabench.coverage.LOCAL_DATASET",
+            missing if by_config else path,
+        )
+        return path
+
+    return _install
 
 
 def test_analyze_schema_features_finds_nested_keywords() -> None:
@@ -57,31 +85,50 @@ def test_get_feature_statistics_totals_agree() -> None:
     assert counts == sorted(counts, reverse=True)
 
 
-def test_load_schemas_skips_unparseable_records(tmp_path, monkeypatch) -> None:
+def test_load_schemas_skips_unparseable_records(local_dataset) -> None:
     """A malformed record is counted out rather than aborting the load."""
-    dataset = tmp_path / "jsonschembench_dataset.json"
-    dataset.write_text(
-        json.dumps(
-            [
-                {"json_schema": json.dumps({"type": "object"})},
-                {"json_schema": "{not json"},  # malformed
-                {"no_schema_key": True},  # missing key
-                {"json_schema": json.dumps({"type": "array"})},
-            ]
-        )
+    path = local_dataset(
+        [
+            {"json_schema": json.dumps({"type": "object"})},
+            {"json_schema": "{not json"},  # malformed
+            {"no_schema_key": True},  # missing key
+            {"json_schema": json.dumps({"type": "array"})},
+        ]
     )
-    monkeypatch.setattr("benchmarking.jsonschemabench.coverage.LOCAL_DATASET", dataset)
 
     schemas, source = load_schemas()
     assert [s["type"] for s in schemas] == ["object", "array"]
-    assert str(dataset) == source
+    assert str(path) == source
 
 
-def test_load_schemas_respects_limit(tmp_path, monkeypatch) -> None:
+def test_load_schemas_respects_limit(local_dataset) -> None:
     """`--limit` is what makes a run finish in seconds; it must actually stop early."""
-    dataset = tmp_path / "jsonschembench_dataset.json"
-    dataset.write_text(json.dumps([{"json_schema": json.dumps({"type": "object"})}] * 10))
-    monkeypatch.setattr("benchmarking.jsonschemabench.coverage.LOCAL_DATASET", dataset)
+    local_dataset([{"json_schema": json.dumps({"type": "object"})}] * 10)
 
     schemas, _ = load_schemas(limit=3)
     assert len(schemas) == 3
+
+
+def test_sweep_configs_measures_each_config_separately(local_dataset) -> None:
+    """The whole point of the sweep: one row per config, not one row for the corpus."""
+    local_dataset(
+        [
+            {"config": "Kubernetes", "json_schema": json.dumps({"type": "object"})},
+            {"config": "Kubernetes", "json_schema": json.dumps({"type": "array"})},
+            {"config": "Snowplow", "json_schema": json.dumps({"type": "string"})},
+        ],
+        by_config=True,
+    )
+
+    rows = sweep_configs()
+    assert [r["config"] for r in rows] == ["Kubernetes", "Snowplow"]
+    assert [r["total_schemas"] for r in rows] == [2, 1]
+    assert all(r["coverage_percentage"] == 100.0 for r in rows)
+
+
+def test_sweep_configs_rejects_an_unlabelled_corpus(local_dataset) -> None:
+    """The flat dataset has no `config`; sweeping it would silently mislabel everything."""
+    local_dataset([{"json_schema": json.dumps({"type": "object"})}])
+
+    with pytest.raises(SystemExit, match="no per-record `config`"):
+        sweep_configs()
