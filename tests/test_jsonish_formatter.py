@@ -1220,26 +1220,26 @@ def test_jsonish_formatter_with_multiple_patterns():
 
 
 def test_jsonish_formatter_with_exclusive_min_max():
-    """Test JSONish formatter with exclusive minimum/maximum (gt/lt).
+    """Exclusive bounds (pydantic gt/lt) render inline, with a strict marker, and stay gated.
 
-    Note: Current implementation does not render exclusiveMinimum/exclusiveMaximum
-    constraints (from Pydantic gt/lt). This test verifies the model renders without
-    crashing. TODO: Consider adding support for exclusive constraints.
+    Before this fix `numeric_range_token` read only `minimum`/`maximum`, so a gt/lt field
+    rendered as a bare `float` in JSONish while YAML leaked the same constraint as a raw
+    `exclusiveMin:` comment. Both now route through `_bounded_range_token`.
     """
     from tests.conftest import ExclusiveMinMax
 
     schema = ExclusiveMinMax.model_json_schema()
-    formatter = JSONishFormatter(schema, include_metadata=False)
-    result = formatter.transform_schema()
 
-    # Should contain value and count fields
-    assert "value*:" in result
-    assert "count*:" in result
-    # Fields should render as float and int types
-    assert "float" in result
-    assert "int" in result
-    # Note: Exclusive constraints (exclusiveMinimum/exclusiveMaximum) are not
-    # currently rendered in the output, only inclusive (minimum/maximum) are.
+    result = JSONishFormatter(schema, include_metadata=True).transform_schema()
+    assert "value*: float (>0.0 to <100.0)" in result
+    assert "count*: int (>0 to <10)" in result
+
+    # Still metadata, so the master switch must remove it -- the bounds are not structural.
+    bare = JSONishFormatter(schema, include_metadata=False).transform_schema()
+    assert "value*:" in bare
+    assert "count*:" in bare
+    assert ">0.0" not in bare
+    assert "<10" not in bare
 
 
 # ============================================================================

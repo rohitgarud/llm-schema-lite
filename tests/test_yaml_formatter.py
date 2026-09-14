@@ -706,15 +706,17 @@ def test_yaml_multiple_patterns():
 
 
 def test_yaml_exclusive_min_max():
-    """Test YAML formatter with exclusive minimum/maximum (gt/lt)."""
+    """Exclusive bounds render in the type token, not as a duplicate keyword comment."""
     schema = ExclusiveMinMax.model_json_schema()
     formatter = YAMLFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
-    # Fields should be present; formatter may not render exclusive bounds
-    assert "value*:" in result
-    assert "count*:" in result
+    assert "value*: float (>0.0 to <100.0)" in result
+    assert "count*: int (>0 to <10)" in result
+    # YAML used to be the only mode showing these, via the raw METADATA_MAP comment.
+    assert "exclusiveMin" not in result
+    assert "exclusiveMax" not in result
 
 
 # ============================================================================

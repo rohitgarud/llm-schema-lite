@@ -455,11 +455,14 @@ class BaseFormatter(ABC):
                 # Skip these for strings as they're integrated into the type description
                 continue
             elif (
-                k in ["minimum", "maximum"]
+                k in ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"]
                 and "type" in value
                 and value["type"] in ["number", "integer"]
             ):
-                # Skip these for numbers as they're integrated into the type description
+                # Skip these for numbers as they're integrated into the type description.
+                # The exclusive pair is listed for the same reason as the inclusive one:
+                # without it YAML/TypeScript re-emit it as a raw `exclusiveMin: 0.0`
+                # comment that now duplicates the `(>0.0 to <100.0)` type token.
                 continue
             else:
                 formatted_parts.append(self.METADATA_MAP[k](value[actual_key]))
@@ -1690,9 +1693,36 @@ class BaseFormatter(ABC):
 
     def numeric_range_token(self, schema: dict[str, Any]) -> str:
         """Already-gated `minimum`/`maximum` fragment: `"1 to 10"` / `">= 1"` / `"<= 10"` /
-        `""`. Already filtered through `config.includes`; callers must not re-gate.
+        `""`, with a `>`/`<` marker where the bound came from `exclusiveMinimum`/
+        `exclusiveMaximum` (pydantic `gt`/`lt`): `">0 to <10"` / `"> 1"` / `"< 10"`.
+        Already filtered through `config.includes`; callers must not re-gate.
         """
-        return self._bounded_range_token(schema, "minimum", "maximum", joiner=" to ")
+        return self._bounded_range_token(
+            schema,
+            "minimum",
+            "maximum",
+            joiner=" to ",
+            exclusive_keys=("exclusiveMinimum", "exclusiveMaximum"),
+        )
+
+    def _resolve_bound(
+        self, schema: dict[str, Any], key: str, exclusive_key: str | None
+    ) -> tuple[Any, bool]:
+        """One gated bound as ``(value, is_exclusive)``, or ``(None, False)`` when absent.
+
+        The inclusive key wins when a schema carries both forms, which keeps every
+        inclusive-only rendering byte-identical to the behaviour before exclusive
+        bounds were read at all.
+        """
+        if schema.get(key) is not None and self.config.includes(key):
+            return schema[key], False
+        if (
+            exclusive_key is not None
+            and schema.get(exclusive_key) is not None
+            and self.config.includes(exclusive_key)
+        ):
+            return schema[exclusive_key], True
+        return None, False
 
     def _bounded_range_token(
         self,
@@ -1702,6 +1732,7 @@ class BaseFormatter(ABC):
         *,
         unit: str = "",
         joiner: str = "-",
+        exclusive_keys: tuple[str, str] | None = None,
     ) -> str:
         """Shared three-branch assembler for the two bounded-range families.
 
@@ -1709,15 +1740,23 @@ class BaseFormatter(ABC):
         `config.includes`), never combined with `or` — that independence is the
         fix for the TypeScript defect this ticket closes. Branches on the *gated* pair,
         never on the raw schema.
+
+        ``exclusive_keys`` names the `exclusiveMinimum`/`exclusiveMaximum` fallbacks for
+        the numeric family; the length family has no exclusive form and passes ``None``.
+        An exclusive bound carries a strict marker so it can never be read as the
+        inclusive one: `>0 to <10` against `0 to 10`, `> 1` against `>= 1`.
         """
-        has_min = schema.get(min_key) is not None and self.config.includes(min_key)
-        has_max = schema.get(max_key) is not None and self.config.includes(max_key)
-        if has_min and has_max:
-            return f"{schema[min_key]}{joiner}{schema[max_key]}{unit}"
-        if has_min:
-            return f">= {schema[min_key]}{unit}"
-        if has_max:
-            return f"<= {schema[max_key]}{unit}"
+        ex_min, ex_max = exclusive_keys or (None, None)
+        low, low_strict = self._resolve_bound(schema, min_key, ex_min)
+        high, high_strict = self._resolve_bound(schema, max_key, ex_max)
+        if low is not None and high is not None:
+            lo = f"{'>' if low_strict else ''}{low}"
+            hi = f"{'<' if high_strict else ''}{high}"
+            return f"{lo}{joiner}{hi}{unit}"
+        if low is not None:
+            return f"{'>' if low_strict else '>='} {low}{unit}"
+        if high is not None:
+            return f"{'<' if high_strict else '<='} {high}{unit}"
         return ""
 
     def array_constraint_tokens(self, schema: dict[str, Any]) -> list[str]:

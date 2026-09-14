@@ -931,15 +931,15 @@ def test_typescript_multiple_patterns():
 
 
 def test_typescript_exclusive_min_max():
-    """Test TypeScript formatter with exclusive minimum/maximum (gt/lt)."""
+    """Exclusive bounds reach TypeScript too -- all three modes share the assembler."""
     schema = ExclusiveMinMax.model_json_schema()
     formatter = TypeScriptFormatter(schema, include_metadata=True)
     result = formatter.transform_schema()
 
     assert_required_optional_consistent(result, schema)
-    # Fields should be present; formatter may not render exclusive bounds
-    assert "value*:" in result
-    assert "count*:" in result
+    assert "(>0.0 to <100.0)" in result
+    assert "(>0 to <10)" in result
+    assert "exclusiveMin" not in result
 
 
 # ============================================================================
