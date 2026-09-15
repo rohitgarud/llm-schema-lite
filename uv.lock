@@ -1110,7 +1110,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.14,<0.15" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.14,<0.17" },
     { name = "tiktoken", specifier = ">=0.12.0" },
 ]
 provides-extras = ["benchmark", "dev", "dspy"]
