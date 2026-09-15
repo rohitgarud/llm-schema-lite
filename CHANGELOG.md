@@ -37,6 +37,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `$ref` body is no longer refused caching because something unrelated truncated.**
+  `_truncation_epoch` was global and monotonic: any recursion truncation bumped it, and both
+  `_ref_cache` and `_emitted_refs` were written only if the counter had not moved since the
+  frame was entered. On a cyclic schema truncations are constant, so essentially nothing was
+  ever cached, no back-reference could fire, and every use site re-inlined a full body.
+  `o48404` rendered 51,808 expansions of which **103** were cached, turning 208 KB of input
+  into 9.3 MB of output. `o13029` -- six distinct definitions -- did five million truncations.
+  `_body_is_replayable` replaces the counter comparison: a body is refused only when a ref
+  that truncated INSIDE it was already on the expansion path at entry, meaning an ancestor
+  spent the depth budget and the body would render differently elsewhere. A self-inflicted
+  truncation leaves the body position-independent, so it caches. Corpus-wide: schemas too
+  slow to render inside 10 s go **9-10 -> 0**, ingestion **99.9% -> 100.0%**, `o48404`
+  **45x -> 0.35x** its input, and only 56 of 9,542 (0.59%) still render larger than their
+  input. Per-config means recover accordingly -- `WashingtonPost` -51.0% -> **+36.0%**,
+  `JsonSchemaStore` 18.0% -> **39.5%**. `o13029` stays at 82x and is documented as the
+  accepted limit: its seven definitions are MUTUALLY recursive, so replay is refused 148
+  times out of 150 and those refusals are correct. Reaching it needs depth-keyed caching, a
+  separate decision. The back-reference path had no test coverage at all before this --
+  `tests/test_backreferences.py` characterises it first, so the change reads as an
+  intentional diff rather than golden churn.
+
+- **JSONish counts its `$ref` expansions, and an exhausted budget is named rather than
+  silent.** `JSONishFormatter.process_ref` never incremented `_global_expansion_count`, so
+  the 150-expansion budget governed YAML and TypeScript but not the default mode -- the one
+  that rendered 51,808 expansions. It now counts and enforces. Because that makes exhaustion
+  reachable in JSONish for the first time, the guard no longer returns a bare `object`, which
+  a model cannot tell apart from an unresolvable or genuinely untyped one: `budget_placeholder`
+  emits `object  // budget exhausted: Name`, joining `recursive:` and `defined above:` in each
+  format's own comment syntax (block form in TypeScript so a `//` cannot swallow the `;`,
+  deferred in YAML so a later `OR null` folds into the same slot). Fires on 32 of 9,542
+  schemas (0.34%), costing 0.2 pp of mean reduction on `WashingtonPost` and nothing
+  measurable elsewhere.
+
 - **`patternProperties` now renders structurally in all three modes instead of being dropped
   or leaked.** A `patternProperties`-only node classified as a plain OBJECT, and each mode
   lost the keys its own way: JSONish emitted a bare `{}`; YAML and TypeScript emitted
@@ -65,9 +98,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte-identical across the two commits, and the two configs containing none at all
   (`Glaiveai2K`, `Kubernetes`) are unchanged to the decimal across 2,771 schemas, which is
   what isolates the cause. The trade is deliberate -- a pattern key that reaches the model
-  beats one that silently does not -- but the mitigation (fall back to the comment form
-  when a structural render exceeds some multiple of its input) is NOT implemented. See the
-  feature report, section 4.
+  beats one that silently does not. See the feature report, section 4.
+
+  **Correction (2026-09-15).** The mitigation named here -- falling back to the comment form
+  past some expansion multiple -- is probably not needed, and the diagnosis above blames this
+  change for too much. Roughly **97%** of the regression is a separate, pre-existing bug:
+  `_truncation_epoch` is global, so one truncation poisons every ancestor's cache entry and
+  back-references stop firing on cyclic schemas. Neutralising it moves the worst
+  pattern-bearing schemas from a median of **-645.5% to -0.7%**, and takes
+  `JsonSchemaStore/tmlanguage` to **-95.2%** -- better than the -195.3% it scored BEFORE this
+  change, so its problem was never `patternProperties` at all. The residue does not expand:
+  the three ref-free cases still compact by 36-44%. No cap will be written unless a post-fix
+  corpus run finds a real expansion.
 
 - **`{"type": "object", "allOf": [...]}` with no `properties` no longer recurses until the
   interpreter stops it.** `_process_schema_recursive_inner` tested `type` before `allOf`,
@@ -140,9 +182,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again, which is what the sibling-inline behaviour requires -- the two populations separate
   cleanly, the largest body those tests rely on being 158 chars against that schema's
   smallest definition at 409. Across the first 300 corpus schemas: ingestion 98.3% -> 100%,
-  median token reduction 46.2%, 294/300 compacting. Schemas carrying 70+ *distinct*
-  definitions nested 7 deep still expand; that needs a `$defs` section, not
-  repeat-suppression.
+  median token reduction 46.2%, 294/300 compacting.
+
+  **Correction (2026-09-15).** This entry used to close by saying schemas carrying 70+
+  *distinct* definitions nested 7 deep "still expand; that needs a `$defs` section, not
+  repeat-suppression". That is wrong, and it is the same error the feature report carried.
+  Repeat-suppression IS the right mechanism and is already implemented -- it is switched off
+  on precisely those schemas by a global `_truncation_epoch` taint, which poisons every
+  ancestor's cache entry after any truncation, so `_emitted_refs` stays empty and no
+  back-reference can fire. Measured on `o48404`: 51,808 full expansions, only 103 ever
+  cached. Neutralising the taint takes it from 45x its input to **0.63x**, with no `$defs`
+  section involved. See the feature report, section 4.
 
 ## [v0.7.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.7.0) - 2026-09-13
 

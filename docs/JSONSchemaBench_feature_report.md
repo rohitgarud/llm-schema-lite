@@ -26,10 +26,10 @@ features survive into the simplified output* — validation separately enforces 
 
 | Aspect | Measured |
 |--------|----------|
-| **Ingestion** | **9,532/9,542 (99.9%)** — the *whole* corpus, all 10 configs |
-| **Schemas that raise** | **0** — every remaining failure is a timeout, not an exception |
+| **Ingestion** | **9,542/9,542 (100.0%)** — the *whole* corpus, all 10 configs |
+| **Schemas that raise** | **0** — and since the taint fix (§4) nothing times out either |
 | **Median token reduction** | **46.8%** (median of the ten per-config medians; range 31.4%–57.0%) |
-| **Schemas too slow to render** | **9–10/9,542** at a 10 s/schema budget — the count is not stable, see §4 |
+| **Schemas too slow to render** | **0/9,542** at a 10 s/schema budget, down from 9–10 (§4) |
 | **Feature coverage** | JSONish **32/39**, YAML **33/39**, TypeScript **31/39** |
 | **Validation** | Full Draft 2020-12 via `jsonschema` — every keyword enforced regardless of whether it renders |
 
@@ -41,19 +41,33 @@ corpus. The table below is every schema in every config:
 |--------|--------:|---------:|---------:|-------:|------:|-----:|
 | Github_trivial | 444 | 100% | **57.0%** | 55.0% | −250% | 0 |
 | Github_easy | 1938 | 100% | **52.9%** | 53.1% | −34% | 0 |
-| Github_medium | 1969 | 100% | **46.7%** | 43.8% | −2884% | 0 |
-| Github_hard | 1236 | 99.8% | **40.1%** | −51.3% | −4770% | 3 |
-| Github_ultra | 164 | 97.0% | **46.9%** | −38.2% | −1015% | 5 |
+| Github_medium | 1969 | 100% | **46.7%** | 45.2% | −1031% | 0 |
+| Github_hard | 1236 | 100% | **40.1%** | 13.9% | −23389% | 0 |
+| Github_ultra | 164 | 100% | **47.0%** | 36.4% | −354% | 0 |
 | Glaiveai2K | 1707 | 100% | **45.6%** | 45.9% | +21% | 0 |
-| JsonSchemaStore | 492 | 99.6% | **43.6%** | 10.7% | −6064% | 2 |
-| Kubernetes | 1064 | 100% | **31.4%** | 27.4% | −1019% | 0 |
+| JsonSchemaStore | 492 | 100% | **43.7%** | 39.5% | −1051% | 0 |
+| Kubernetes | 1064 | 100% | **31.4%** | 30.8% | −407% | 0 |
 | Snowplow | 403 | 100% | **53.5%** | 52.6% | +24% | 0 |
-| WashingtonPost | 125 | 100% | **49.1%** | −51.4% | −1437% | 0 |
-| **TOTAL** | **9542** | **99.9%** | — | — | — | **10** |
+| WashingtonPost | 125 | 100% | **49.1%** | 36.0% | −144% | 0 |
+| **TOTAL** | **9542** | **100.0%** | — | — | — | **0** |
 
-The `Github_hard` and `Github_ultra` means are negative where they were positive, and the
-per-config medians are 0.4–1.9 pp lower than the previous revision of this table. That is
-not drift: it is the measured price of the `patternProperties` fix, isolated by A/B in §4.
+Two things in that table need saying, because one of them looks like a regression and is not.
+
+**The means recovered, and the timeouts are gone.** `WashingtonPost` went from a mean of
+**−51.0%** to **+36.0%**, `JsonSchemaStore` from 18.0% to **39.5%**, `Github_ultra` from
+−38.2% to **+36.4%**. Every schema in the corpus now renders inside the 10 s budget, so
+ingestion is 100.0% and the slow column is empty for the first time. All of that is the
+taint-scoping fix in §4.
+
+**`Github_hard`'s worst case reads −23389%, far worse than the −4770% it showed before, and
+that is an artefact of the fix rather than damage from it.** Schemas that used to exceed the
+budget were *excluded* from these statistics entirely; they now complete, so their expansion
+is counted for the first time. The honest way to read the row is that a number which was
+previously hidden has become visible. `o13029` alone renders at 82× its input — see §4 for
+why it is the one schema repeat-suppression cannot reach.
+
+The medians are unchanged by the fix and remain 0.4–1.9 pp below the pre-`patternProperties`
+baseline. That residue is the structural cost of rendering pattern keys, not ref expansion.
 
 Three things this table says that the 300-schema sample could not.
 
@@ -67,10 +81,12 @@ the average below zero. `Github_hard` now shows the same split even more starkly
 −51.3%). A mean over this corpus is a statement about the worst tail, not about typical
 behaviour.
 
-**The tail is a real defect, not noise.** Worst cases reach **−6064%** (JsonSchemaStore) and
-**−4770%** (Github_hard) — schemas rendering ~48–61× *larger* than their own JSON. Two
-distinct causes now feed it: repeated inline `$ref` expansion, and structural
-`patternProperties` rendering (both in §4).
+**The tail was one bug, not two, and it is mostly closed.** Both the expansion tail and the
+`patternProperties` regression traced to a single taint-scoping defect that switched
+back-references off on cyclic schemas. Fixing it took the worst schema from 45× its input to
+**0.35×**, eliminated every timeout, and recovered ~97% of the pattern regression. What
+survives is **56 schemas (0.59%)** that still render larger than their input — one outlier at
+82× (`o13029`, mutual recursion) and a tail where the next worst is 8.67×. See §4.
 
 The headline gap is **not** breadth, it is that JSONish — the default mode — renders five
 fewer keywords than YAML, despite all three sharing `base.py`. Every one of those five is
@@ -293,11 +309,17 @@ worth stating plainly: a `$ref` is expanded **inline at its use site**, so the w
 reachable definition graph is materialised, while raw JSON Schema stores each definition
 once and points at it.
 
-Across the full corpus the worst case per config reaches **−6064%** (JsonSchemaStore),
-**−4770%** (Github_hard), **−2884%** (Github_medium) and **−1437%** (WashingtonPost) — up to
-61× the input. Only `Glaiveai2K` and `Snowplow`, the two configs with *no* cyclic `$ref`
-graphs, stay positive throughout. (This run recorded each config's worst case, not a count
-of how many schemas expand; that count is not claimed here.)
+Across the full corpus the worst case per config now reaches **−23389%** (Github_hard),
+**−1051%** (JsonSchemaStore), **−1031%** (Github_medium) and **−407%** (Kubernetes). Only
+`Glaiveai2K` and `Snowplow`, the two configs with *no* cyclic `$ref` graphs, stay positive
+throughout. The count of affected schemas is now measured rather than left open: **56 of
+9,542 (0.59%)** render larger than their input, and past `o13029`'s 82× the next worst is
+8.67×, with everything outside the top ten under 3×.
+
+`Github_hard`'s −23389% is worse than the −4770% earlier revisions quoted, and that is an
+artefact of the fix rather than damage from it: the schemas driving it used to exceed the
+render budget and be excluded from the statistics entirely. They now complete, so they are
+counted for the first time.
 
 Repeated references are now handled. A definition rendered once is replaced at later
 occurrences by a named back-reference (`object // defined above: Address`) whenever its body
@@ -317,11 +339,12 @@ better in place — the sibling-inline acceptance criterion (two sibling fields 
 body those tests rely on is 158 chars; the smallest definition in the 244-reference schema
 is 409.
 
-**The remaining three are not fixable by repeat-suppression.** They carry 70+ *distinct*
-definitions nested 7 deep, each referenced only ~3 times, so the cost is transitive
-expansion rather than duplication. Closing that requires emitting a leading `$defs` section
-and naming every use site — a change to output shape for all ref-bearing schemas, not yet
-made.
+**⚠️ The paragraph that stood here was wrong — see the correction below.** It claimed the
+remaining three "are not fixable by repeat-suppression" because they carry 70+ *distinct*
+definitions each referenced only ~3 times, and that closing the gap required emitting a
+leading `$defs` section. Profiling the renderer, rather than reasoning about it, shows
+repeat-suppression is exactly the right mechanism and is already implemented — it is
+switched off by a taint bug on the very schemas that need it most.
 
 ### The worst case in the corpus
 
@@ -335,9 +358,86 @@ not a four-schema tail:
 | rendered, before back-references | **49,236,120 chars** |
 | rendered, after back-references | **9,327,895 chars** (5.3× better, still **45× the input**) |
 
-Back-references did real work here — 49 MB down to 9 MB — and still left 45×, because 152
-*distinct* definitions are each materialised transitively. Repeat-suppression cannot reach
-this by construction; only rendering each definition once, in a `$defs` section, can.
+Back-references did real work here — 49 MB down to 9 MB — and still left 45×. The reason is
+**not** that 152 distinct definitions are irreducibly transitive, as this paragraph
+previously asserted. It is that back-references are suppressed almost everywhere on this
+schema by the bug documented next: only **103** of its 51,808 expansions were ever cached.
+
+### Correction (2026-09-15): the tail is a taint-scoping bug, not an architectural limit
+
+`_truncation_epoch` (`base.py:682`) is **global and monotonic**. It is bumped whenever any
+`$ref` re-entry is truncated, and both the body cache and `_emitted_refs` are written only
+if the epoch is unchanged since that frame was entered (`base.py:805-808`,
+`jsonish_formatter.py:261, 268-270`). So a truncation *anywhere* in a subtree poisons
+**every ancestor on the stack**, including unrelated siblings. On a cyclic schema
+truncations are constant, so essentially no definition ever reaches `_emitted_refs`, no
+back-reference can fire, and every use site re-inlines the full body.
+
+Instrumented counts — the instrumented render reproduces this section's own 9,327,895-char
+figure byte for byte, so it is measuring the real thing:
+
+| | `o48404` | `o27039` | `o13029` |
+|--|--:|--:|--:|
+| distinct ref keys | 149 | 40 | **6** |
+| full expansions | **51,808** | 186,102 | **172,617** |
+| expansions cached | 103 | 19 | 10 |
+| expansions tainted, not cached | 51,705 | 186,083 | 172,607 |
+| truncations | 25,960 | 100,744 | 5,005,663 |
+
+`JsonRenderer` alone is expanded **70,207 times** in `o13029` — a schema with six distinct
+definitions.
+
+Neutralising *only* the taint guard, changing nothing else:
+
+| | production | taint neutralised |
+|--|--:|--:|
+| `o48404` | 9,327,895 chars, 27.2 s | **130,673 chars, 0.0 s** |
+| `o27039` | unfinished at 60 s | **9,310 chars, 0.0 s** |
+| `o13029` | unfinished at 120 s | **69,331 chars, 0.0 s** |
+
+`o48404` goes from **45× its input to 0.63×** — a 37% *reduction* — and the full transitive
+closure of its 152 definitions costs ~131 KB, not 9.3 MB. The slowness goes with it.
+
+The guard cannot simply be deleted. It exists because a truncated body is **path-dependent**:
+one containing `recursive: Node` must not be replayed to a clean sibling entitled to a fuller
+expansion, which `tests/test_recursive_models.py:611` pins across all three formatters. The
+defect is the *scope* — the taint is global where it should name only the refs actually
+responsible. `tests/test_recursive_models.py:245` already pins the other half of the correct
+behaviour: a clean sibling must still be cached after an unrelated truncation.
+
+#### The shipped fix, and the one schema it does not reach
+
+`_body_is_replayable` replaces the epoch comparison. A body is refused caching only when a
+ref that truncated *inside* it was already on the expansion path at entry — i.e. when an
+ancestor spent the depth budget, so the same body would render differently elsewhere. A
+truncation a body inflicts on itself leaves it position-independent, and cacheable.
+
+| Schema | before | after | |
+|--------|-------:|------:|--|
+| `o48404` | 9,327,895 chars (45×) | **115,337 (0.35×)** | fixed |
+| `o27039` | unfinished at 60 s | 42,832 chars (2.04×) | terminates |
+| `o69207` | 6,086,552 chars (98×) | 149,514 (2.41×) | much improved |
+| `o13029` | unfinished at 120 s | 3,539,199 (**82×**) | **not fixed** |
+
+Corpus-wide the timeouts disappear entirely — 9–10 slow schemas become **0**, ingestion
+**100.0%** — and only **56 of 9,542 schemas (0.59%)** still render larger than their input.
+Past `o13029` the next worst expander is 8.67×, and everything outside the top ten is under
+3×, so the residue is one outlier and a mild tail, not a class.
+
+**`o13029` is the accepted limit of repeat-suppression.** Its seven definitions are *mutually*
+recursive, so nearly every frame is entered with a ref already on the path that will later
+truncate: replay is accepted twice and refused 148 times, and the refusals are correct — those
+bodies genuinely are position-dependent. Reaching it would require keying the cache by
+remaining depth rather than by ref name, which is a larger change and is not made here. Note
+that an earlier experiment reached 69,331 chars on this schema only by force-caching
+unconditionally, which replays exactly the bodies `test_recursive_models.py:611` forbids —
+smaller output, but not correct output.
+
+A second guard now applies where it never did: JSONish counts its `$ref` expansions against
+`_global_expansion_budget` for the first time, and an exhausted budget renders
+`object // budget exhausted: Name` rather than a bare `object` indistinguishable from an
+untyped one. It fires on **32 of 9,542 schemas (0.34%)**, mostly `WashingtonPost`, and costs
+0.2 pp of mean reduction on that config and nothing measurable anywhere else.
 
 ### The `patternProperties` fix cost tokens, and the bill is measured
 
@@ -406,36 +506,44 @@ hot path exactly:
    302699    1.062   59.997  jsonish_formatter.py:207(process_ref)
 ```
 
-`process_ref` is called 302,699 times even though `_global_expansion_budget` is 150 — the
-budget caps *expansions*, not *calls*, so the cheap cache/"return object" paths still run
-hundreds of thousands of times. But they are not the cost. The cost is quadratic string
-post-processing: a character-at-a-time scanner re-walking a string that inline `$ref`
-expansion keeps regrowing, 118 million list appends deep.
+`process_ref` is called 302,699 times even though `_global_expansion_budget` is 150. The
+explanation offered here — that the budget caps *expansions* rather than *calls* — was too
+generous. JSONish's `process_ref` did not increment `_global_expansion_count` at all
+(contrast `base.py:727`), so in the **default mode the budget was not loose, it was absent**
+— fixed since, along with the taint; see the shipped-fix note above.
+The proximate cost is quadratic string post-processing: a character-at-a-time scanner
+re-walking a string that inline `$ref` expansion keeps regrowing, 118 million list appends
+deep. But that string only regrows because the taint bug above forces the re-expansion —
+fix the taint and the scanner has little left to re-walk.
 
-**9 or 10 of 9,542 schemas (0.1%) exceed a 10 s/schema budget**, all for this reason:
+**Historic — no schema in the corpus exceeds the 10 s budget any more.** Before the taint
+fix, 9 or 10 of 9,542 (0.1%) did, all for this reason:
 
-| Config | Slow schemas |
+| Config | Slow schemas (before the fix) |
 |--------|--------------|
 | Github_hard | `o27039`, `o13029`, and `o69207` *only sometimes* |
 | Github_ultra | `o39449`, `o48404`, `o50639`, `o69209`, `o21764` |
 | JsonSchemaStore | `meta`, `accelerator` |
 
-**The count is 9 or 10, not 10, and the difference is one schema sitting on the fence.**
-Timed alone, `o69207` renders in **7.8 s** before the `patternProperties` change and
-**8.9–9.4 s** after — both under the budget — but it crosses 10 s inside a full sweep, under
-the memory pressure of nine other configs. So it is excluded from some runs and included in
-others, and because it expands to **6,086,552 characters from a 62 KB input (98×)** its
-presence or absence swings that config's mean and worst case violently: `Github_hard`'s
-worst case reads **−30089%** on runs where it completes and **−4770%** on runs where it
-times out. Its render is byte-identical across both commits, so this is a pre-existing
-`$ref` monster, not a pattern casualty.
+The count was 9 **or** 10, and the difference was one schema sitting on the fence. Timed
+alone, `o69207` rendered in **7.8 s** before the `patternProperties` change and **8.9–9.4 s**
+after — both under the budget — but it crossed 10 s inside a full sweep, under the memory
+pressure of nine other configs. So it was excluded from some runs and included in others, and
+because it expanded to **6,086,552 characters from a 62 KB input (98×)**, its presence or
+absence swung that config's mean and worst case violently: `Github_hard`'s worst case read
+**−30089%** on runs where it completed and **−4770%** on runs where it timed out.
 
-Treat `Github_hard`'s mean and worst as unstable statistics. The medians, and every other
-config, are reproducible.
+This is recorded rather than deleted because it explains why three separate runs of this
+report disagreed about `Github_hard`, and because "the measurement is unstable" is itself a
+finding. It no longer applies: `o69207` now renders 149,514 chars and every config's slow
+column is empty, so the means and worst cases in §1 are reproducible.
 
 Note what is *not* on this list: cyclic schemas as a class. 371 of 9,542 (3.9%) have cyclic
-`$ref` graphs — 189 in `Github_hard` alone — and the re-entry guard handles them. Cycles are
-survivable; unbounded *width* of distinct-definition expansion is what is not.
+`$ref` graphs — 189 in `Github_hard` alone — and the re-entry guard keeps them terminating.
+But the claim that closed this paragraph, that "unbounded *width* of distinct-definition
+expansion" is the unsurvivable case, had it backwards. A cycle is precisely what triggers
+the truncation that poisons the cache, so cyclicity is the *cause* of the width, not an
+alternative to it: `o13029` has **six** distinct definitions and five million truncations.
 
 ---
 
@@ -474,23 +582,24 @@ is a materially cheaper problem, and it is the honest form of the claim.
 
 ## 6. Recommendations, in measured priority order
 
-1. **Emit a `$defs` section.** Render each definition once and name every use site. This is
-   the only fix for transitive expansion, and the full-corpus run makes it the dominant
-   failure mode at the hard end: worst cases of **−6064%** (JsonSchemaStore) and **−4770%**
-   (Github_hard), plus the **9–10 schemas** too slow to render inside 10 s. `o48404` is
-   still 45× its input after back-references have done their work. Changes output shape for
-   every ref-bearing schema, so it wants its own decision — but the evidence is far stronger
-   than the easy-slice sample suggested.
+1. ~~**Scope the `_truncation_epoch` taint.**~~ **Done.** This item previously read "emit a
+   `$defs` section", on the strength of a claim §4 now retracts; the dominant expansion
+   failure mode was a **bug**, not an architectural limit. `_body_is_replayable` now refuses
+   a body only when an ancestor caused its truncation. Corpus effect: timeouts **9–10 → 0**,
+   ingestion **100.0%**, `o48404` **45× → 0.35×**, and only 0.59% of schemas still expand. No
+   output-shape change and no indirection added, which is why it replaced the `$defs` section
+   rather than preceding it. JSONish also gained the `_global_expansion_count` accounting it
+   never had, and budget exhaustion is now marked rather than silent. **`o13029` (82×)
+   remains**, as the accepted limit of repeat-suppression under mutual recursion — closing it
+   needs depth-keyed caching, which is a separate decision.
 
-   This is now also the fix for the `patternProperties` regression below it: that keyword
-   expands badly *because* each pattern's value schema re-materialises the refs it carries.
-   Rendering definitions once would collapse both tails at the same time.
-
-2. **Cap the `patternProperties` structural render.** New, and the only *regression* on this
-   list: pattern-bearing schemas lost 5–459 pp of compaction (§4), with 114 of 141 measured
-   schemas rendering larger. Falling back to the one-line comment form when a structural
-   render exceeds some multiple of its input would keep the coverage win on ordinary
-   schemas and bound the tail. Measure the multiple before picking it.
+2. **Cap the `patternProperties` structural render — probably unnecessary, re-measure
+   first.** The regression logged in §4 is ~97% a symptom of item 1: with the taint
+   neutralised, the worst pattern-bearing schemas move from a median of **−645.5% to −0.7%**.
+   What remains is ~20 pp on ref-bearing pattern schemas, three ref-free schemas losing
+   50–62 pp, and an 81-schema tail averaging ~5 pp — and none of it *expands*: those three
+   ref-free cases still compact by 36–44%. Build a cap only if a post-fix corpus run finds a
+   schema whose render genuinely exceeds its input. Less compaction is not a bug.
 3. ~~**Surface `patternProperties` in JSONish.**~~ **Done**, and the reasoning that stood
    here was wrong. This item asserted it was *not* a `classify_container` change, because
    Decision C1 excludes `patternProperties` from `mapping` deliberately. That conclusion
