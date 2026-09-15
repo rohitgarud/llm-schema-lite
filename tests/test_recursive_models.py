@@ -231,14 +231,21 @@ def test_non_recursive_ref_is_identical_at_every_depth(
 
 
 @pytest.mark.parametrize("formatter_cls", [YAMLFormatter, TypeScriptFormatter])
-def test_truncated_rendering_is_never_cached(
+def test_self_inflicted_truncation_is_still_cached(
     formatter_cls: type[BaseFormatter],
 ) -> None:
-    """Taint-and-skip: a truncated body stays out of ``_ref_cache``."""
+    """A body that truncated only because of its OWN recursion may be replayed.
+
+    Renamed and flipped from ``test_truncated_rendering_is_never_cached``, which asserted
+    ``"Node" not in _ref_cache``. ``Node`` is expanded here from an empty expansion path,
+    so nothing above it spent the depth budget: the body is the same wherever it appears.
+    The old rule refused every such body, which is what disabled back-references across
+    all 371 cyclic corpus schemas.
+    """
     formatter = _formatter(formatter_cls, RECURSIVE_DEFS_SCHEMA, depth=1)
     formatter.process_ref({"$ref": "#/$defs/Node"})
 
-    assert "Node" not in formatter._ref_cache
+    assert "Node" in formatter._ref_cache
 
 
 @pytest.mark.parametrize("formatter_cls", [YAMLFormatter, TypeScriptFormatter])
@@ -603,13 +610,26 @@ def test_max_recursion_depth_negative_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §2.4 — truncated renderings must never reach the cache
+# §2.4 — a truncated rendering may only be cached when it is position-independent
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("formatter_cls", [JSONishFormatter, TypeScriptFormatter, YAMLFormatter])
 def test_truncated_rendering_is_not_cached(formatter_cls: type[BaseFormatter]) -> None:
-    """A later sibling gets a full body, and the clean sibling is still cached."""
+    """A later sibling gets a full body, and the clean sibling is still cached.
+
+    The cache assertion below was ``"Node" not in cache`` until the taint was scoped.
+    ``Node`` is now cached, and that is safe here: ``rec`` is expanded from an EMPTY
+    expansion path, so the truncation inside it is self-inflicted and the body renders
+    identically at every other use site -- which is why the two output assertions above
+    are unchanged, byte for byte. Refusing the cache cost the whole corpus: the same
+    global guard blocked every cyclic schema, so nothing was ever named and `o48404`
+    rendered 45x its input.
+
+    A genuinely position-dependent body is still refused, because that frame is entered
+    with the truncating ref already on the path -- see `_body_is_replayable` and
+    ``test_clean_sibling_is_still_cached_after_a_truncation`` above.
+    """
     formatter = _formatter(formatter_cls, SIBLING_SCHEMA, depth=2)
     out = formatter.transform_schema()
 
@@ -618,8 +638,8 @@ def test_truncated_rendering_is_not_cached(formatter_cls: type[BaseFormatter]) -
     assert tail.count("name") == 2, tail
 
     cache = getattr(formatter, CACHE_ATTRIBUTE[formatter_cls])
-    assert "Node" not in cache  # the poisoning guard -- holds for all three formats
     if formatter_cls is not YAMLFormatter:
+        assert "Node" in cache  # self-inflicted truncation -> replayable
         # YAML's property-level block builder bypasses _ref_cache by design: it never reaches
         # base.process_ref, the cache's only writer. Caching a real dict would let PyYAML
         # emit &id001/*id001 aliases for a def referenced by two properties.

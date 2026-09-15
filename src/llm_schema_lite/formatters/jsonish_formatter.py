@@ -234,6 +234,20 @@ class JSONishFormatter(BaseFormatter):
         else:
             return "object"
 
+        # Unconditional safety net, mirroring base.process_ref. JSONish never counted its
+        # own expansions, so the 150-expansion budget governed YAML and TypeScript but not
+        # the default mode -- the one that rendered 51,808 expansions on o48404. Marked
+        # rather than returned bare, with the same keyed/unkeyed split as the truncation
+        # branch below: an unmarked `object` cannot be told apart from an untyped one.
+        if self._global_expansion_count >= self._global_expansion_budget:
+            if key is not None:
+                self.pending_recursion[key] = f"budget exhausted: {_ref}"
+                return "object"
+            # Unkeyed: the terminated block form, since a `//` would swallow the rest of
+            # the line. Deliberately NOT `budget_placeholder`, which emits the `//` form
+            # for a keyed slot -- same split as the truncation branch two blocks below.
+            return f"object /* budget exhausted: {_ref} */"
+
         if self._reentry_truncated(_ref):
             if key is not None:
                 self.pending_recursion[key] = f"recursive: {_ref}"
@@ -258,14 +272,16 @@ class JSONishFormatter(BaseFormatter):
         if _ref in self.processed_ref_cache:
             output = self.processed_ref_cache[_ref]
         else:
-            entry_epoch = self._truncation_epoch
+            entry_path = tuple(self._ref_expansion_path)
+            entry_log = len(self._truncation_log)
+            self._global_expansion_count += 1
             self._ref_expansion_path.append(_ref)
             try:
                 output = self._process_schema_recursive(_def)
             finally:
                 if self._ref_expansion_path and self._ref_expansion_path[-1] == _ref:
                     self._ref_expansion_path.pop()
-            if self._truncation_epoch == entry_epoch:
+            if self._body_is_replayable(entry_path, entry_log):
                 self.processed_ref_cache[_ref] = output
                 self._emitted_refs.add(_ref)
         if "default" in value and self.config.includes("default"):

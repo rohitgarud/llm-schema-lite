@@ -689,6 +689,10 @@ class YAMLFormatter(BaseFormatter):
         """
         return f"object{self.defer_comment(f'recursive: {type_name}')}"
 
+    def budget_placeholder(self, type_name: str) -> str:
+        """Deferred, for the same plain-scalar reason as ``recursion_placeholder``."""
+        return f"object{self.defer_comment(f'budget exhausted: {type_name}')}"
+
     def add_metadata(self, representation: str, value: dict[str, Any]) -> str:
         """
         Add metadata comments to a field representation (JSONish parity:

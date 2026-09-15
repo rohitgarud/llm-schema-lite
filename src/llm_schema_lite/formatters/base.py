@@ -323,13 +323,18 @@ class BaseFormatter(ABC):
         A second occurrence of the same ``$ref`` renders a named back-reference instead of
         another copy of the body: a schema with 244 references over 9 definitions was
         emitting 244 inlined bodies, which is how a 7,482-token schema rendered as 329,124
-        tokens. Membership is added under the SAME ``_truncation_epoch`` guard that gates
-        ``_ref_cache``, so a rendering that truncated mid-way never counts as emitted and a
-        later sibling still gets its full body (see
-        ``test_truncated_rendering_is_not_cached``). Distinct from ``_ref_expansion_path``,
-        which tracks what is *currently* being expanded, i.e. cycles.
+        tokens. Membership is added under the SAME ``_body_is_replayable`` guard that gates
+        ``_ref_cache``, so a rendering whose truncation depended on an ancestor never counts
+        as emitted and a later sibling still gets its full body. Distinct from
+        ``_ref_expansion_path``, which tracks what is *currently* being expanded, i.e. cycles.
         """
         self._truncation_epoch = 0  # Monotonic count of recursion truncations
+        self._truncation_log: list[str] = []
+        """Ref keys truncated so far this render, in order, one entry per truncation.
+
+        ``_truncation_epoch`` counts truncations but cannot say WHICH ref truncated, and
+        that difference decides whether a body may be replayed. See ``_body_is_replayable``.
+        """
         self._root_ref_key: str | None = None  # def name adopted by _adopt_root_ref()
         self._nested_required_stack: list[set[str]] = []
 
@@ -427,6 +432,18 @@ class BaseFormatter(ABC):
         """
         return f"object  {self.comment_prefix} defined above: {type_name}"
 
+    def budget_placeholder(self, type_name: str) -> str:
+        """Token emitted where ``_global_expansion_budget`` stopped a ``$ref`` expanding.
+
+        Third sibling of ``recursion_placeholder`` and ``backreference_placeholder``. This
+        site used to emit a bare ``object``, indistinguishable from an unresolvable ref or a
+        genuinely untyped one: the model could not tell "there is more here that was
+        dropped" from "this really is an object". Naming it matters more now that the budget
+        is enforced in JSONish too -- it fires on 32 of 9,542 corpus schemas, which before
+        this were silently truncated in the default mode.
+        """
+        return f"object  {self.comment_prefix} budget exhausted: {type_name}"
+
     def _backreference_instead_of_body(self, ref_key: str, body: Any) -> bool:
         """Whether a REPEAT occurrence of ``ref_key`` should be named rather than inlined.
 
@@ -442,6 +459,27 @@ class BaseFormatter(ABC):
         """
         return ref_key in self._emitted_refs and len(str(body)) > self.BACKREFERENCE_MIN_CHARS
 
+    def _body_is_replayable(self, entry_path: tuple[str, ...], entry_log: int) -> bool:
+        """Whether a body just rendered may be cached and replayed at other use sites.
+
+        ``entry_path`` is the expansion path as it stood when this frame was entered, and
+        ``entry_log`` the length of ``_truncation_log`` at that same moment, so
+        ``_truncation_log[entry_log:]`` is exactly the truncations this body caused.
+
+        The test this replaces asked only "did the truncation counter move while I was
+        rendering?", which refused to cache any body containing ANY truncation. On a cyclic
+        schema that is nearly every body, so nothing was cached, no back-reference could
+        fire, and every use site re-inlined a full copy: `o48404` rendered 51,808 expansions
+        of which 103 were cached, turning 208 KB of input into 9.3 MB of output.
+
+        A truncation only makes a body position-dependent when the truncated ref was already
+        on the path ABOVE this frame -- only then was the depth budget spent by an ancestor
+        rather than by the body itself, so the same body would render differently elsewhere.
+        A body whose truncations are all self-inflicted renders identically wherever it
+        appears, and is safe to replay.
+        """
+        return not any(ref_key in entry_path for ref_key in self._truncation_log[entry_log:])
+
     def _reset_ref_state(self) -> None:
         """Reset per-render $ref expansion state so the depth budget is deterministic."""
         self._ref_cache.clear()
@@ -449,6 +487,7 @@ class BaseFormatter(ABC):
         self._emitted_refs.clear()
         self._global_expansion_count = 0
         self._truncation_epoch = 0
+        self._truncation_log.clear()
 
     def get_available_metadata(self, value: dict[str, Any]) -> list[str]:
         """
@@ -673,13 +712,15 @@ class BaseFormatter(ABC):
     def _reentry_truncated(self, ref_key: str) -> bool:
         """The one truncation contract: same-key re-entries on the active expansion path.
 
-        **Bumps ``_truncation_epoch`` when it returns True** -- the taint marker that keeps a
-        truncated subtree out of ``_ref_cache``, which every call site set by hand before.
-        Query only: the global-budget guard and increment stay at the two sites that own them.
+        **Records the truncation when it returns True** -- both the ``_truncation_epoch``
+        counter and ``_truncation_log``, which names the ref so ``_body_is_replayable`` can
+        tell a self-inflicted truncation from one an ancestor caused. Query only: the
+        global-budget guard and increment stay at the two sites that own them.
         """
         reentries = self._ref_expansion_path.count(ref_key)
         if reentries >= 1 and reentries >= self.config.max_recursion_depth:
             self._truncation_epoch += 1
+            self._truncation_log.append(ref_key)
             return True
         return False
 
@@ -706,7 +747,7 @@ class BaseFormatter(ABC):
 
         # Unconditional safety net.
         if self._global_expansion_count >= self._global_expansion_budget:
-            return "object"  # Hit global budget limit
+            return self.budget_placeholder(ref_key)
 
         if self._reentry_truncated(ref_key):
             return self.recursion_placeholder(ref_key)
@@ -723,7 +764,8 @@ class BaseFormatter(ABC):
         if ref_key in self._ref_cache:
             return self._ref_cache[ref_key]
 
-        entry_epoch = self._truncation_epoch
+        entry_path = tuple(self._ref_expansion_path)
+        entry_log = len(self._truncation_log)
         self._global_expansion_count += 1
         self._ref_expansion_path.append(ref_key)
 
@@ -746,7 +788,7 @@ class BaseFormatter(ABC):
             if isinstance(ref_def, bool):
                 # Handle boolean values in JSON Schema: true means any value, false means no value
                 ref_str = "any" if ref_def else "never"
-                if self._truncation_epoch == entry_epoch:
+                if self._body_is_replayable(entry_path, entry_log):
                     self._ref_cache[ref_key] = ref_str
                 return ref_str
 
@@ -802,8 +844,8 @@ class BaseFormatter(ABC):
                 else:
                     ref_str = "object"
 
-            # Taint-and-skip: never cache a rendering that truncated.
-            if self._truncation_epoch == entry_epoch:
+            # Never cache a rendering whose truncation depended on context outside it.
+            if self._body_is_replayable(entry_path, entry_log):
                 self._ref_cache[ref_key] = ref_str
                 self._emitted_refs.add(ref_key)
             return ref_str
