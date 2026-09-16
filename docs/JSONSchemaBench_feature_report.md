@@ -75,11 +75,13 @@ Three things this table says that the 300-schema sample could not.
 reduction, from 31.4% (Kubernetes) to 57.0% (Github_trivial). It erodes with difficulty
 (57.0 → 52.9 → 46.7 → 40.1 across the Github ladder) but never inverts.
 
-**Quote the median, never the mean.** `WashingtonPost` has a median of **+49.1%** and a mean
-of **−51.4%**: the typical schema compacts by half while a few catastrophic expansions drag
-the average below zero. `Github_hard` now shows the same split even more starkly (40.1% vs
-−51.3%). A mean over this corpus is a statement about the worst tail, not about typical
-behaviour.
+**Quote the median, never the mean.** The split survives the §4 fix even though the sign no
+longer flips: `Github_hard` medians **40.1%** against a mean of **13.9%**, and `WashingtonPost`
+**49.1%** against **36.0%**. A few catastrophic expansions — `Github_hard`'s worst single schema
+still reads −23389% — pull the average far below the typical schema, without dragging it under
+zero any more. A mean over this corpus is a statement about the worst tail, not about typical
+behaviour. *(This paragraph previously quoted means of −51.4% and −51.3%: pre-fix figures that
+outlived the table they were describing.)*
 
 **The tail was one bug, not two, and it is mostly closed.** Both the expansion tail and the
 `patternProperties` regression traced to a single taint-scoping defect that switched

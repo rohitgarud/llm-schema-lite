@@ -29,6 +29,7 @@ from tests.dspy_helpers import (  # noqa: E402
     ImageListIn,
     ListOut,
     OptImageIn,
+    Person,
     QAOptional,
     ToolCallSig,
     ToolInputSig,
@@ -731,6 +732,33 @@ class TestOutputSchemaIsBoundToItsFieldName:
         )
         assert '"answer": {answer}' in out
         assert '\n"answer":' not in out
+
+
+class TestNestedModelInputs:
+    """A Pydantic model used as an InputField renders structurally, nesting included.
+
+    Every other BaseModel input in this suite is flat, so the claim that existing models --
+    nested ones, and lists of them -- drop into a signature unchanged had nothing pinning it.
+    """
+
+    def test_nested_model_inputs_render_their_nested_bodies(self):
+        """Person carries an Address one level down. Both it and list[Person] must show that
+        nested body rather than collapsing to a bare {person} marker."""
+        sig = dspy.Signature(
+            {
+                "person": (Person, dspy.InputField()),
+                "people": (list[Person], dspy.InputField()),
+                "answer": (str, dspy.OutputField()),
+            }
+        )
+        out = make_adapter(OutputMode.JSONISH).format_field_structure(sig)
+        inputs = out[: out.index("[[ ## answer ## ]]")]
+
+        assert inputs.count(NOTE_INPUT_SCHEMA) == 2
+        assert "Full name" in inputs  # Field(description=...) survives the trip
+        for nested in ("street*: string", "city*: string", "country: string"):
+            assert nested in inputs, nested
+        assert "[{" in inputs  # list[Person] keeps its array wrapper
 
 
 class TestFieldConstraintRendering:
