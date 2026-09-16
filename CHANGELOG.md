@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The README documents the JSONSchemaBench results and the Pydantic-model reuse path.** A
+  `JSON Schema Coverage` section carries the measured corpus figures -- 9,542 schemas across
+  10 configs, 100.0% ingestion, zero errors and zero timeouts, a 46.8% median token reduction
+  -- alongside the keyword comparison against constrained-decoding engines (`oneOf`,
+  `patternProperties`, `not` and `contains` are unsupported by every engine in the benchmark
+  and render here) and the `$ref` expansion failure mode it does not hide: 56 schemas (0.59%)
+  still render larger than their input, `o13029` at 82x. A second section shows an existing
+  Pydantic model dropped into a DSPy signature unchanged, on inputs as well as outputs, with
+  nesting and field metadata intact; it is qualified to JSONISH/YAML, since `OutputMode.JSON`
+  skips the compact tiers and sends raw JSON Schema. Every figure is taken from the report's
+  regenerated tables rather than its prose.
+
+- **`TestNestedModelInputs` pins a nested `BaseModel` used as a DSPy `InputField`.** Every
+  other BaseModel input in the suite is flat, so the claim that an existing model -- a nested
+  one, or a list of them -- drops into a signature unchanged had nothing behind it. The test
+  renders `Person` (which carries an `Address` one level down) and `list[Person]`, asserting
+  the nested body, the `Field(description=...)` text and the array wrapper all survive. It was
+  checked against its own negative: with `include_input_schemas=False` all four of its probes
+  disappear from the prompt, so it fails if the behaviour regresses.
+
 - **`StructuredOutputAdapter(force_response_schema=...)`, default `False`.** Sends the
   signature's JSON Schema as `response_format` even when litellm reports the LM cannot
   accept one. litellm answers `supports_response_schema=False` for every locally-served
@@ -36,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unix- and main-thread-only; that is where the sweep runs.
 
 ### Fixed
+
+- **The feature report no longer claims the corpus means fall below zero.** Its "quote the
+  median, never the mean" paragraph still carried `WashingtonPost` at -51.4% and `Github_hard`
+  at -51.3%: pre-taint-fix figures that outlived the table above them, which now reads +36.0%
+  and +13.9%. The stale numbers were the smaller half of the error -- the paragraph asserted
+  that a few catastrophic expansions "drag the average below zero", and after the fix no
+  config mean is negative at all. Rewritten from the table, keeping the point it was making
+  (`Github_hard` medians 40.1% against a mean of 13.9%, and its worst single schema still
+  reads -23389%) and recording the superseded figures rather than quietly overwriting them.
 
 - **A `$ref` body is no longer refused caching because something unrelated truncated.**
   `_truncation_epoch` was global and monotonic: any recursion truncation bumped it, and both
