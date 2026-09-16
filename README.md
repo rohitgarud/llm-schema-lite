@@ -16,6 +16,13 @@ instructions: brace-balanced extraction, JSON repair, and opt-in rescue for the 
 
 Framework agnostic by construction: the package turns a schema into a string and a reply back into a model, so it drops into the OpenAI SDK, any OpenAI-compatible endpoint, or a framework like DSPy without tying you to any of them.
 
+It takes **raw JSON Schema as readily as a Pydantic model**, and it aims at the whole of the
+specification rather than a convenient subset. Measured over
+[JSONSchemaBench](https://huggingface.co/datasets/epfl-dlab/JSONSchemaBench) — **9,542
+real-world schemas across 10 configs** — ingestion is **100%**, with **zero** errors and
+**zero** timeouts, at a **46.8% median token reduction**.
+[What that does and doesn't claim ↓](#-json-schema-coverage)
+
 ### Using DSPy?
 
 ```python
@@ -301,6 +308,83 @@ so the nested value arrives as a plain `dict` — `user.address` above is
 `{'street': ..., 'city': ...}`, not an `Address` instance. Re-validate the result yourself if
 you need the nested type rather than the nested data.
 
+## 📐 JSON Schema Coverage
+
+The goal is the whole specification, not a comfortable subset — so it is measured rather than
+asserted, against [JSONSchemaBench](https://huggingface.co/datasets/epfl-dlab/JSONSchemaBench)
+(`epfl-dlab/JSONSchemaBench`): **10 configs, 9,542 real-world schemas**, from `Github_trivial`
+through `Github_ultra`, Kubernetes, Snowplow and the JSON Schema Store.
+
+| Measured over all 9,542 | |
+|---|---|
+| Ingested without error | **9,542 / 9,542 (100.0%)** |
+| Schemas that raise | **0** |
+| Too slow to render (10 s/schema budget) | **0** |
+| Median token reduction | **46.8%** — per-config medians span 31.4%–57.0% |
+| Keywords rendered | JSONish **32/39** · YAML **33/39** · TypeScript **31/39** |
+| Validation | full Draft 2020-12 via `jsonschema` |
+
+Reproduce it yourself — the dataset fetch is ~100 MB:
+
+```bash
+uv run python -m benchmarking.jsonschemabench.fetch_dataset
+uv run python -m benchmarking.jsonschemabench.coverage --all-configs
+```
+
+Two qualifications, because the headline invites a stronger reading than it supports.
+
+**Rendering and validation are different surfaces.** Every keyword is *validated* — the full
+draft, enforced by `jsonschema`, whether or not it reaches the prompt. The `32/39` counts only
+what survives into the schema string. Those gaps are also the corpus's rarest keywords:
+`minProperties` 1.6%, `maxProperties` 0.6%, `if`/`then` 0.5%, `else` 0.2%,
+`unevaluatedProperties` 0.02% — and `dependentRequired` never appears in the corpus at all.
+
+**Quote the median, never the mean.** `Github_hard` has a median reduction of **40.1%** against
+a mean of **13.9%**: the typical schema compacts by half while a handful of pathological ones
+drag the average down. A mean over this corpus describes its worst tail, not its behaviour.
+
+### Against constrained-decoding engines
+
+A different mechanism — a grammar constrains the sampler, we write the prompt — but the same
+question of what actually reaches the model:
+
+| Feature | LLGuidance | llama.cpp | Outlines | XGrammar | OpenAI | Gemini | **llm-schema-lite** |
+|---|---|---|---|---|---|---|---|
+| oneOf | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | **✅** |
+| patternProperties | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | **✅** |
+| not | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | **✅** |
+| contains | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | **✅** |
+| min/max (integer) | ✔ | ✔ | ❌ | ❌ | ❌ | ❌ | **✅** |
+| minLength / maxLength | ✔ | ✔ | ✔ | ❌ | ❌ | ❌ | **✅** |
+| pattern | ✔ | ✔ | ✔ | ✔ | ❌ | ❌ | **✅** |
+| if / then / else | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+The asymmetry is the point: their gaps are **architectural** — an FSM or grammar cannot express
+`if/then/else`, `not`, or unbounded recursion. Ours are **implementation debt** — already parsed
+and validated, simply not yet rendered into the string.
+
+### The known failure mode: `$ref` expansion
+
+Worth stating plainly rather than burying. A `$ref` is expanded **inline at its use site**, so a
+cyclic or heavily-shared definition graph can render *larger* than the raw schema it came from.
+A definition rendered once is replaced at later sites by a named back-reference
+(`object // defined above: Address`), which is what keeps this rare:
+
+- **56 of 9,542 schemas (0.59%)** still render larger than their input.
+- Past the single worst case, the next is **8.67×**, and everything outside the top ten is
+  under **3×**.
+- The worst, `o13029`, renders at **82×** — seven *mutually* recursive definitions, and the
+  accepted limit of repeat-suppression. Closing it needs depth-keyed caching, which is a
+  separate decision, not a bug fix.
+- Where a `$ref` exhausts the expansion budget the output **says so** —
+  `object // budget exhausted: Name` — instead of emitting a bare `object` indistinguishable
+  from an untyped one. Fires on **32 schemas (0.34%)**.
+
+For scale: the worst schema in the corpus used to render at **45×** its input and time out.
+Scoping one over-broad cache-invalidation rule took it to **0.35×**, removed every timeout, and
+is what moved ingestion to 100%. Full methodology, per-config tables, and the profiling behind
+that fix are in [the JSONSchemaBench report](docs/JSONSchemaBench_feature_report.md).
+
 ## 🔌 Use It With Any SDK
 
 There is no LLM client dependency here. The package renders a schema **to a string** and
@@ -443,6 +527,72 @@ marker, values are type tokens (`string`, `int OR null`), and constraints ride i
 The output is YAML-flavoured and optimised for LLM prompts — it currently round-trips
 through `yaml.safe_load` and the test suite guards that, but it is not a serialization
 format, so do not build a consumer on its shape.
+
+### Your existing Pydantic models, unchanged
+
+You do not flatten your domain into scalar `InputField`s, and you do not maintain a second set
+of models for DSPy. Annotate with the models you already have — **on inputs as well as
+outputs** — and the compact schema is rendered for both:
+
+```python
+import dspy
+from pydantic import BaseModel, Field
+
+from llm_schema_lite.dspy_integration import OutputMode, StructuredOutputAdapter
+
+
+class Address(BaseModel):
+    street: str = Field(min_length=3, description="Street name")
+    zipcode: str = Field(pattern=r"^[0-9]{5}$", description="ZIP")
+
+
+class Company(BaseModel):
+    name: str = Field(description="Company name")
+    hq: Address
+    branches: list[Address] = Field(description="Branch offices")
+
+
+class Summarise(dspy.Signature):
+    """Summarise the company."""
+
+    company: Company = dspy.InputField()
+    summary: str = dspy.OutputField()
+
+
+adapter = StructuredOutputAdapter(output_mode=OutputMode.JSONISH)
+print(adapter.format_field_structure(Summarise))
+```
+
+The **input** block carries the nested schema, its constraints and its descriptions intact:
+
+```
+[[ ## company ## ]]
+{company}        # note: this value follows the schema:
+//Title: Company
+{
+  name*: string // Company name,
+  hq*: {
+    street*: string (>= 3 chars) // Street name,
+    zipcode*: string (PATTERN: ^[0-9]{5}$) // ZIP
+  },
+  branches*: [{ ... }]  // Branch offices
+}
+```
+
+Three consequences worth stating outright:
+
+- **Pydantic stays the single source of truth.** `description`, `ge`/`le`, `min_length` /
+  `max_length` and `pattern` all survive into the prompt — inside nested models and inside
+  `list[Model]` items alike. Field metadata lives on the field, rather than being restated in a
+  signature docstring and drifting from the model it describes.
+- **Nothing here is DSPy-specific.** No base class, no mixin, no decorator, no registration
+  step: the adapter reads the raw annotation. The same `Company` serves your API layer, your
+  database code and your DSPy program.
+- **Nesting is followed** — models within models, and lists of models.
+
+Two limits to know. Compact input schemas are a **`JSONISH`/`YAML`** feature: `OutputMode.JSON`
+sends the verbose raw JSON Schema instead. And `include_input_schemas=False` (default `True`)
+turns input schemas off altogether when you want a shorter prompt.
 
 Every other constructor option — `formatter_config` / `parse_config` forwarding,
 `prompt_layout`, the `json_object` response-format flag and its tool-call interaction,
