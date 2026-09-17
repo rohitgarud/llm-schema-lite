@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The sdist stops shipping committed benchmark runs, and is 673 KB rather than 2.1 MB.**
+  `[tool.hatch.build.targets.sdist]` excludes `benchmarking/*/results` -- 16 MB uncompressed
+  against 217 KB of harness code, growing with every accuracy run committed. It is why the
+  0.6.1 sdist was 333 KB and the 0.7.0 one 1.78 MB. The harness itself still ships, so the
+  sdist stays reproducible; only the recorded outputs are gone, and they are in the repo.
+  `SHOW_AND_TELL.md` is excluded on the same list: untracked but not gitignored, so hatch had
+  been vendoring a draft git has never carried into the published artefact. The wheel is
+  unaffected either way.
+
 - **`FormatterConfig.max_ref_expansions` (default 150) and
   `FormatterConfig.backreference_min_chars` (default 200).** Both thresholds were previously
   unreachable: the expansion budget was a literal in `BaseFormatter.__init__` and the

@@ -80,6 +80,19 @@ Changelog = "https://github.com/rohitgarud/llm-schema-lite/blob/main/CHANGELOG.m
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_schema_lite"]
 
+[tool.hatch.build.targets.sdist]
+# The benchmark HARNESS ships (the sdist should stay reproducible); its recorded runs do
+# not. `results/` is 16 MB uncompressed against 217 KB of harness code, it grows with every
+# accuracy run committed, and a PyPI upload is permanent -- 0.6.1's sdist was 333 KB, 0.7.0's
+# 1.78 MB, entirely from this directory. Read the CSVs in the repo, not from an install.
+#
+# SHOW_AND_TELL.md is untracked but NOT gitignored, so hatch vendored it into the sdist even
+# though git has never carried it. Excluded so a draft cannot be published by accident.
+exclude = [
+    "/benchmarking/*/results",
+    "/SHOW_AND_TELL.md",
+]
+
 [tool.hatch.version]
 path = "src/llm_schema_lite/__init__.py"
 
