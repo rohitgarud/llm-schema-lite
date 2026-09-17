@@ -5,3 +5,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+
+  # Nothing watched the workflows, which is how checkout/setup-uv sat on the deprecated
+  # Node 20 runtime until the runner started forcing them onto Node 24 and annotating
+  # every job. Note that setup-uv publishes floating major tags only up to v7 -- v8+ are
+  # releases with no `vN` tag, so a bare `@v10` does not resolve.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v7
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
       # --locked: this job's contract is "the LOCKED dependency set works".
@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v7
       - name: Set up Python
         run: uv python install 3.12
       # No --locked here: deviating from the lock is this job's entire purpose.
@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v7
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
@@ -92,7 +92,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v7
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies

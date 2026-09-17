@@ -97,9 +97,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **CI actions no longer target the deprecated Node.js 20.** `actions/checkout` v4 -> v7 and
-  `astral-sh/setup-uv` v4 -> v10 across `ci.yaml` and `publish.yaml`; both now declare
+  `astral-sh/setup-uv` v4 -> v7 across `ci.yaml` and `publish.yaml`; both now declare
   `using: node24`, so the runner stops forcing them onto Node 24 and annotating every job.
   Neither is passed any input, which is why the major bumps are safe to take in one step.
+  `setup-uv` is on v7 rather than its newest release (v10) because it publishes floating
+  major tags only through v7 -- v8 onward are releases with no `vN` tag, and `@v10` does not
+  resolve. Dependabot now watches `github-actions` as well as `pip`, which is the reason both
+  actions sat on Node 20 long enough to be deprecated under them.
 
 - **The feature report no longer claims the corpus means fall below zero.** Its "quote the
   median, never the mean" paragraph still carried `WashingtonPost` at -51.4% and `Github_hard`
