@@ -325,7 +325,7 @@ counted for the first time.
 
 Repeated references are now handled. A definition rendered once is replaced at later
 occurrences by a named back-reference (`object // defined above: Address`) whenever its body
-exceeds `BaseFormatter.BACKREFERENCE_MIN_CHARS` (200). Measured effect:
+exceeds `FormatterConfig.backreference_min_chars` (default 200). Measured effect:
 
 | Schema | refs | distinct defs | before | after |
 |--------|------|---------------|--------|-------|
@@ -436,10 +436,11 @@ unconditionally, which replays exactly the bodies `test_recursive_models.py:611`
 smaller output, but not correct output.
 
 A second guard now applies where it never did: JSONish counts its `$ref` expansions against
-`_global_expansion_budget` for the first time, and an exhausted budget renders
-`object // budget exhausted: Name` rather than a bare `object` indistinguishable from an
-untyped one. It fires on **32 of 9,542 schemas (0.34%)**, mostly `WashingtonPost`, and costs
-0.2 pp of mean reduction on that config and nothing measurable anywhere else.
+`FormatterConfig.max_ref_expansions` (default 150) for the first time, and an exhausted
+budget renders `object // budget exhausted: Name` rather than a bare `object`
+indistinguishable from an untyped one. It fires on **32 of 9,542 schemas (0.34%)**, mostly
+`WashingtonPost`, and costs 0.2 pp of mean reduction on that config and nothing measurable
+anywhere else.
 
 ### The `patternProperties` fix cost tokens, and the bill is measured
 

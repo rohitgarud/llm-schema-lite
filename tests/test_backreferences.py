@@ -335,3 +335,74 @@ def test_budget_exhaustion_is_marked_not_silent(fmt: FormatName, marker: str) ->
     # The budget stopped expansion; it must not have stopped the render.
     assert out.count("budget exhausted:") < 200
     assert "value number 0" in out
+
+
+# --- The two thresholds as configuration -------------------------------------------
+#
+# Both were hard-coded: `BACKREFERENCE_MIN_CHARS` as a class constant and the
+# 150-expansion budget as a literal in `__init__`. A caller with a legitimately wide
+# definition graph could only reach them by subclassing or by writing through a private
+# attribute. They now live on `FormatterConfig` next to `max_recursion_depth`; these
+# tests pin that the knobs actually reach the two guards, in both directions.
+
+
+@pytest.mark.parametrize("fmt", ["jsonish", "typescript"])
+def test_backreference_min_chars_zero_names_a_small_repeat(fmt: FormatName) -> None:
+    """At 0 every repeat is named -- including the one the default deliberately inlines.
+
+    YAML is absent by design, not by oversight: its block path never back-references at
+    any threshold (see `test_yaml_block_path_never_back_references`).
+    """
+    config = FormatterConfig(backreference_min_chars=0)
+    out = simplify_schema(SMALL_TWICE, config=config, format_type=fmt).to_string()
+    assert "defined above: Tag" in out
+    assert out.count("k: string") == 1  # the second occurrence became the name
+
+
+@pytest.mark.parametrize("fmt", ["jsonish", "typescript"])
+def test_backreference_min_chars_high_inlines_a_large_repeat(fmt: FormatName) -> None:
+    """Above every body in the schema, nothing is ever named: the pre-`_emitted_refs`
+    behaviour, available without reverting the feature."""
+    config = FormatterConfig(backreference_min_chars=10_000)
+    out = simplify_schema(KEYED_TWICE, config=config, format_type=fmt).to_string()
+    assert "defined above" not in out
+    assert out.count("Street name and house number") == 2
+
+
+@pytest.mark.parametrize("fmt", ["jsonish", "yaml", "typescript"])
+def test_max_ref_expansions_raised_clears_the_budget_marker(fmt: FormatName) -> None:
+    """BUDGET_BUSTER's 200 distinct defs fit once the budget is raised past them."""
+    config = FormatterConfig(max_ref_expansions=250)
+    out = simplify_schema(BUDGET_BUSTER, config=config, format_type=fmt).to_string()
+    assert "budget exhausted:" not in out
+    assert "value number 199" in out
+
+
+@pytest.mark.parametrize("fmt", ["jsonish", "yaml", "typescript"])
+def test_max_ref_expansions_lowered_fires_the_budget_marker_early(fmt: FormatName) -> None:
+    """Lowered to 5, the sixth `$ref` onward is marked -- the guard reads the config,
+    not the 150 that used to be compiled in."""
+    config = FormatterConfig(max_ref_expansions=5)
+    out = simplify_schema(BUDGET_BUSTER, config=config, format_type=fmt).to_string()
+    assert "budget exhausted: D9" in out
+    assert "value number 0" in out  # the first few still expanded
+
+
+def test_thresholds_reach_the_formatter_attributes() -> None:
+    """The budget alias the three guard sites read is sourced from the config."""
+    formatter = JSONishFormatter({"type": "object"}, config=FormatterConfig(max_ref_expansions=7))
+    assert formatter._global_expansion_budget == 7
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_ref_expansions": 0}, "max_ref_expansions must be >= 1"),
+        ({"backreference_min_chars": -1}, "backreference_min_chars must be >= 0"),
+    ],
+)
+def test_out_of_range_thresholds_raise(kwargs: dict[str, int], message: str) -> None:
+    """Rejected at construction, like `max_recursion_depth`: a 0 budget would mark every
+    single `$ref` as dropped and render nothing useful."""
+    with pytest.raises(ValueError, match=message):
+        FormatterConfig(**kwargs)

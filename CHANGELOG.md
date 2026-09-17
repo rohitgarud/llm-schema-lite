@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`FormatterConfig.max_ref_expansions` (default 150) and
+  `FormatterConfig.backreference_min_chars` (default 200).** Both thresholds were previously
+  unreachable: the expansion budget was a literal in `BaseFormatter.__init__` and the
+  back-reference threshold a class constant, so a caller with a legitimately wide definition
+  graph could only change them by subclassing or writing through a private attribute. They
+  now sit on `FormatterConfig` beside `max_recursion_depth`, validated at construction
+  (`max_ref_expansions >= 1`, `backreference_min_chars >= 0`) rather than misbehaving later.
+  No default moved, so every rendering is byte-identical; `BaseFormatter.BACKREFERENCE_MIN_CHARS`
+  is gone rather than kept as a second source of truth for the same number. Both are documented
+  in the README's `$ref` expansion section, which already described the two mechanisms as facts
+  the reader could only observe.
+
+- **A `ref_heavy` signature fixture in the DSPy adapter benchmark.** It is the only cell in
+  the matrix whose render emits `object // defined above: PostalAddress` -- a definition
+  reachable five times over three shapes, plus a containing definition named twice. The
+  report measures that marker as token arithmetic over the corpus; whether a small model can
+  still populate a field whose body was replaced by a pointer to an earlier one is an
+  accuracy question nothing was asking. `recursive` is not a substitute: its placeholder
+  means "stop", this one means "look up". The matrix grows 102 -> 119 offline rows.
+
 - **The README documents the JSONSchemaBench results and the Pydantic-model reuse path.** A
   `JSON Schema Coverage` section carries the measured corpus figures -- 9,542 schemas across
   10 configs, 100.0% ingestion, zero errors and zero timeouts, a 46.8% median token reduction
@@ -56,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unix- and main-thread-only; that is where the sweep runs.
 
 ### Fixed
+
+- **CI actions no longer target the deprecated Node.js 20.** `actions/checkout` v4 -> v7 and
+  `astral-sh/setup-uv` v4 -> v10 across `ci.yaml` and `publish.yaml`; both now declare
+  `using: node24`, so the runner stops forcing them onto Node 24 and annotating every job.
+  Neither is passed any input, which is why the major bumps are safe to take in one step.
 
 - **The feature report no longer claims the corpus means fall below zero.** Its "quote the
   median, never the mean" paragraph still carried `WashingtonPost` at -51.4% and `Github_hard`

@@ -208,7 +208,7 @@ def cold_encoding_memo() -> Iterator[None]:
 def test_benchmarking_package_imports() -> None:
     """The `benchmarking.dspy_adapters` import mechanism works under pytest."""
     assert len(ADAPTERS) == 17
-    assert len(SIGNATURES) == 6
+    assert len(SIGNATURES) == 7
 
 
 def test_every_adapter_cell_constructs() -> None:
@@ -220,19 +220,36 @@ def test_every_adapter_cell_constructs() -> None:
 
 
 def test_every_signature_cell_builds() -> None:
-    """All six signatures expose fields, and their input dicts match input_fields."""
+    """All seven signatures expose fields, and their input dicts match input_fields."""
     for cell_id, cell in SIGNATURES.items():
         assert cell.signature.input_fields, cell_id
         assert cell.signature.output_fields, cell_id
         assert set(cell.inputs) == set(cell.signature.input_fields), cell_id
 
 
+def test_ref_heavy_fixture_actually_renders_back_references() -> None:
+    """The `ref_heavy` cell exists to put `defined above:` in front of a model.
+
+    Nothing else in the matrix emits that marker, so if a future edit trims
+    `PostalAddress` under `backreference_min_chars` (200) or drops one of its repeat
+    sites, the fixture silently degrades into another `nested` and the arm stops
+    measuring what it was added for. Both kinds must appear: a leaf definition and a
+    definition that *contains* one.
+    """
+    from llm_schema_lite import simplify_schema
+
+    out = simplify_schema(SIGNATURES["ref_heavy"].signature.output_fields["shipment"].annotation)
+    rendered = out.to_string()
+    assert "defined above: PostalAddress" in rendered
+    assert "defined above: Party" in rendered
+
+
 def test_offline_arm_covers_full_matrix() -> None:
-    """run_offline_arm() returns exactly 102 unique PromptRows (17 adapters x 6 sigs)."""
+    """run_offline_arm() returns exactly 119 unique PromptRows (17 adapters x 7 sigs)."""
     rows = run_offline_arm()
-    assert len(rows) == 102
+    assert len(rows) == 119
     assert all(isinstance(row, PromptRow) for row in rows)
-    assert len({(row.adapter, row.signature) for row in rows}) == 102
+    assert len({(row.adapter, row.signature) for row in rows}) == 119
 
 
 def test_offline_arm_reports_positive_tokens() -> None:
@@ -288,7 +305,7 @@ def test_offline_report_renders_unavailable_tokens_as_dash(tmp_path: Path) -> No
     assert record["prompt_chars"] == "123"
 
     md_lines = md_path.read_text().splitlines()
-    assert "| json | — | — | — | — | — | — |" in md_lines
+    assert "| json | — | — | — | — | — | — | — |" in md_lines
     assert "| json | cfg | flat | 2 | 123 | — | ok |" in md_lines
 
 

@@ -263,7 +263,7 @@ def run_offline_arm(
 ) -> list[PromptRow]:
     """Measure every (adapter, signature) prompt-cost cell. Never constructs a `dspy.LM`.
 
-    Defaults to all 9 adapters x all 6 signatures = 54 rows, in `ADAPTERS` x `SIGNATURES`
+    Defaults to all 9 adapters x all 7 signatures = 63 rows, in `ADAPTERS` x `SIGNATURES`
     insertion order. Deterministic and sub-second. Needs no network: token counting degrades
     to `prompt_tokens=None` when `cl100k_base` cannot be loaded offline.
     """
@@ -289,7 +289,7 @@ def run_live_arm(
 
     `lm_factory` receives the adapter instance under test and returns the LM for that cell
     (Δ2 construction rule: a fake LM must be seeded with the adapter under test). Defaults
-    to `LIVE_DEFAULT_ADAPTER_IDS` x all 6 signatures x 1 trial. When `disable_cache` is
+    to `LIVE_DEFAULT_ADAPTER_IDS` x all 7 signatures x 1 trial. When `disable_cache` is
     `True`, `dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)` is
     called once, before the first cell; the smoke test passes `False` so it never mutates
     global dspy cache state.

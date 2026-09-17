@@ -11,12 +11,12 @@ jobs:
       id-token: write # Required for trusted publishing
       contents: read # Required for pushing changelog
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # Fetch all history for changelog generation
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies

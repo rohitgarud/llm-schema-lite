@@ -210,7 +210,9 @@ SYNTHETIC_GROUND_TRUTH_NOTE = (
     "measures schema-following under paraphrase — not real-world extraction."
 )
 
-OFFLINE_PIVOT_COLUMNS = "| adapter | flat | nested | list_of_model | enum | optional | recursive |"
+OFFLINE_PIVOT_COLUMNS = (
+    "| adapter | flat | nested | list_of_model | enum | optional | recursive | ref_heavy |"
+)
 
 OFFLINE_DETAIL_COLUMNS = (
     "| adapter | adapter config | signature | messages | chars | prompt tokens | outcome |"
@@ -268,7 +270,7 @@ NEVER_JOINED_NOTE = (
     "one table or one derived score."
 )
 
-# The six signature ids, in the order OFFLINE_PIVOT_COLUMNS declares them -- derived
+# The seven signature ids, in the order OFFLINE_PIVOT_COLUMNS declares them -- derived
 # from the header string itself so the two can never drift apart.
 _PIVOT_SIGNATURE_ORDER: tuple[str, ...] = tuple(
     part.strip() for part in OFFLINE_PIVOT_COLUMNS.strip("|").split("|")

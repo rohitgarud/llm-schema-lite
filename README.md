@@ -380,6 +380,38 @@ A definition rendered once is replaced at later sites by a named back-reference
   `object // budget exhausted: Name` — instead of emitting a bare `object` indistinguishable
   from an untyped one. Fires on **32 schemas (0.34%)**.
 
+Both thresholds are yours to move, on `FormatterConfig`, if your definition graph is
+legitimately wide rather than deep:
+
+| Field | Default | Effect |
+|---|---|---|
+| `max_ref_expansions` | `150` | Total `$ref` expansions allowed across the whole render. Past it, every further `$ref` becomes `object // budget exhausted: Name`. Raise it to render a large graph in full; it also tiers the `anyOf`/`oneOf` member caps. |
+| `backreference_min_chars` | `200` | Smallest body worth naming instead of inlining a second copy. `0` names every repeat; a very large value inlines every repeat. The default sits in the gap between the two populations — the largest body two sibling fields share in the test suite is 158 chars, the smallest definition in the 244-reference corpus schema is 409. |
+
+```python
+from llm_schema_lite import FormatterConfig, simplify_schema
+
+# 200 distinct definitions, each referenced once: wide, not deep.
+wide = {
+    "type": "object",
+    "properties": {f"f{i}": {"$ref": f"#/$defs/D{i}"} for i in range(200)},
+    "$defs": {
+        f"D{i}": {"type": "object", "title": f"D{i}", "properties": {"v": {"type": "string"}}}
+        for i in range(200)
+    },
+}
+
+# The default budget stops at 150 and says where it stopped.
+assert "budget exhausted" in simplify_schema(wide).to_string()
+
+# Raised past 200, every definition renders.
+config = FormatterConfig(max_ref_expansions=500)
+assert "budget exhausted" not in simplify_schema(wide, config=config).to_string()
+```
+
+Neither default has moved, so raising one is opt-in and costs tokens; leaving them alone
+renders exactly as the measured figures above.
+
 For scale: the worst schema in the corpus used to render at **45×** its input and time out.
 Scoping one over-broad cache-invalidation rule took it to **0.35×**, removed every timeout, and
 is what moved ingestion to 100%. Full methodology, per-config tables, and the profiling behind

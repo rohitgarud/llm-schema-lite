@@ -263,11 +263,6 @@ class BaseFormatter(ABC):
         "additionalItems": lambda v: f"additionalItems: {v}" if isinstance(v, dict) else "",
     }
 
-    # Smallest rendered body worth replacing with a named back-reference on a REPEAT
-    # occurrence. Below this a definition is simply inlined again, which is what the
-    # sibling-inline acceptance criterion requires. See `_backreference_instead_of_body`.
-    BACKREFERENCE_MIN_CHARS: int = 200
-
     # Type mapping dictionary for the formatter.
     TYPE_MAP: dict[str, str]
     # Comment prefix for the formatter (e.g. "//" for JSONish/TypeScript, "#" for YAML).
@@ -314,7 +309,7 @@ class BaseFormatter(ABC):
         self._ref_cache: dict[str, str] = {}
 
         # Unconditional safety net; also tiers anyOf/oneOf member caps.
-        self._global_expansion_budget = 150  # Max total $ref expansions across entire schema
+        self._global_expansion_budget = self.config.max_ref_expansions
         self._global_expansion_count = 0  # Track total expansions
         self._ref_expansion_path: list[str] = []  # Active $ref expansion path (the depth counter)
         self._emitted_refs: set[str] = set()
@@ -433,7 +428,7 @@ class BaseFormatter(ABC):
         return f"object  {self.comment_prefix} defined above: {type_name}"
 
     def budget_placeholder(self, type_name: str) -> str:
-        """Token emitted where ``_global_expansion_budget`` stopped a ``$ref`` expanding.
+        """Token emitted where ``config.max_ref_expansions`` stopped a ``$ref`` expanding.
 
         Third sibling of ``recursion_placeholder`` and ``backreference_placeholder``. This
         site used to emit a bare ``object``, indistinguishable from an unresolvable ref or a
@@ -447,17 +442,19 @@ class BaseFormatter(ABC):
     def _backreference_instead_of_body(self, ref_key: str, body: Any) -> bool:
         """Whether a REPEAT occurrence of ``ref_key`` should be named rather than inlined.
 
-        Only bodies above ``BACKREFERENCE_MIN_CHARS`` are worth naming. Duplicating a small
-        definition costs almost nothing and reads better in place, which is the standing
+        Only bodies above ``config.backreference_min_chars`` are worth naming. Duplicating a
+        small definition costs almost nothing and reads better in place, which is the standing
         acceptance criterion (two sibling fields sharing a ``$ref`` both render inline);
         duplicating a large one is what turned a 34,293-char schema with 244 references
         over 9 definitions into 55,828 tokens of output.
 
-        The two populations separate cleanly, which is where the constant comes from: the
+        The two populations separate cleanly, which is where the default comes from: the
         largest body the sibling-inline tests rely on is 158 chars, while the smallest
         definition in that 244-reference schema is 409.
         """
-        return ref_key in self._emitted_refs and len(str(body)) > self.BACKREFERENCE_MIN_CHARS
+        return (
+            ref_key in self._emitted_refs and len(str(body)) > self.config.backreference_min_chars
+        )
 
     def _body_is_replayable(self, entry_path: tuple[str, ...], entry_log: int) -> bool:
         """Whether a body just rendered may be cached and replayed at other use sites.

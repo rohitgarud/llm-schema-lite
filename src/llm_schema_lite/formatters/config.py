@@ -68,6 +68,18 @@ class FormatterConfig:
             path before it is replaced by a placeholder. Default 2. A value of 0 behaves as
             1 (the first expansion of any $ref is always unconditional). Negative values
             raise ValueError.
+        max_ref_expansions: Total $ref expansions allowed across the whole render, an
+            unconditional safety net over the per-path max_recursion_depth. Default 150.
+            Once exhausted every further $ref renders as `object // budget exhausted: Name`.
+            Raise it for a large definition graph that is legitimately wide rather than
+            deep; it also tiers the anyOf/oneOf member caps. Must be >= 1.
+        backreference_min_chars: Smallest rendered body worth replacing with a named
+            back-reference (`object // defined above: Address`) on a REPEAT occurrence.
+            Default 200. Below it a definition is simply inlined again, which is what two
+            sibling fields sharing a $ref should look like. The two populations separate
+            cleanly at the default: the largest body the sibling-inline tests rely on is
+            158 chars, the smallest definition in the 244-reference corpus schema is 409.
+            0 names every repeat; a very large value inlines every repeat. Must be >= 0.
         metadata_inclusion: Dictionary to control which metadata keywords are included
             in output. Keys are metadata keyword names, values are booleans.
             If not provided, defaults to DEFAULT_METADATA_INCLUSION.
@@ -93,6 +105,8 @@ class FormatterConfig:
     include_constraints: bool = True
     include_metadata: bool = True
     max_recursion_depth: int = 2
+    max_ref_expansions: int = 150
+    backreference_min_chars: int = 200
     metadata_inclusion: dict[str, bool] = None  # type: ignore[assignment]
 
     def includes(self, key: str) -> bool:
@@ -112,6 +126,12 @@ class FormatterConfig:
         """Post-initialization to handle metadata_inclusion defaults."""
         if self.max_recursion_depth < 0:
             raise ValueError(f"max_recursion_depth must be >= 0, got {self.max_recursion_depth}")
+        if self.max_ref_expansions < 1:
+            raise ValueError(f"max_ref_expansions must be >= 1, got {self.max_ref_expansions}")
+        if self.backreference_min_chars < 0:
+            raise ValueError(
+                f"backreference_min_chars must be >= 0, got {self.backreference_min_chars}"
+            )
         # Merge any user-provided dict over the defaults (user values win).
         merged = DEFAULT_METADATA_INCLUSION.copy()
         if self.metadata_inclusion is not None:
