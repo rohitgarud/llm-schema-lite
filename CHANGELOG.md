@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.8.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.8.0) - 2026-09-17
+
+<small>[Compare with v0.7.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.7.0...v0.8.0)</small>
+
+### Breaking
+
+- **`BaseFormatter.BACKREFERENCE_MIN_CHARS` is removed.** The threshold it held now lives on
+  `FormatterConfig.backreference_min_chars` with the same default of 200, so the constant was
+  kept only as a second source of truth for one number. A subclass that overrode it must pass
+  a config instead; nothing that reads the rendered output is affected.
+
+- **Rendered output changes on schemas carrying `patternProperties` or a shared `$ref`
+  graph.** Neither is a signature change, but both move the string a model is shown, which is
+  what a caller pinning this package actually depends on. `patternProperties` now renders
+  structurally rather than being dropped or reduced to a one-line comment (7.2% of the
+  JSONSchemaBench corpus, 691 of 9,542 schemas), and scoping the `$ref` truncation taint
+  changed what gets cached and replayed across a cyclic definition graph. Both are detailed
+  under Fixed. This is why the release is 0.8.0 rather than a patch.
+
 ### Added
 
 - **`FormatterConfig.max_ref_expansions` (default 150) and
