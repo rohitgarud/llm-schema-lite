@@ -631,6 +631,75 @@ Every other constructor option — `formatter_config` / `parse_config` forwardin
 streaming registration and known limits — is documented in
 [the DSPy integration README](src/llm_schema_lite/dspy_integration/README.md).
 
+### Typed decisions with Jev
+
+[Jev](https://docs.typesafe.ai/introduction) (TypeSafe AI) is a *System One* model: it takes
+a `state` and a set of typed questions and returns calibrated probabilities instead of text,
+so there is nothing to parse or repair. `JevAdapter` compiles a signature into that request
+and decodes the answers back into typed output fields; `JevLM` sends it (OpenRouter by
+default, reading `$OPENROUTER_API_KEY`).
+
+<!-- lsl-docs: skip: issues a live Jev decision request via OpenRouter -->
+```python
+from enum import Enum
+from typing import Annotated, Literal
+
+import dspy
+from pydantic import BaseModel, Field
+
+from llm_schema_lite.dspy_integration import JevAdapter, JevLM
+
+
+class Team(Enum):
+    BILLING = "billing"
+    TECHNICAL = "technical"
+    SALES = "sales"
+
+
+class Route(BaseModel):
+    team: Team = Field(description="Which team should handle this?")
+    escalate: bool = Field(description="Should this go to a manager?")
+
+
+class Triage(dspy.Signature):
+    """Triage a support message."""
+
+    message: str = dspy.InputField()
+    is_urgent: bool = dspy.OutputField(desc="Does this message convey urgency?")
+    frustration: Annotated[
+        Literal["calm", "frustrated", "angry"],
+        Field(json_schema_extra={"jev": {"type": "score"}}),
+    ] = dspy.OutputField(desc="How frustrated is the customer?")
+    route: Route = dspy.OutputField()
+
+
+dspy.configure(lm=JevLM(), adapter=JevAdapter())
+pred = dspy.Predict(Triage)(message="Help! My payouts have been failing for 3 days.")
+
+pred.route.team                        # Team.BILLING
+pred.jev["route.team"]["confidence"]   # raw answers: probabilities and confidence per question
+```
+
+| Output annotation | Jev question | Decoded as |
+|---|---|---|
+| `bool` | `noul` | `True` when the probability reaches `threshold` (default `0.5`) |
+| `Literal[...]` / `Enum` | `choice` | the chosen option, as the `Literal` value or `Enum` member |
+| `Literal[...]` / `Enum` marked `{"jev": {"type": "score"}}` | `score` over the options, in order | the most probable level |
+| nested `BaseModel` | one question per leaf, keyed by dotted path (`route.team`) | the rebuilt model |
+
+- **Per-field options** go in `json_schema_extra={"jev": {...}}` via `Annotated[T, Field(...)]`
+  (`dspy.OutputField` drops unknown kwargs): `type="score"`, `criteria` (your own option or
+  level descriptions, or `{"true": ..., "false": ...}` for a `bool`) and `threshold`.
+- **Instructions:** the signature docstring and each field's description become the
+  question's `instructions`, so DSPy instruction optimizers still apply. Demos are ignored,
+  since Jev takes no few-shot examples.
+- **Only decisions:** `str`, free-form numbers and lists raise `TypeError` before any
+  request, since Jev cannot produce them. That includes `dspy.ChainOfThought`'s
+  `reasoning` field, so use `dspy.Predict`.
+- **`JevLM`** supports `acall`, DSPy's request cache (`cache=False` to bypass) and saving
+  programs. Its saved state keeps `url` but never the API key. Pass
+  `url="https://api.typesafe.ai/v1/systemone"` to call TypeSafe directly.
+
 ### Benchmark results
 
 Six sub-1.2B models × eight adapters × five corpora, 30 labeled cases each, run against a

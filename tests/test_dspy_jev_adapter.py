@@ -1,0 +1,184 @@
+"""Tests for JevAdapter / JevLM: signature -> Jev decision request, answers -> typed outputs."""
+
+from __future__ import annotations
+
+import asyncio
+import enum
+import io
+import json
+from typing import Annotated, Any, Literal
+from unittest import mock
+
+import pytest
+
+pytest.importorskip("dspy", minversion="3.3.1")
+
+import dspy  # noqa: E402
+import pydantic  # noqa: E402
+from dspy.clients.cache import Cache  # noqa: E402
+
+from llm_schema_lite.dspy_integration import JevAdapter, JevLM  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Swap DSPy's global (disk-backed) cache for an empty in-memory one per test."""
+    monkeypatch.setattr(
+        dspy, "cache", Cache(enable_disk_cache=False, enable_memory_cache=True, disk_cache_dir=None)
+    )
+
+
+class Team(enum.Enum):
+    BILLING = "billing"
+    TECHNICAL = "technical"
+
+
+class Route(pydantic.BaseModel):
+    team: Team = pydantic.Field(description="Which team should handle this?")
+    escalate: bool
+
+
+class Triage(dspy.Signature):
+    """Triage a support message."""
+
+    message: str = dspy.InputField()
+    is_urgent: Annotated[
+        bool,
+        pydantic.Field(
+            json_schema_extra={
+                "jev": {
+                    "threshold": 0.8,
+                    "criteria": {"true": "Time-sensitive", "false": "Not urgent"},
+                }
+            }
+        ),
+    ] = dspy.OutputField(desc="Does this message convey urgency?")
+    frustration: Annotated[
+        Literal["calm", "frustrated", "angry"],
+        pydantic.Field(json_schema_extra={"jev": {"type": "score"}}),
+    ] = dspy.OutputField()
+    route: Route = dspy.OutputField()
+
+
+ANSWERS: dict[str, Any] = {
+    "is_urgent": {"type": "noul", "noul": 0.7},
+    "frustration": {
+        "type": "score",
+        "score": 2.1,
+        "confidence": 0.6,
+        "probabilities": {"1": 0.1, "2": 0.7, "3": 0.2},
+    },
+    "route.team": {
+        "type": "choice",
+        "choice": "billing",
+        "confidence": 0.9,
+        "probabilities": {"billing": 0.95, "technical": 0.05},
+    },
+    "route.escalate": {"type": "noul", "noul": 0.6},
+}
+
+
+class _StubJev(dspy.BaseLM):  # type: ignore[misc]
+    """Returns canned Jev answers and records the payload it was sent."""
+
+    forward_contract = "typed_lm"
+
+    def forward(self, request: dspy.LMRequest) -> dspy.LMResponse:
+        self.payload = json.loads(request.messages[-1].parts[0].text)
+        return dspy.LMResponse.from_text(json.dumps(ANSWERS), model=request.model)
+
+
+def test_format_builds_state_and_typed_questions() -> None:
+    [message] = JevAdapter().format(Triage, demos=[], inputs={"message": "Payouts failing!"})
+    payload = json.loads(message["content"])
+
+    assert payload["state"] == {"message": "Payouts failing!"}
+    qs = payload["questions"]
+    assert set(qs) == {"is_urgent", "frustration", "route.team", "route.escalate"}
+    assert qs["is_urgent"] == {
+        "type": "noul",
+        "instructions": {
+            "task": "Triage a support message.",
+            "question": "Does this message convey urgency?",
+        },
+        "criteria": {"true": "Time-sensitive", "false": "Not urgent"},
+    }
+    assert qs["frustration"]["type"] == "score"
+    assert qs["frustration"]["criteria"] == ["calm", "frustrated", "angry"]
+    assert qs["route.team"]["type"] == "choice"
+    assert qs["route.team"]["criteria"] == {"billing": "billing", "technical": "technical"}
+    assert qs["route.team"]["instructions"]["question"] == "Which team should handle this?"
+    assert qs["route.escalate"]["instructions"]["question"] == "route.escalate"
+
+
+def test_unsupported_output_type_raises() -> None:
+    class Extract(dspy.Signature):
+        text: str = dspy.InputField()
+        name: str = dspy.OutputField()
+
+    with pytest.raises(TypeError, match="name"):
+        JevAdapter().format(Extract, demos=[], inputs={"text": "hi"})
+
+
+def test_predict_end_to_end_decodes_answers() -> None:
+    lm = _StubJev(model="typesafe/jev-1.13")
+    with dspy.context(lm=lm, adapter=JevAdapter()):
+        pred = dspy.Predict(Triage)(message="Payouts failing!")
+
+    assert set(lm.payload) == {"state", "questions"}  # JevLM owns the model name
+    assert pred.is_urgent is False  # 0.7 < per-field threshold 0.8
+    assert pred.frustration == "frustrated"  # argmax level, base-agnostic
+    assert pred.route == Route(team=Team.BILLING, escalate=True)  # default threshold 0.5
+    assert pred.jev["route.team"]["confidence"] == 0.9
+
+
+def test_jev_lm_posts_payload_and_returns_answers() -> None:
+    body = json.dumps(
+        {"model": "typesafe/jev-1.13", "answers": ANSWERS, "usage": {"input_tokens": 12}}
+    )
+    lm = JevLM(api_key="k")
+    payload = {"state": "s", "questions": {}}
+    with mock.patch("urllib.request.urlopen", return_value=io.BytesIO(body.encode())) as urlopen:
+        out = lm(messages=[{"role": "user", "content": json.dumps(payload)}])
+
+    req = urlopen.call_args.args[0]
+    assert req.full_url == "https://openrouter.ai/api/alpha/decisions"
+    assert req.get_header("Authorization") == "Bearer k"
+    assert json.loads(req.data) == {"model": "typesafe/jev-1.13", **payload}
+    assert json.loads(out[0]) == ANSWERS
+
+
+def _jev_body() -> io.BytesIO:
+    body = {"model": "typesafe/jev-1.13", "answers": ANSWERS, "usage": {"input_tokens": 12}}
+    return io.BytesIO(json.dumps(body).encode())
+
+
+def test_predict_acall_uses_jev_lm_async() -> None:
+    with mock.patch("urllib.request.urlopen", side_effect=lambda *_: _jev_body()):
+        with dspy.context(lm=JevLM(api_key="k"), adapter=JevAdapter()):
+            pred = asyncio.run(dspy.Predict(Triage).acall(message="Payouts failing!"))
+
+    assert pred.frustration == "frustrated"
+    assert pred.jev["route.team"]["choice"] == "billing"
+
+
+def test_jev_lm_state_round_trips_without_api_key() -> None:
+    state = JevLM(api_key="secret", url="https://api.typesafe.ai/v1/systemone").dump_state()
+
+    assert "secret" not in json.dumps(state)
+    lm = dspy.BaseLM.load_state(state, allow_custom_lm_class=True)
+    assert isinstance(lm, JevLM)
+    assert lm.url == "https://api.typesafe.ai/v1/systemone"
+
+
+def test_jev_lm_caches_identical_requests() -> None:
+    lm = JevLM(api_key="k")
+    msg = [{"role": "user", "content": json.dumps({"state": "s", "questions": {}})}]
+    with mock.patch("urllib.request.urlopen", side_effect=lambda *_: _jev_body()) as urlopen:
+        first, second = lm(messages=msg), lm(messages=msg)
+        assert urlopen.call_count == 1
+        assert first == second
+        assert lm.history[-1].response.cache_hit
+
+        lm(messages=msg, cache=False)
+        assert urlopen.call_count == 2
