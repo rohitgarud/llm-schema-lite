@@ -4,7 +4,7 @@ llm-schema-lite: Transform verbose Pydantic schemas into LLM-friendly formats
 Typically 40-70% fewer schema tokens while preserving essential type information.
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 from .coercion import CoercionMetadata, ParseConfig, coerce_to_schema, coerce_value
 from .core import (

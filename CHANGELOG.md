@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.9.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.9.0) - 2026-09-21
+
+<small>[Compare with v0.8.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.8.0...v0.9.0)</small>
+
+### Added
+
+- **`JevAdapter` and `JevLM` answer typed DSPy signatures with TypeSafe's Jev.** Jev is a
+  System One model: it takes `{state, questions}` and returns calibrated probabilities rather
+  than text, so there is no prompt to render and nothing to parse or repair. `JevAdapter`
+  compiles a signature's output fields into Jev questions -- `bool` to `noul`, `Literal`/`Enum`
+  to `choice` (or `score` when marked ordinal), nested `pydantic.BaseModel` to one question per
+  leaf under its dotted path -- and decodes the answers back into typed values, validated
+  through pydantic. Raw answers with their probabilities and confidences land on
+  `prediction.jev`. Per-field `type`, `criteria` and `threshold` go in
+  `json_schema_extra={"jev": {...}}`; any other output type raises `TypeError` naming the
+  field. Works with plain `dspy.Predict` (no reasoning step), and instruction optimizers still
+  apply since the signature docstring and field descriptions become each question's
+  instructions; demos are ignored.
+
+- **`JevLM` is a typed DSPy LM for Jev's decisions endpoint.** OpenRouter by default
+  (`$OPENROUTER_API_KEY`), TypeSafe's native `https://api.typesafe.ai/v1/systemone` via `url`.
+  Responses go through DSPy's request cache (`cache=False` per call or at construction to
+  bypass), `acall` runs the blocking HTTP on a worker thread, and `dump_state()` keeps `url`
+  but never the API key. Stdlib `urllib` only -- no new dependency.
+
+### Changed
+
+- CI's `codecov/codecov-action` moves from v5 to v7.
+
 ## [v0.8.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.8.0) - 2026-09-17
 
 <small>[Compare with v0.7.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.7.0...v0.8.0)</small>
