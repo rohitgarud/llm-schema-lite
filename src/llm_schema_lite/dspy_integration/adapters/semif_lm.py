@@ -23,6 +23,7 @@ from typing import Any
 
 import dspy
 import litellm
+import pydantic
 import pydantic_core
 
 LETTERS = "ABCDEFGHIJKLMNOP"
@@ -64,7 +65,12 @@ def _messages(
 
 def _answer(question: dict[str, Any], options: dict[str, str], response: Any) -> dict[str, Any]:
     """Turn the first token's ``top_logprobs`` into a Jev answer over ``options``."""
-    logprobs = pydantic_core.to_jsonable_python(response.choices[0].logprobs)
+    logprobs = response.choices[0].logprobs
+    if isinstance(logprobs, pydantic.BaseModel):
+        # model_dump builds a serializer pydantic deferred (a cache hit in a fresh process);
+        # to_jsonable_python would pass its placeholder to pydantic-core and fail.
+        logprobs = logprobs.model_dump()
+    logprobs = pydantic_core.to_jsonable_python(logprobs)
     top = logprobs["content"][0]["top_logprobs"] if logprobs else []
     mass = {
         key: sum(math.exp(t["logprob"]) for t in top if t["token"].strip() == letter)

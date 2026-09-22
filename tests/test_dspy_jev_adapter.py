@@ -265,3 +265,31 @@ def test_semif_lm_state_round_trips() -> None:
     lm = dspy.BaseLM.load_state(state, allow_custom_lm_class=True)
     assert isinstance(lm, SemIfLM)
     assert lm.top_logprobs == 5
+
+
+class _LazyLogprobs(pydantic.BaseModel):
+    """Stands in for a litellm response unpickled from DSPy's disk cache in a new process:
+    the forward reference leaves its serializer unbuilt (``MockValSer``) until first dump."""
+
+    content: list[_Token]
+
+
+class _Token(pydantic.BaseModel):
+    token: str
+    logprob: float
+    top_logprobs: list[dict[str, Any]]
+
+
+def test_semif_lm_reads_logprobs_whose_serializer_is_not_built_yet() -> None:
+    from types import SimpleNamespace
+
+    from llm_schema_lite.dspy_integration.adapters.semif_lm import _answer
+
+    top = [{"token": "B", "logprob": math.log(0.75)}, {"token": "A", "logprob": math.log(0.25)}]
+    lazy = _LazyLogprobs.model_construct(content=[_Token(token="B", logprob=0.0, top_logprobs=top)])
+    assert type(_LazyLogprobs.__pydantic_serializer__).__name__ == "MockValSer"
+    response = SimpleNamespace(choices=[SimpleNamespace(logprobs=lazy)])
+
+    answer = _answer({"type": "noul"}, {"true": "Yes", "false": "No"}, response)
+
+    assert answer["noul"] == pytest.approx(0.25)
