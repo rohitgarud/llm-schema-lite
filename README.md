@@ -700,6 +700,28 @@ pred.jev["route.team"]["confidence"]   # raw answers: probabilities and confiden
   programs. Its saved state keeps `url` but never the API key. Pass
   `url="https://api.typesafe.ai/v1/systemone"` to call TypeSafe directly.
 
+#### Local open models (SemIf)
+
+`SemIfLM` answers the same `JevAdapter` requests with a local model instead, using
+[SemIf](https://github.com/TheoLeeCJ/SemIf)'s direct option-logit readout. Each option gets
+a letter, and the probability of each option is read from that letter's next-token
+logprob, so each question costs one single-token request. Use any OpenAI-compatible server
+that returns `top_logprobs` (vLLM, llama.cpp `llama-server`, SGLang, Ollama):
+
+<!-- lsl-docs: skip: needs a local model server -->
+```python
+from llm_schema_lite.dspy_integration import JevAdapter, SemIfLM
+
+lm = SemIfLM("openai/Qwen/Qwen3.5-4B", api_base="http://localhost:8000/v1", api_key="local")
+dspy.configure(lm=lm, adapter=JevAdapter())
+```
+
+The probabilities are uncalibrated and only compare the options you gave. Calibrate them on
+your own data before you rely on a threshold. `SemIfLM` is an ordinary `dspy.LM`, so
+caching, retries, `acall` (which sends the questions concurrently) and saving work as
+usual. For thinking models, also pass
+`extra_body={"chat_template_kwargs": {"enable_thinking": False}}`.
+
 ### Benchmark results
 
 Six sub-1.2B models × eight adapters × five corpora, 30 labeled cases each, run against a

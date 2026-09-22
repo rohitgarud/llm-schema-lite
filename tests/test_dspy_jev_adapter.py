@@ -6,6 +6,7 @@ import asyncio
 import enum
 import io
 import json
+import math
 from typing import Annotated, Any, Literal
 from unittest import mock
 
@@ -17,7 +18,7 @@ import dspy  # noqa: E402
 import pydantic  # noqa: E402
 from dspy.clients.cache import Cache  # noqa: E402
 
-from llm_schema_lite.dspy_integration import JevAdapter, JevLM  # noqa: E402
+from llm_schema_lite.dspy_integration import JevAdapter, JevLM, SemIfLM  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -182,3 +183,85 @@ def test_jev_lm_caches_identical_requests() -> None:
 
         lm(messages=msg, cache=False)
         assert urlopen.call_count == 2
+
+
+# Letter logprobs the fake local server returns, keyed by the criterion's last line.
+LETTER_PROBS = {
+    "Does this message convey urgency?": {"A": 0.6, "B": 0.3, "Sure": 0.1},
+    "frustration": {"A": 0.1, "B": 0.2, " C": 0.5, "C": 0.2},  # " C" and "C" both count
+    "Which team should handle this?": {"B": 0.8, "A": 0.2},
+    "route.escalate": {"A": 0.9, "B": 0.1},
+    "no letter": {"Yes": 1.0},
+}
+
+
+SENT: list[dict[str, Any]] = []
+
+
+def _fake_completion(request: dict[str, Any], **_: Any) -> Any:
+    """Stands in for ``litellm_completion`` (a real function: DSPy's cache reads its name)."""
+    import litellm
+
+    SENT.append(request)
+    assert request["max_tokens"] == 1 and request["logprobs"] and request["top_logprobs"] == 20
+    criterion = json.loads(request["messages"][-1]["content"])["criterion"]
+    top = [
+        {"token": t, "logprob": math.log(p), "bytes": None}
+        for t, p in LETTER_PROBS[criterion.splitlines()[-1]].items()
+    ]
+    logprobs = {"content": [{"token": top[0]["token"], "logprob": 0.0, "top_logprobs": top}]}
+    return litellm.ModelResponse(
+        model="local",
+        choices=[{"message": {"role": "assistant", "content": "A"}, "logprobs": logprobs}],
+    )
+
+
+async def _afake_completion(request: dict[str, Any], **kwargs: Any) -> Any:
+    return _fake_completion(request, **kwargs)
+
+
+def test_semif_lm_reads_option_letter_logprobs() -> None:
+    lm = SemIfLM("openai/local", api_base="http://localhost:8000/v1")
+    SENT.clear()
+    with mock.patch("dspy.clients.lm.litellm_completion", new=_fake_completion):
+        with dspy.context(lm=lm, adapter=JevAdapter()):
+            pred = dspy.Predict(Triage)(message="Payouts failing!")
+
+    assert len(SENT) == 4  # one single-token request per question
+    sent = json.loads(SENT[0]["messages"][-1]["content"])
+    assert sent["evidence"] == {"message": "Payouts failing!"}
+    assert sent["options"][0] == {"letter": "A", "description": "Time-sensitive"}
+
+    assert pred.jev["is_urgent"]["noul"] == pytest.approx(0.6 / 0.9)  # "Sure" is not a letter
+    assert pred.is_urgent is False  # 0.67 < per-field threshold 0.8
+    assert pred.frustration == "angry"  # C: 0.5 + 0.2
+    assert pred.jev["frustration"]["probabilities"] == pytest.approx({"0": 0.1, "1": 0.2, "2": 0.7})
+    assert pred.route == Route(team=Team.TECHNICAL, escalate=True)
+
+
+def test_semif_lm_async_matches_sync() -> None:
+    lm = SemIfLM("openai/local")
+    with mock.patch("dspy.clients.lm.alitellm_completion", new=_afake_completion):
+        with dspy.context(lm=lm, adapter=JevAdapter()):
+            pred = asyncio.run(dspy.Predict(Triage).acall(message="Payouts failing!"))
+
+    assert pred.frustration == "angry"
+    assert pred.route.team is Team.TECHNICAL
+
+
+def test_semif_lm_raises_when_no_letter_is_in_top_logprobs() -> None:
+    lm = SemIfLM("openai/local")
+    payload = {
+        "state": "s",
+        "questions": {"q": {"type": "noul", "instructions": {"task": "", "question": "no letter"}}},
+    }
+    with mock.patch("dspy.clients.lm.litellm_completion", new=_fake_completion):
+        with pytest.raises(ValueError, match="No option letter"):
+            lm(messages=[{"role": "user", "content": json.dumps(payload)}])
+
+
+def test_semif_lm_state_round_trips() -> None:
+    state = SemIfLM("openai/local", top_logprobs=5, api_base="http://h/v1").dump_state()
+    lm = dspy.BaseLM.load_state(state, allow_custom_lm_class=True)
+    assert isinstance(lm, SemIfLM)
+    assert lm.top_logprobs == 5
