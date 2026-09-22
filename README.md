@@ -722,6 +722,10 @@ caching, retries, `acall` (which sends the questions concurrently) and saving wo
 usual. For thinking models, also pass
 `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`.
 
+On SemIf's own 144-row workload, `SemIfLM` sends byte-identical prompts. It agrees with
+SemIf's published decisions on 96–98% of rows, and its accuracy lands within 0.011 of
+SemIf's reported numbers. See the [parity benchmark](benchmarking/semif/README.md).
+
 ### Benchmark results
 
 Six sub-1.2B models × eight adapters × five corpora, 30 labeled cases each, run against a
@@ -948,6 +952,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Built with [Pydantic](https://docs.pydantic.dev/) for schema handling
 - Powered by [DSPy](https://github.com/stanfordnlp/dspy) for LLM integration
 - Uses [json-repair](https://github.com/mangiucugna/json_repair) for robust parsing
+- The third-party benchmark corpora (`pii`, `financial-ner`, `insurance-claims`, `patient-notes`) were chosen following [thedataquarry/structured-outputs](https://github.com/thedataquarry/structured-outputs)
+- `SemIfLM` follows [SemIf](https://github.com/TheoLeeCJ/SemIf)'s direct option-logit readout for local, open-model typed decisions
 
 ---
 
