@@ -744,6 +744,11 @@ with `-np 16 --kv-unified --cache-ram 0`, 16 parallel requests ran 3.2x faster (
 JevBench it cost Qwen3-0.6B 37 of 231 items (p < 0.0001), while making no measurable
 difference on the 2B and 4B models. Measure it on your own model before you turn it on.
 
+On [JevBench](https://github.com/fstandhartinger/jevbench)'s 231 public items, `SemIfLM`
+with SemIf's Qwen3.5-4B at Q4_K_M scores 100% on the easy tier, 94% on standard and 56% on
+hard. SemIf's own BF16 run of the same model scores 100%, 99% and 61%, and Jev 1.13.0
+scores 100%, 99% and 73%. See the [JevBench runner](benchmarking/jevbench/README.md).
+
 ##### Demo: SemIf plays Doom from pixels
 
 ![A local vision model playing Doom through SemIfLM, with its option probabilities beside the game](https://raw.githubusercontent.com/rohitgarud/llm-schema-lite/main/demos/doom/doom_overlay.webp)
