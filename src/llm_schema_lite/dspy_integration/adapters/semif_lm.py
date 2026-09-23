@@ -12,6 +12,10 @@ Jev's format, so ``JevAdapter`` works unchanged::
 Each question is one request, a single token long. Probabilities are renormalised over
 the letters found in ``top_logprobs``, so they are conditional on the options and
 uncalibrated.
+
+``dspy.Image`` and other ``dspy.Type`` input fields are carried through as content blocks,
+so the readout works on a vision model. The server must return ``top_logprobs`` for a
+multimodal request; not every VLM backend does.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import pydantic
 import pydantic_core
 
 LETTERS = "ABCDEFGHIJKLMNOP"
+PLACEHOLDER = "<<image {}>>"  # stands in for an image in the JSON payload, which stays text
 SYSTEM = (  # SemIf's DIRECT_SYSTEM prompt, verbatim
     "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. "
     "Respond with only its uppercase letter, with no explanation or reasoning."
@@ -43,8 +48,31 @@ def _options(question: dict[str, Any]) -> dict[str, str]:
     return dict(criteria)
 
 
+def _split_media(content: str | list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """Separate a user turn into its JSON text and its image blocks.
+
+    DSPy expands a ``dspy.Image`` input into content blocks at the LM boundary, splitting
+    the adapter's JSON payload where the image sat - between two string quotes, so the
+    text rejoins into valid JSON once each block is replaced by its placeholder.
+    """
+    if isinstance(content, str):
+        return content, []
+    media: list[dict[str, Any]] = []
+    text = ""
+    for block in content:
+        if block.get("type") == "text":
+            text += block["text"]
+        else:
+            media.append(block)  # two identical images still get distinct placeholders
+            text += PLACEHOLDER.format(len(media))
+    return text, media
+
+
 def _messages(
-    state: Any, question: dict[str, Any], options: dict[str, str]
+    state: Any,
+    question: dict[str, Any],
+    options: dict[str, str],
+    media: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if not 2 <= len(options) <= len(LETTERS):
         raise ValueError(f"SemIfLM needs 2-{len(LETTERS)} options, got {len(options)}")
@@ -57,9 +85,12 @@ def _messages(
             for letter, desc in zip(LETTERS, options.values(), strict=False)
         ],
     }
+    text = json.dumps(payload, ensure_ascii=False)
+    # Images lead, so the options stay next to the letter the model is about to emit.
+    content = [*media, {"type": "text", "text": text}] if media else text
     return [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        {"role": "user", "content": content},
     ]
 
 
@@ -131,11 +162,12 @@ class SemIfLM(dspy.LM):  # type: ignore[misc]
         list[tuple[str, dict[str, Any], dict[str, str], list[dict[str, Any]]]], dict[str, Any]
     ]:
         """Split a JevAdapter payload into one ``(qid, question, options, messages)`` each."""
-        request = json.loads(messages[-1]["content"])
+        text, media = _split_media(messages[-1]["content"])
+        request = json.loads(text)
         requests = []
         for qid, q in request["questions"].items():
             opts = _options(q)
-            requests.append((qid, q, opts, _messages(request["state"], q, opts)))
+            requests.append((qid, q, opts, _messages(request["state"], q, opts, media)))
         kwargs = {
             **kwargs,
             "max_tokens": 1,

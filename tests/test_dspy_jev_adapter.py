@@ -204,7 +204,12 @@ def _fake_completion(request: dict[str, Any], **_: Any) -> Any:
 
     SENT.append(request)
     assert request["max_tokens"] == 1 and request["logprobs"] and request["top_logprobs"] == 20
-    criterion = json.loads(request["messages"][-1]["content"])["criterion"]
+    content = request["messages"][-1]["content"]
+    if not isinstance(content, str):
+        # A multimodal turn splits the payload where the image sat, between two JSON
+        # string quotes, so dropping the blocks leaves the surrounding JSON parseable.
+        content = "".join(block["text"] for block in content if block["type"] == "text")
+    criterion = json.loads(content)["criterion"]
     top = [
         {"token": t, "logprob": math.log(p), "bytes": None}
         for t, p in LETTER_PROBS[criterion.splitlines()[-1]].items()
@@ -258,6 +263,50 @@ def test_semif_lm_raises_when_no_letter_is_in_top_logprobs() -> None:
     with mock.patch("dspy.clients.lm.litellm_completion", new=_fake_completion):
         with pytest.raises(ValueError, match="No option letter"):
             lm(messages=[{"role": "user", "content": json.dumps(payload)}])
+
+
+PNG = (  # smallest valid PNG: one transparent pixel
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAA"
+    "CklEQVR4nGP4DwABAQEAWk1v8QAAAABJRU5ErkJggg=="
+)
+
+
+class Screenshots(dspy.Signature):
+    """Read the screenshots."""
+
+    before: dspy.Image = dspy.InputField()
+    after: dspy.Image = dspy.InputField()
+    is_urgent: bool = dspy.OutputField(desc="Does this message convey urgency?")
+
+
+def test_semif_lm_sends_image_inputs_as_content_blocks() -> None:
+    """dspy.Image inputs reach the server as image blocks, not as base64 in the payload text."""
+    SENT.clear()
+    with mock.patch("dspy.clients.lm.litellm_completion", new=_fake_completion):
+        with dspy.context(lm=SemIfLM("openai/local"), adapter=JevAdapter()):
+            pred = dspy.Predict(Screenshots)(before=dspy.Image(PNG), after=dspy.Image(PNG))
+
+    [sent] = SENT
+    content = sent["messages"][-1]["content"]
+    assert [b for b in content if b["type"] == "image_url"] == [
+        {"type": "image_url", "image_url": {"url": PNG}},
+        {"type": "image_url", "image_url": {"url": PNG}},
+    ]
+    [text] = [b["text"] for b in content if b["type"] == "text"]
+    assert PNG not in text
+    # Identical images still get distinct placeholders, and the payload stays valid JSON.
+    assert json.loads(text)["evidence"] == {"before": "<<image 1>>", "after": "<<image 2>>"}
+    assert pred.is_urgent is True  # 0.6 >= the default 0.5 threshold
+
+
+def test_semif_lm_leaves_a_text_only_payload_as_a_plain_string() -> None:
+    """No custom type, no content blocks: SemIf's prompt stays byte-for-byte what it was."""
+    SENT.clear()
+    with mock.patch("dspy.clients.lm.litellm_completion", new=_fake_completion):
+        with dspy.context(lm=SemIfLM("openai/local"), adapter=JevAdapter()):
+            dspy.Predict(Triage)(message="Payouts failing!")
+
+    assert all(isinstance(s["messages"][-1]["content"], str) for s in SENT)
 
 
 def test_semif_lm_state_round_trips() -> None:
