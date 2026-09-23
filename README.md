@@ -716,11 +716,16 @@ lm = SemIfLM("openai/Qwen/Qwen3.5-4B", api_base="http://localhost:8000/v1", api_
 dspy.configure(lm=lm, adapter=JevAdapter())
 ```
 
-The probabilities are uncalibrated and only compare the options you gave. Calibrate them on
-your own data before you rely on a threshold. `SemIfLM` is an ordinary `dspy.LM`, so
-caching, retries, `acall` (which sends the questions concurrently) and saving work as
-usual. For thinking models, also pass
-`extra_body={"chat_template_kwargs": {"enable_thinking": False}}`.
+The probabilities are uncalibrated and only compare the options you gave. Fit a
+`calibration_temperature` on your own labelled data before you rely on a threshold, as
+SemIf does per workload; it never changes which option wins. `SemIfLM` is an ordinary
+`dspy.LM`, so caching, retries, `acall` and saving work as usual. It turns thinking off
+(`chat_template_kwargs`) unless you pass your own.
+
+`acall` asks one state's questions in turn, because llama.cpp caches a prefix per server
+slot: 16 questions over a 1000-word state took 1.5 s in turn and 12 s in parallel. On a
+server that shares its prefix cache across requests, such as vLLM, try
+`parallel_questions=True`.
 
 On SemIf's own 144-row workload, `SemIfLM` sends byte-identical prompts. It agrees with
 SemIf's published decisions on 96–98% of rows, and its accuracy lands within 0.011 of

@@ -11,7 +11,9 @@ Jev's format, so ``JevAdapter`` works unchanged::
 
 Each question is one request, a single token long. Probabilities are renormalised over
 the letters found in ``top_logprobs``, so they are conditional on the options and
-uncalibrated.
+uncalibrated unless ``calibration_temperature`` is set. A letter outside the top
+``top_logprobs`` reads as 0; llama.cpp accepts ``top_logprobs`` well above 20 when the
+exact tail matters.
 
 Up to 16 options get letters A-P. 17-256 options get two-letter labels AA-PP, read by
 the chain rule: a label the tokenizer keeps whole is read from the first token; for a
@@ -145,10 +147,12 @@ def _answer(
     options: dict[str, str],
     response: Any,
     seconds: dict[str, Any] | None = None,
+    temperature: float = 1.0,
 ) -> dict[str, Any]:
     """Turn the first token's ``top_logprobs`` into a Jev answer over ``options``.
 
     ``seconds`` maps a pre-filled first letter to the response that read the second.
+    ``temperature`` rescales the probabilities as ``softmax(logits / T)`` would.
     """
     labels = _labels(len(options))
     top = _top(response)
@@ -167,7 +171,8 @@ def _answer(
             f"No option letter among the model's top logprobs {[t['token'] for t in top]}; "
             "raise top_logprobs, or check that the server returns logprobs."
         )
-    probs = {key: p / total for key, p in mass.items()}
+    scaled = {key: p ** (1 / temperature) for key, p in mass.items()}
+    probs = {key: p / sum(scaled.values()) for key, p in scaled.items()}
     if question["type"] == "noul":
         return {"type": "noul", "noul": probs["true"]}
 
@@ -209,20 +214,40 @@ class SemIfLM(dspy.LM):  # type: ignore[misc]
             requests ran about 3x faster. Off by default: it departs from SemIf's prompt,
             and on JevBench it cost Qwen3-0.6B 37 of 231 items, though it made no
             measurable difference on 2B and 4B models.
+        parallel_questions: Send one request's questions concurrently from ``acall``.
+            Off by default: llama.cpp caches a prefix per server slot, so parallel
+            questions each re-read the shared state. In turn, 16 questions over a
+            1000-word state took 1.5 s instead of 12 s. A server that shares its prefix
+            cache across requests (vLLM) may do better in parallel.
+        calibration_temperature: ``T`` of SemIf's post-hoc temperature scaling. Fit it
+            per workload on labelled rows; it never changes which option wins.
+
+    Thinking is switched off through ``extra_body={"chat_template_kwargs": ...}``, as
+    SemIf renders its prompts, unless ``chat_template_kwargs`` is passed.
     """
 
     def __init__(
-        self, model: str, top_logprobs: int = 20, question_first: bool = False, **kwargs: Any
+        self,
+        model: str,
+        top_logprobs: int = 20,
+        question_first: bool = False,
+        parallel_questions: bool = False,
+        calibration_temperature: float = 1.0,
+        **kwargs: Any,
     ) -> None:
         super().__init__(model, **kwargs)
         self.top_logprobs = top_logprobs
         self.question_first = question_first
+        self.parallel_questions = parallel_questions
+        self.calibration_temperature = calibration_temperature
 
     def dump_state(self) -> dict[str, Any]:
         return {
             **super().dump_state(),
             "top_logprobs": self.top_logprobs,
             "question_first": self.question_first,
+            "parallel_questions": self.parallel_questions,
+            "calibration_temperature": self.calibration_temperature,
         }
 
     def _check_truncation(self, results: Any) -> None:
@@ -242,8 +267,11 @@ class SemIfLM(dspy.LM):  # type: ignore[misc]
             requests.append(
                 (qid, q, opts, _messages(request["state"], q, opts, media, self.question_first))
             )
+        extra_body = {**(self.kwargs.get("extra_body") or {}), **(kwargs.get("extra_body") or {})}
+        extra_body.setdefault("chat_template_kwargs", {"enable_thinking": False})
         kwargs = {
             **kwargs,
+            "extra_body": extra_body,
             "max_tokens": 1,
             "temperature": 0.0,
             "logprobs": True,
@@ -262,7 +290,7 @@ class SemIfLM(dspy.LM):  # type: ignore[misc]
                 f: super(SemIfLM, self).forward(messages=_prefill(msgs, f), **kw)
                 for f in _prefixes(opts, first)
             }
-            answers[qid] = _answer(q, opts, first, seconds)
+            answers[qid] = _answer(q, opts, first, seconds, self.calibration_temperature)
         return _completion(self.model, answers)
 
     async def aforward(
@@ -277,8 +305,13 @@ class SemIfLM(dspy.LM):  # type: ignore[misc]
             reads = await asyncio.gather(
                 *(base(messages=_prefill(msgs, f), **kw) for f in prefixes)
             )
-            return _answer(q, opts, first, dict(zip(prefixes, reads, strict=True)))
+            seconds = dict(zip(prefixes, reads, strict=True))
+            return _answer(q, opts, first, seconds, self.calibration_temperature)
 
-        results = await asyncio.gather(*(answer(q, opts, msgs) for _, q, opts, msgs in requests))
+        calls = [answer(q, opts, msgs) for _, q, opts, msgs in requests]
+        if self.parallel_questions:
+            results = await asyncio.gather(*calls)
+        else:
+            results = [await call for call in calls]
         answers = {qid: a for (qid, *_), a in zip(requests, results, strict=True)}
         return _completion(self.model, answers)

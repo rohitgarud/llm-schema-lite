@@ -20,11 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the default keeps SemIf's prompt byte for byte. On JevBench the new layout cost
   Qwen3-0.6B 37 of 231 items (p < 0.0001). It made no measurable difference on SemIf's 2B
   and 4B models, and it tied on authored144.
+- **`SemIfLM(calibration_temperature=T)`**: SemIf's post-hoc temperature scaling,
+  `softmax(logits / T)` over the options. Fit `T` per workload; the argmax never moves.
+- **`SemIfLM(parallel_questions=True)`** keeps the old concurrent `acall`.
+
 - **JevBench benchmark** (`benchmarking/jevbench/`). It runs JevBench's 231 public items
   through `SemIfLM` next to JevBench's published SemIf and Jev runs, pinned by commit and
   SHA-256. It reports accuracy per tier, JevBench's calibration axis and serial latency.
   With SemIf's Qwen3.5-4B GGUF at Q4_K_M it scores 100% / 94% / 56% (easy / standard /
   hard), against 100% / 99% / 61% for SemIf's own BF16 run.
+
+### Changed
+
+- **`SemIfLM.acall` asks one state's questions in turn.** llama.cpp caches a prefix per
+  server slot, so concurrent questions each re-read the state: 16 questions over a
+  1000-word state took 12 s in parallel and 1.5 s in turn.
+- **`SemIfLM` turns thinking off** through `extra_body={"chat_template_kwargs": ...}`, as
+  SemIf renders its prompts, unless `chat_template_kwargs` is passed.
 
 ### Documentation
 

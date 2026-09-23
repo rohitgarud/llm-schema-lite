@@ -311,12 +311,79 @@ def test_semif_lm_leaves_a_text_only_payload_as_a_plain_string() -> None:
 
 def test_semif_lm_state_round_trips() -> None:
     state = SemIfLM(
-        "openai/local", top_logprobs=5, question_first=True, api_base="http://h/v1"
+        "openai/local",
+        top_logprobs=5,
+        question_first=True,
+        parallel_questions=True,
+        calibration_temperature=2.0,
+        api_base="http://h/v1",
     ).dump_state()
     lm = dspy.BaseLM.load_state(state, allow_custom_lm_class=True)
     assert isinstance(lm, SemIfLM)
     assert lm.top_logprobs == 5
     assert lm.question_first is True
+    assert lm.parallel_questions is True
+    assert lm.calibration_temperature == 2.0
+
+
+@pytest.mark.parametrize(
+    ("extra_body", "sent"),
+    [
+        (None, {"chat_template_kwargs": {"enable_thinking": False}}),
+        ({"top_k": 1}, {"top_k": 1, "chat_template_kwargs": {"enable_thinking": False}}),
+        (  # an explicit choice wins
+            {"chat_template_kwargs": {"enable_thinking": True}},
+            {"chat_template_kwargs": {"enable_thinking": True}},
+        ),
+    ],
+)
+def test_semif_lm_turns_thinking_off_unless_told_otherwise(
+    extra_body: dict[str, Any] | None, sent: dict[str, Any]
+) -> None:
+    """A thinking model would open with <think>, not a letter; SemIf renders with it off."""
+    SENT.clear()
+    kwargs = {"extra_body": extra_body} if extra_body else {}
+    with mock.patch("dspy.clients.lm.litellm_completion", new=_fake_completion):
+        with dspy.context(lm=SemIfLM("openai/local", **kwargs), adapter=JevAdapter()):
+            dspy.Predict(Triage)(message="Payouts failing!")
+
+    assert all(s["extra_body"] == sent for s in SENT)
+
+
+@pytest.mark.parametrize(("parallel", "most_in_flight"), [(False, 1), (True, 4)])
+def test_semif_lm_async_asks_one_states_questions_in_turn(
+    parallel: bool, most_in_flight: int
+) -> None:
+    """In turn, llama.cpp reads the shared state once; in parallel, once per server slot."""
+    in_flight, seen = 0, []
+
+    async def fake(request: dict[str, Any], **kwargs: Any) -> Any:
+        nonlocal in_flight
+        in_flight += 1
+        seen.append(in_flight)
+        await asyncio.sleep(0)
+        in_flight -= 1
+        return _fake_completion(request, **kwargs)
+
+    lm = SemIfLM("openai/local", parallel_questions=parallel)
+    with mock.patch("dspy.clients.lm.alitellm_completion", new=fake):
+        with dspy.context(lm=lm, adapter=JevAdapter()):
+            pred = asyncio.run(dspy.Predict(Triage).acall(message="Payouts failing!"))
+
+    assert max(seen) == most_in_flight
+    assert pred.frustration == "angry"
+
+
+def test_semif_lm_calibration_temperature_softens_the_probabilities() -> None:
+    """p_i ** (1 / T), renormalised: the same as softmax(logits / T) over the options."""
+    with mock.patch("dspy.clients.lm.litellm_completion", new=_fake_completion):
+        with dspy.context(lm=SemIfLM("openai/local", calibration_temperature=2.0)):
+            with dspy.context(adapter=JevAdapter()):
+                pred = dspy.Predict(Triage)(message="Payouts failing!")
+
+    # A: 0.6, B: 0.3 -> sqrt(2/3) / (sqrt(2/3) + sqrt(1/3))
+    assert pred.jev["is_urgent"]["noul"] == pytest.approx(2**0.5 / (2**0.5 + 1))
+    assert pred.frustration == "angry"  # the argmax never moves
 
 
 @pytest.mark.parametrize(
