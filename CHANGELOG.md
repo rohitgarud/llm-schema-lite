@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **README demo: `SemIfLM` plays Doom from pixels.** A local Qwen3-VL-4B reads ViZDoom
+  screenshots through `JevAdapter` + `SemIfLM`, one single-token readout per frame (~130 ms).
+  Acting on the argmax scores +1.90, level with a policy that ignores the screen (+1.70);
+  firing only when `P(centre) >= 0.95` scores +6.50 ± 0.97 over 20 episodes. The scripts
+  behind every number, and the recording, are in `demos/doom/`.
+
 ## [v0.11.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.11.0) - 2026-09-23
 
 <small>[Compare with v0.10.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.10.0...v0.11.0)</small>

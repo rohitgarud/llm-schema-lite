@@ -726,6 +726,45 @@ On SemIf's own 144-row workload, `SemIfLM` sends byte-identical prompts. It agre
 SemIf's published decisions on 96–98% of rows, and its accuracy lands within 0.011 of
 SemIf's reported numbers. See the [parity benchmark](benchmarking/semif/README.md).
 
+`dspy.Image` inputs reach the model as image content, so the same readout works on a vision
+model. The server must return `top_logprobs` for an image request; llama.cpp does. A server
+without vision support fails with an error rather than dropping the image.
+
+##### Demo: SemIf plays Doom from pixels
+
+![A local vision model playing Doom through SemIfLM, with its option probabilities beside the game](https://raw.githubusercontent.com/rohitgarud/llm-schema-lite/main/demos/doom/doom_overlay.webp)
+
+Qwen3-VL-4B (Q4_K_M, llama.cpp, one 8 GB laptop GPU) plays ViZDoom's `defend_the_center`
+from raw screenshots. Each frame is one question, "where is the nearest monster?", with four
+options: centre, left, right, none. That makes one single-token request, answered in a median
+of about 130 ms. The panel shows the probabilities the model returned.
+
+The agent turns toward whichever side has more probability. It fires only when
+`P(centre) >= 0.95`, not whenever `centre` is the argmax. That gate is what makes it play:
+
+| policy (20 episodes unless noted) | mean score |
+|---|---|
+| best policy that ignores the screen (random, biased to turn right) | +1.70 ± 0.28 |
+| SemIf, act on the argmax (10 episodes) | +1.90 |
+| SemIf, fire only if `P(centre) >= 0.95` | **+6.50 ± 0.97** |
+
+On the argmax the agent fires on about three quarters of frames. It then scores the same as a
+policy that never looks. The 0.95 threshold was picked by trying 0.5, 0.8 and 0.95 on this
+task, which is the calibration step above. A scripted bot would still play better. The demo
+shows what the probabilities are for, not a strong Doom player. For comparison, TypeSafe's
+[Jev Doom demo](https://typesafe.ai/blog/introducing-system-one-models-and-jev) drives the
+game from structured state given as text; this one reads pixels.
+
+To run it, start `llama-server` with the model and its `--mmproj` on port 8089. Then run:
+
+<!-- lsl-docs: skip: needs vizdoom and a local vision model server -->
+```bash
+pip install vizdoom pillow imageio
+python demos/doom/doomoverlay.py      # plays and records demos/doom/doom_overlay.webp
+python demos/doom/doomconfirm.py 20   # the gated policy vs random, with standard errors
+python demos/doom/doombase.py 20      # screen-blind baselines, no model needed
+```
+
 ### Benchmark results
 
 Six sub-1.2B models × eight adapters × five corpora, 30 labeled cases each, run against a

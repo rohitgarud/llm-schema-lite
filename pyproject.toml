@@ -88,8 +88,11 @@ packages = ["src/llm_schema_lite"]
 #
 # SHOW_AND_TELL.md is untracked but NOT gitignored, so hatch vendored it into the sdist even
 # though git has never carried it. Excluded so a draft cannot be published by accident.
+#
+# demos/ carries recorded GIFs (the Doom demo is 3.3 MB) that the README links by URL.
 exclude = [
     "/benchmarking/*/results",
+    "/demos",
     "/SHOW_AND_TELL.md",
 ]
 
