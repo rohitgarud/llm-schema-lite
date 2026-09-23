@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.11.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.11.0) - 2026-09-23
+
+<small>[Compare with v0.10.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.10.0...v0.11.0)</small>
+
+### Added
+
+- **`SemIfLM` carries image inputs through to a vision model.** A `dspy.Image` (or any other
+  `dspy.Type`) input field on the signature is serialised by DSPy into a marker inside the
+  adapter's JSON payload and expanded into content blocks at the LM boundary. `SemIfLM` now
+  splits that turn back apart: the image blocks lead the user message and each one leaves a
+  `<<image N>>` placeholder behind in the JSON, so the payload stays parseable and the options
+  stay next to the letter the model is about to emit. Verified end to end against Qwen3-VL-4B
+  (Q4_K_M) on llama.cpp: the server returns `top_logprobs` for a multimodal request, the image
+  reaches the model, and the readout's probabilities move with what the image shows.
+
+  A text-only payload is byte-identical to before -- the user content stays the same string,
+  so SemIf parity prompts hash the same. A server without vision support fails loudly rather
+  than silently dropping the image (llama.cpp returns HTTP 500 with its `mmproj` hint, which
+  surfaces as `LMServerError`); backends that accept and discard image blocks are not detected.
+
 ## [v0.10.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.10.0) - 2026-09-23
 
 <small>[Compare with v0.9.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.9.0...v0.10.0)</small>
