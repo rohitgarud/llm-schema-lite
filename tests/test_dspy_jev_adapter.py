@@ -310,10 +310,31 @@ def test_semif_lm_leaves_a_text_only_payload_as_a_plain_string() -> None:
 
 
 def test_semif_lm_state_round_trips() -> None:
-    state = SemIfLM("openai/local", top_logprobs=5, api_base="http://h/v1").dump_state()
+    state = SemIfLM(
+        "openai/local", top_logprobs=5, question_first=True, api_base="http://h/v1"
+    ).dump_state()
     lm = dspy.BaseLM.load_state(state, allow_custom_lm_class=True)
     assert isinstance(lm, SemIfLM)
     assert lm.top_logprobs == 5
+    assert lm.question_first is True
+
+
+@pytest.mark.parametrize(
+    ("question_first", "order"),
+    [(False, ["evidence", "criterion", "options"]), (True, ["criterion", "options", "evidence"])],
+)
+def test_semif_lm_question_first_moves_the_evidence_last(
+    question_first: bool, order: list[str]
+) -> None:
+    """Evidence last lets fanned-out requests share the question in the server's KV cache."""
+    SENT.clear()
+    with mock.patch("dspy.clients.lm.litellm_completion", new=_fake_completion):
+        with dspy.context(lm=SemIfLM("openai/local", question_first=question_first)):
+            with dspy.context(adapter=JevAdapter()):
+                pred = dspy.Predict(Triage)(message="Payouts failing!")
+
+    assert all(list(json.loads(s["messages"][-1]["content"])) == order for s in SENT)
+    assert pred.frustration == "angry"  # same readout either way
 
 
 class _LazyLogprobs(pydantic.BaseModel):
@@ -342,3 +363,76 @@ def test_semif_lm_reads_logprobs_whose_serializer_is_not_built_yet() -> None:
     answer = _answer({"type": "noul"}, {"true": "Yes", "false": "No"}, response)
 
     assert answer["noul"] == pytest.approx(0.25)
+
+
+def _fake_pairs(request: dict[str, Any], **_: Any) -> Any:
+    """First read: whole-label tokens plus a lone prefix "A"; after "A", the second letter."""
+    import litellm
+
+    SENT.append(request)
+    last = request["messages"][-1]
+    probs = (
+        {"C": 0.75, "D": 0.25, " apple": 0.5}  # junk is renormalised away
+        if last["role"] == "assistant"
+        else {"A": 0.6, "BC": 0.3, "Sure": 0.1, "B": 1e-4}  # "B" is under the 1% floor
+    )
+    top = [{"token": t, "logprob": math.log(p)} for t, p in probs.items()]
+    logprobs = {"content": [{"token": top[0]["token"], "logprob": 0.0, "top_logprobs": top}]}
+    return litellm.ModelResponse(
+        model="local",
+        choices=[{"message": {"role": "assistant", "content": "A"}, "logprobs": logprobs}],
+    )
+
+
+async def _afake_pairs(request: dict[str, Any], **kwargs: Any) -> Any:
+    return _fake_pairs(request, **kwargs)
+
+
+def test_semif_lm_reads_more_than_16_options_through_two_letter_labels() -> None:
+    """17-256 options get labels AA..PP: P(label) = P(whole token) + P(first) * P(second)."""
+    criteria = {f"o{i}": f"option {i}" for i in range(20)}  # AA..AP, then BA..BD
+    payload = {
+        "state": "s",
+        "questions": {
+            "q": {
+                "type": "choice",
+                "criteria": criteria,
+                "instructions": {"task": "", "question": ""},
+            }
+        },
+    }
+    messages = [{"role": "user", "content": json.dumps(payload)}]
+    for patch, call in [
+        ("litellm_completion", lambda lm: lm(messages=messages)),
+        ("alitellm_completion", lambda lm: asyncio.run(lm.acall(messages=messages))),
+    ]:
+        SENT.clear()
+        fake = _fake_pairs if patch == "litellm_completion" else _afake_pairs
+        with mock.patch(f"dspy.clients.lm.{patch}", new=fake):
+            [out] = call(SemIfLM("openai/local"))
+        answer = json.loads(out)["q"]
+
+        sent = json.loads(SENT[0]["messages"][-1]["content"])
+        assert [o["letter"] for o in sent["options"]][15:] == ["AP", "BA", "BB", "BC", "BD"]
+        assert len(SENT) == 2  # one follow-up, for prefix "A" only
+        assert SENT[1]["messages"][-1] == {"role": "assistant", "content": "A"}
+        # AC = 0.6 * 0.75, AD = 0.6 * 0.25, BC = 0.3 whole; renormalised over 0.9
+        assert answer["probabilities"]["o2"] == pytest.approx(0.5)
+        assert answer["probabilities"]["o3"] == pytest.approx(1 / 6)
+        assert answer["probabilities"]["o18"] == pytest.approx(1 / 3)
+        assert answer["choice"] == "o2"
+
+
+def test_semif_lm_rejects_more_than_256_options() -> None:
+    payload = {
+        "state": "s",
+        "questions": {
+            "q": {
+                "type": "choice",
+                "criteria": {str(i): "x" for i in range(257)},
+                "instructions": {"task": "", "question": ""},
+            }
+        },
+    }
+    with pytest.raises(ValueError, match="2-256 options"):
+        SemIfLM("openai/local")(messages=[{"role": "user", "content": json.dumps(payload)}])

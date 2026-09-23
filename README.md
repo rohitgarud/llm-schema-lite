@@ -730,6 +730,20 @@ SemIf's reported numbers. See the [parity benchmark](benchmarking/semif/README.m
 model. The server must return `top_logprobs` for an image request; llama.cpp does. A server
 without vision support fails with an error rather than dropping the image.
 
+A question can have up to 256 options. Past 16, options get two-letter labels (`AA` to `PP`)
+and are read by the chain rule. When a label is split into two tokens, the server has to
+continue a pre-filled assistant turn, which llama.cpp does. Small models pick poorly from
+long option lists, though: on Wikipedia pages, asking Qwen3-VL-4B about each link
+separately chose better links than one 255-option question.
+
+For fan-out, meaning many requests that differ only in their evidence (candidates, frames,
+links), pass `SemIfLM(..., question_first=True)`. The criterion and options then come
+before the evidence, so the server can reuse them from its KV cache. With llama.cpp started
+with `-np 16 --kv-unified --cache-ram 0`, 16 parallel requests ran 3.2x faster (5.9 against
+19 ms per request). It stays off by default. It departs from SemIf's prompt, and on
+JevBench it cost Qwen3-0.6B 37 of 231 items (p < 0.0001), while making no measurable
+difference on the 2B and 4B models. Measure it on your own model before you turn it on.
+
 ##### Demo: SemIf plays Doom from pixels
 
 ![A local vision model playing Doom through SemIfLM, with its option probabilities beside the game](https://raw.githubusercontent.com/rohitgarud/llm-schema-lite/main/demos/doom/doom_overlay.webp)

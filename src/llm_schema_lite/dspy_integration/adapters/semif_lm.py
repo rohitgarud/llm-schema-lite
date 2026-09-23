@@ -13,6 +13,13 @@ Each question is one request, a single token long. Probabilities are renormalise
 the letters found in ``top_logprobs``, so they are conditional on the options and
 uncalibrated.
 
+Up to 16 options get letters A-P. 17-256 options get two-letter labels AA-PP, read by
+the chain rule: a label the tokenizer keeps whole is read from the first token; for a
+label it splits, the first letter is pre-filled as the assistant turn and a follow-up
+request reads the second (the server must continue a trailing assistant message, as
+llama.cpp does). A model may shy away from labels its tokenizer splits: Qwen3 put 0.001
+on a correct ``CJ``, which it reads as ``C`` + ``J``.
+
 ``dspy.Image`` and other ``dspy.Type`` input fields are carried through as content blocks,
 so the readout works on a vision model. The server must return ``top_logprobs`` for a
 multimodal request; not every VLM backend does.
@@ -31,11 +38,20 @@ import pydantic
 import pydantic_core
 
 LETTERS = "ABCDEFGHIJKLMNOP"
+PAIRS = [a + b for a in LETTERS for b in LETTERS]
+PREFIX_FLOOR = 0.01  # ponytail: skip follow-ups for first letters under 1% of the mass
 PLACEHOLDER = "<<image {}>>"  # stands in for an image in the JSON payload, which stays text
 SYSTEM = (  # SemIf's DIRECT_SYSTEM prompt, verbatim
     "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. "
     "Respond with only its uppercase letter, with no explanation or reasoning."
 )
+SYSTEM_PAIRS = SYSTEM.replace("its uppercase letter", "its two-letter uppercase label")
+
+
+def _labels(n: int) -> list[str]:
+    if not 2 <= n <= len(PAIRS):
+        raise ValueError(f"SemIfLM needs 2-{len(PAIRS)} options, got {n}")
+    return list(LETTERS[:n]) if n <= len(LETTERS) else PAIRS[:n]
 
 
 def _options(question: dict[str, Any]) -> dict[str, str]:
@@ -73,40 +89,78 @@ def _messages(
     question: dict[str, Any],
     options: dict[str, str],
     media: list[dict[str, Any]] | None = None,
+    question_first: bool = False,
 ) -> list[dict[str, Any]]:
-    if not 2 <= len(options) <= len(LETTERS):
-        raise ValueError(f"SemIfLM needs 2-{len(LETTERS)} options, got {len(options)}")
     ins = question["instructions"]
     payload = {
-        "evidence": state,
         "criterion": f"{ins['task']}\n{ins['question']}".strip(),
         "options": [
             {"letter": letter, "description": desc}
-            for letter, desc in zip(LETTERS, options.values(), strict=False)
+            for letter, desc in zip(_labels(len(options)), options.values(), strict=True)
         ],
     }
+    # SemIf's order puts the evidence first; last, it leaves the question as a shared prefix.
+    payload = {**payload, "evidence": state} if question_first else {"evidence": state, **payload}
     text = json.dumps(payload, ensure_ascii=False)
     # Images lead, so the options stay next to the letter the model is about to emit.
     content = [*media, {"type": "text", "text": text}] if media else text
+    system = SYSTEM if len(options) <= len(LETTERS) else SYSTEM_PAIRS
     return [
-        {"role": "system", "content": SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": content},
     ]
 
 
-def _answer(question: dict[str, Any], options: dict[str, str], response: Any) -> dict[str, Any]:
-    """Turn the first token's ``top_logprobs`` into a Jev answer over ``options``."""
+def _top(response: Any) -> list[dict[str, Any]]:
+    """The first token's ``top_logprobs``."""
     logprobs = response.choices[0].logprobs
     if isinstance(logprobs, pydantic.BaseModel):
         # model_dump builds a serializer pydantic deferred (a cache hit in a fresh process);
         # to_jsonable_python would pass its placeholder to pydantic-core and fail.
         logprobs = logprobs.model_dump()
     logprobs = pydantic_core.to_jsonable_python(logprobs)
-    top = logprobs["content"][0]["top_logprobs"] if logprobs else []
-    mass = {
-        key: sum(math.exp(t["logprob"]) for t in top if t["token"].strip() == letter)
-        for key, letter in zip(options, LETTERS, strict=False)
+    return logprobs["content"][0]["top_logprobs"] if logprobs else []
+
+
+def _mass(top: list[dict[str, Any]], labels: list[str]) -> dict[str, float]:
+    return {
+        label: sum(math.exp(t["logprob"]) for t in top if t["token"].strip() == label)
+        for label in labels
     }
+
+
+def _prefixes(options: dict[str, str], response: Any) -> list[str]:
+    """First letters of two-letter labels that carry enough mass to need a follow-up read."""
+    labels = _labels(len(options))
+    if len(labels[0]) == 1:
+        return []
+    top = _top(response)
+    firsts = _mass(top, sorted({label[0] for label in labels}))
+    total = sum(firsts.values()) + sum(_mass(top, labels).values())
+    return [f for f, p in firsts.items() if p and p >= PREFIX_FLOOR * total]
+
+
+def _answer(
+    question: dict[str, Any],
+    options: dict[str, str],
+    response: Any,
+    seconds: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Turn the first token's ``top_logprobs`` into a Jev answer over ``options``.
+
+    ``seconds`` maps a pre-filled first letter to the response that read the second.
+    """
+    labels = _labels(len(options))
+    top = _top(response)
+    by_label = _mass(top, labels)
+    for first, second in (seconds or {}).items():
+        p_first = _mass(top, [first])[first]
+        p_second = _mass(_top(second), [label[1] for label in labels if label[0] == first])
+        norm = sum(p_second.values())
+        for letter, p in p_second.items():
+            if norm:
+                by_label[first + letter] += p_first * p / norm
+    mass = dict(zip(options, by_label.values(), strict=True))
     total = sum(mass.values())
     if not total:
         raise ValueError(
@@ -124,6 +178,11 @@ def _answer(question: dict[str, Any], options: dict[str, str], response: Any) ->
     else:
         answer["choice"] = best
     return answer
+
+
+def _prefill(messages: list[dict[str, Any]], first: str) -> list[dict[str, Any]]:
+    """Pre-fill ``first`` as the assistant turn so the next token is the label's second."""
+    return [*messages, {"role": "assistant", "content": first}]
 
 
 def _completion(model: str, answers: dict[str, Any]) -> litellm.ModelResponse:
@@ -144,14 +203,27 @@ class SemIfLM(dspy.LM):  # type: ignore[misc]
     Args:
         model: LiteLLM model id, e.g. ``"openai/<served-model-name>"`` for vLLM.
         top_logprobs: Candidate tokens requested per question; letters outside them get 0.
+        question_first: Send the criterion and options before the evidence, not after.
+            Requests that differ only in their evidence then share the question as a
+            cached prefix: on llama.cpp (``-np 16 --kv-unified``), 16 parallel short
+            requests ran about 3x faster. Off by default: it departs from SemIf's prompt,
+            and on JevBench it cost Qwen3-0.6B 37 of 231 items, though it made no
+            measurable difference on 2B and 4B models.
     """
 
-    def __init__(self, model: str, top_logprobs: int = 20, **kwargs: Any) -> None:
+    def __init__(
+        self, model: str, top_logprobs: int = 20, question_first: bool = False, **kwargs: Any
+    ) -> None:
         super().__init__(model, **kwargs)
         self.top_logprobs = top_logprobs
+        self.question_first = question_first
 
     def dump_state(self) -> dict[str, Any]:
-        return {**super().dump_state(), "top_logprobs": self.top_logprobs}
+        return {
+            **super().dump_state(),
+            "top_logprobs": self.top_logprobs,
+            "question_first": self.question_first,
+        }
 
     def _check_truncation(self, results: Any) -> None:
         pass  # Every request stops at one token by design.
@@ -167,7 +239,9 @@ class SemIfLM(dspy.LM):  # type: ignore[misc]
         requests = []
         for qid, q in request["questions"].items():
             opts = _options(q)
-            requests.append((qid, q, opts, _messages(request["state"], q, opts, media)))
+            requests.append(
+                (qid, q, opts, _messages(request["state"], q, opts, media, self.question_first))
+            )
         kwargs = {
             **kwargs,
             "max_tokens": 1,
@@ -181,21 +255,30 @@ class SemIfLM(dspy.LM):  # type: ignore[misc]
         self, prompt: str | None = None, messages: list[dict[str, Any]] | None = None, **kwargs: Any
     ) -> litellm.ModelResponse:
         requests, kw = self._requests(messages or [], kwargs)
-        answers = {
-            qid: _answer(q, opts, super(SemIfLM, self).forward(messages=msgs, **kw))
-            for qid, q, opts, msgs in requests
-        }
+        answers = {}
+        for qid, q, opts, msgs in requests:
+            first = super().forward(messages=msgs, **kw)
+            seconds = {
+                f: super(SemIfLM, self).forward(messages=_prefill(msgs, f), **kw)
+                for f in _prefixes(opts, first)
+            }
+            answers[qid] = _answer(q, opts, first, seconds)
         return _completion(self.model, answers)
 
     async def aforward(
         self, prompt: str | None = None, messages: list[dict[str, Any]] | None = None, **kwargs: Any
     ) -> litellm.ModelResponse:
         requests, kw = self._requests(messages or [], kwargs)
-        responses = await asyncio.gather(
-            *(super(SemIfLM, self).aforward(messages=msgs, **kw) for *_, msgs in requests)
-        )
-        answers = {
-            qid: _answer(q, opts, response)
-            for (qid, q, opts, _), response in zip(requests, responses, strict=True)
-        }
+        base = super().aforward
+
+        async def answer(q: dict[str, Any], opts: dict[str, str], msgs: list[Any]) -> Any:
+            first = await base(messages=msgs, **kw)
+            prefixes = _prefixes(opts, first)
+            reads = await asyncio.gather(
+                *(base(messages=_prefill(msgs, f), **kw) for f in prefixes)
+            )
+            return _answer(q, opts, first, dict(zip(prefixes, reads, strict=True)))
+
+        results = await asyncio.gather(*(answer(q, opts, msgs) for _, q, opts, msgs in requests))
+        answers = {qid: a for (qid, *_), a in zip(requests, results, strict=True)}
         return _completion(self.model, answers)

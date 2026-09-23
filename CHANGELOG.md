@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`SemIfLM` reads up to 256 options.** Past 16, options get two-letter labels `AA`–`PP`.
+  A label the tokenizer keeps whole is read from the first token. For a label it splits,
+  the first letter is pre-filled as the assistant turn and a follow-up request reads the
+  second (chain rule). First letters under 1% of the probability mass get no follow-up.
+  Qwen3 keeps 241 of the 256 labels whole.
+- **`SemIfLM(question_first=True)`** puts the criterion and options before the evidence,
+  so requests that differ only in their evidence share the question as a cached prefix. On
+  llama.cpp (`-np 16 --kv-unified`), 16 parallel requests ran 3.2x faster. Off by default,
+  so the default keeps SemIf's prompt byte for byte. On JevBench the new layout cost
+  Qwen3-0.6B 37 of 231 items (p < 0.0001). It made no measurable difference on SemIf's 2B
+  and 4B models, and it tied on authored144.
+
 ### Documentation
 
 - **README demo: `SemIfLM` plays Doom from pixels.** A local Qwen3-VL-4B reads ViZDoom
