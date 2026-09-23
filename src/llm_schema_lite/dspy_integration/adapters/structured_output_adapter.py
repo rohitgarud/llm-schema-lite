@@ -509,7 +509,7 @@ def _wrap_scalars_in_lists(value: Any, annotation: Any) -> Any:
 
     Returns ``value`` itself (identity-comparable) when nothing changed.
     """
-    if isinstance(value, (str, int, float)) and _object_model(annotation) is None:
+    if isinstance(value, str | int | float) and _object_model(annotation) is None:
         item_type = _list_item_type(annotation)
         if item_type is not None and _object_model(item_type) is None:
             return [value]
@@ -527,7 +527,7 @@ def _strip_nested_markers(value: Any, annotation: Any, markers: list[str]) -> An
 
     Returns ``value`` itself when nothing was stripped.
     """
-    if not markers or not isinstance(value, (dict, list)):
+    if not markers or not isinstance(value, dict | list):
         return value
     try:
         schema = TypeAdapter(annotation).json_schema()

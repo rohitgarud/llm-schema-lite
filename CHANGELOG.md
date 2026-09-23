@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.10.0) - 2026-09-23
+
+<small>[Compare with v0.9.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.9.0...v0.10.0)</small>
+
+### Added
+
+- **`SemIfLM` answers `JevAdapter` requests with a local open model.** It follows
+  [SemIf](https://github.com/TheoLeeCJ/SemIf)'s direct option-logit readout: every option sits
+  behind a letter, each question is one request capped at a single token, and the answer comes
+  from that token's `top_logprobs` renormalised over the option letters -- the model generates
+  no answer text. Answers come back in Jev's `noul`/`choice`/`score` shape, so `JevAdapter`
+  needs no changes and `dspy.configure(lm=SemIfLM(...), adapter=JevAdapter())` is the only
+  difference from hosted Jev. Works with any OpenAI-compatible server that returns
+  `top_logprobs` (vLLM, llama.cpp `llama-server`, SGLang, Ollama). An ordinary `dspy.LM`
+  otherwise: `api_base`, `api_key`, caching, retries and `dump_state` behave as usual, `acall`
+  sends a question's requests concurrently, and a missing option letter raises a `ValueError`
+  naming the tokens that were returned. Probabilities are conditional on the listed options and
+  uncalibrated, so check them against your own data before trusting a threshold.
+
+- **A parity benchmark against SemIf's published results** (`benchmarking/semif/`). It scores
+  SemIf's 144-row authored workload through `SemIfLM` and compares row-level probabilities with
+  SemIf's own predictions for the same model, both fetched at a pinned commit and checked
+  against their SHA-256. All 576 rendered prompts hash to SemIf's recorded `prompt_sha256`, and
+  at Q8_0 the decisions agree with SemIf's native BF16 runs on 97-98% of rows.
+
+### Fixed
+
+- **`SemIfLM` no longer fails on a cached response in a fresh process.** DSPy's disk cache is
+  on by default, and a cache hit after a restart returns a logprobs model whose pydantic
+  serializer has not been built, which made `pydantic_core.to_jsonable_python` raise
+  `TypeError: expected 'SchemaSerializer' but got 'MockValSer'`. Every question failed on the
+  second run of a program. The response now goes through `model_dump()` first, which builds the
+  serializer.
+
 ## [v0.9.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.9.0) - 2026-09-21
 
 <small>[Compare with v0.8.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.8.0...v0.9.0)</small>
