@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.12.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.12.0) - 2026-09-24
+
+<small>[Compare with v0.11.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.11.0...v0.12.0)</small>
+
 ### Added
 
 - **`SemIfLM` reads up to 256 options.** Past 16, options get two-letter labels `AA`–`PP`.
@@ -23,7 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`SemIfLM(calibration_temperature=T)`**: SemIf's post-hoc temperature scaling,
   `softmax(logits / T)` over the options. Fit `T` per workload; the argmax never moves.
 - **`SemIfLM(parallel_questions=True)`** keeps the old concurrent `acall`.
-
 - **JevBench benchmark** (`benchmarking/jevbench/`). It runs JevBench's 231 public items
   through `SemIfLM` next to JevBench's published SemIf and Jev runs, pinned by commit and
   SHA-256. It reports accuracy per tier, JevBench's calibration axis and serial latency.
@@ -47,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Acting on the argmax scores +1.90, level with a policy that ignores the screen (+1.70);
   firing only when `P(centre) >= 0.95` scores +6.50 ± 0.97 over 20 episodes. The scripts
   behind every number, and the recording, are in `demos/doom/`.
+- **Kev is a supported `JevAdapter` backend.** [Kev](https://github.com/jaredpalmer/kev)'s
+  open-weights models serve TypeSafe's API locally, so `JevLM(url=...)` drives them unchanged.
+  `demos/wikirace/kev_race.py`: Kev-0.8B reached 5 of 5 targets at 0.39 s per hop.
 
 ## [v0.11.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.11.0) - 2026-09-23
 
