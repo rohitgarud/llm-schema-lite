@@ -30,7 +30,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from llm_schema_lite.dspy_integration import SemIfLM
+import dspy
+
+from llm_schema_lite.dspy_integration import JevLM, SemIfLM
 
 JEVBENCH_COMMIT = "2fa63fa3226cb369795525ed011800f57dcbd894"
 RAW = f"https://raw.githubusercontent.com/fstandhartinger/jevbench/{JEVBENCH_COMMIT}/"
@@ -163,7 +165,7 @@ def summarize(
     return summary
 
 
-def score_task(lm: SemIfLM, task: dict[str, Any]) -> dict[str, Any]:
+def score_task(lm: dspy.BaseLM, task: dict[str, Any]) -> dict[str, Any]:
     t0 = time.perf_counter()
     result: dict[str, Any] = {"id": task["id"]}
     try:
@@ -177,7 +179,8 @@ def score_task(lm: SemIfLM, task: dict[str, Any]) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--api-base", required=True, help="OpenAI-compatible base URL")
+    parser.add_argument("--api-base", help="OpenAI-compatible base URL")
+    parser.add_argument("--jev-url", help="A /v1/systemone endpoint (Jev, Kev), sent via JevLM")
     parser.add_argument("--model", default="openai/local", help="LiteLLM model id")
     parser.add_argument("--api-key", default="local")
     parser.add_argument("--our-model", required=True, help="What the server runs, for the record")
@@ -185,18 +188,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top-logprobs", type=int, default=20)
     parser.add_argument("--question-first", action="store_true")
     args = parser.parse_args(argv)
+    if not (args.api_base or args.jev_url):
+        parser.error("pass --api-base or --jev-url")
 
     tasks = load_tasks()
     per_task = json.loads(fetch(*PER_TASK))["systems"]
     references = {name: per_task[name]["public_tasks"] for name in REFERENCES}
-    lm = SemIfLM(
-        args.model,
-        api_base=args.api_base,
-        api_key=args.api_key,
-        top_logprobs=args.top_logprobs,
-        question_first=args.question_first,
-        cache=False,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    lm = (
+        JevLM(args.model, url=args.jev_url, cache=False)
+        if args.jev_url
+        else SemIfLM(
+            args.model,
+            api_base=args.api_base,
+            api_key=args.api_key,
+            top_logprobs=args.top_logprobs,
+            question_first=args.question_first,
+            cache=False,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
     )
     with ThreadPoolExecutor(args.workers) as pool:
         ours = list(pool.map(lambda t: score_task(lm, t), tasks))

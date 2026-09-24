@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SHA-256. It reports accuracy per tier, JevBench's calibration axis and serial latency.
   With SemIf's Qwen3.5-4B GGUF at Q4_K_M it scores 100% / 94% / 56% (easy / standard /
   hard), against 100% / 99% / 61% for SemIf's own BF16 run.
+  `--jev-url` sends the items to any `/v1/systemone` endpoint through `JevLM` instead,
+  such as a local [Kev](https://github.com/jaredpalmer/kev) server.
 
 ### Changed
 

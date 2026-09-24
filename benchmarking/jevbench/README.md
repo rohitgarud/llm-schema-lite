@@ -13,6 +13,9 @@ against their SHA-256 before use.
 llama-server -m Qwen_Qwen3.5-4B-Q4_K_M.gguf -ngl 99 -c 16384 --port 8089
 uv run python -m benchmarking.jevbench.run --api-base http://localhost:8089/v1 \
     --our-model "Qwen3.5-4B Q4_K_M"          # add --question-first for that layout
+# or any /v1/systemone endpoint through JevLM, e.g. a local Kev server
+uv run python -m benchmarking.jevbench.run --jev-url http://127.0.0.1:8009/v1/systemone \
+    --model kev-latest --our-model "Kev-0.8B bf16"
 ```
 
 Each run writes `results/jevbench-<model>-<date>.json`, with a summary and every item's
@@ -40,6 +43,7 @@ are JevBench's own runs.
 | `SemIfLM`, MiniCPM5-2B Q4_K_M | 100% | 69.4% | 43.2% | 41.7 | 0.09 s / 0.88 s |
 | `SemIfLM`, Qwen3-0.6B Q8_0 | 87.5% | 48.6% | 36.0% | 28.1 | 0.03 s / 0.75 s |
 | `SemIfLM`, Qwen3-VL-4B-Instruct Q4_K_M (not a SemIf model) | 100% | 86.1% | 45.0% | 30.9 | 0.10 s / 2.19 s |
+| `JevLM` to [Kev](https://github.com/jaredpalmer/kev)-0.8B bf16 (`kev.serve`) | 100% | 75.0% | 29.7% | 55.1 | 0.11 s / 0.24 s |
 
 - **Same model, 4-bit, lands a few items short of SemIf's BF16 run.** Of the 21 items only
   one of the two got right, SemIf's run got 15 and `SemIfLM` got 6 (McNemar p = 0.078).
@@ -48,6 +52,10 @@ are JevBench's own runs.
   And the reference ran in BF16: on authored144 the same Q4_K_M agrees with BF16 on 95.8% of
   rows.
 - **No item lost its option letters** from the top 20 logprobs, on any model.
+- **Kev-0.8B is the only Kev that fits this 8 GB GPU in bf16.** Kev's own README puts the
+  4B and 9B well above it, and it has no GGUF. On the hard tier it is the least accurate
+  run here, but its calibration (55.1) beats the 2B and 0.6B `SemIfLM` runs. Qwen3.5-4B
+  beats it on both.
 - **p95 is the hard tier's long states,** which run to about 4k tokens of prompt each.
 
 ### `question_first=True`

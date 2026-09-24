@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
 
-pytest.importorskip("dspy")
+dspy = pytest.importorskip("dspy")
 
-from benchmarking.jevbench.run import distribution, payload, summarize  # noqa: E402
+from benchmarking.jevbench.run import distribution, payload, score_task, summarize  # noqa: E402
+from llm_schema_lite.dspy_integration import JevLM  # noqa: E402
+from llm_schema_lite.dspy_integration.adapters import jev_adapter  # noqa: E402
 
 NOUL = {
     "id": "n1",
@@ -66,3 +71,24 @@ def test_summarize_scores_tiers_calibration_and_the_reference_on_the_same_items(
     assert out["ours"]["calibration"] == pytest.approx((80 + 70) / 2)  # JevBench v1.2 formula
     assert out["ours"]["p50_s"] == pytest.approx(0.3)
     assert out["jev"]["both_right"] == 0 and out["jev"]["only_ours_right"] == 1
+
+
+def test_score_task_sends_the_item_to_a_systemone_endpoint_through_jev_lm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: dict[str, Any] = {}
+
+    def decide(url: str, payload: dict[str, Any], api_key: str) -> Any:
+        sent.update(url=url, payload=payload)
+        return dspy.LMResponse.from_text(json.dumps({"q": {"type": "noul", "noul": 0.7}}))
+
+    decide.__wrapped__ = decide  # type: ignore[attr-defined]  # cache=False takes this path
+    monkeypatch.setattr(jev_adapter, "_decide", decide)
+
+    row = score_task(JevLM("kev-latest", url="http://kev/v1/systemone", cache=False), NOUL)
+
+    assert row["probs"]["yes"] == 0.7
+    assert sent == {
+        "url": "http://kev/v1/systemone",
+        "payload": {"model": "kev-latest", **payload(NOUL)},
+    }
