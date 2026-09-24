@@ -636,8 +636,13 @@ streaming registration and known limits — is documented in
 [Jev](https://docs.typesafe.ai/introduction) (TypeSafe AI) is a *System One* model: it takes
 a `state` and a set of typed questions and returns calibrated probabilities instead of text,
 so there is nothing to parse or repair. `JevAdapter` compiles a signature into that request
-and decodes the answers back into typed output fields; `JevLM` sends it (OpenRouter by
-default, reading `$OPENROUTER_API_KEY`).
+and decodes the answers back into typed output fields. Supported backends:
+
+| Backend | Sent by | Runs |
+|---|---|---|
+| [Jev](https://docs.typesafe.ai/introduction) (TypeSafe) | `JevLM` (OpenRouter by default, reading `$OPENROUTER_API_KEY`) | hosted |
+| [Kev](https://github.com/jaredpalmer/kev) (open weights, Apache-2.0) | `JevLM(url=...)`, same API | local, [below](#local-open-weights-models-kev) |
+| any chat model through [SemIf](https://github.com/TheoLeeCJ/SemIf)'s readout | `SemIfLM` | local, [below](#local-open-models-semif) |
 
 <!-- lsl-docs: skip: issues a live Jev decision request via OpenRouter -->
 ```python
@@ -699,11 +704,20 @@ pred.jev["route.team"]["confidence"]   # raw answers: probabilities and confiden
 - **`JevLM`** supports `acall`, DSPy's request cache (`cache=False` to bypass) and saving
   programs. Its saved state keeps `url` but never the API key. Pass
   `url="https://api.typesafe.ai/v1/systemone"` to call TypeSafe directly.
-- **Kev:** [Kev](https://github.com/jaredpalmer/kev) is an open-weights model (Apache-2.0)
-  that serves the same API locally, so `JevLM("kev-latest",
-  url="http://127.0.0.1:8009/v1/systemone")` drives it unchanged. Kev-0.8B runs in about 4
-  GB of VRAM. It answers a request's questions from a single pass over the state and takes
-  up to 255 options per question.
+#### Local open-weights models (Kev)
+
+[Kev](https://github.com/jaredpalmer/kev) is a family of open decision models (0.8B, 4B and
+9B) that serves TypeSafe's API locally, so `JevLM` drives it unchanged. It answers a
+request's questions from a single pass over the state and takes up to 255 options per
+question. Kev-0.8B runs in about 4 GB of VRAM.
+
+<!-- lsl-docs: skip: needs a running Kev server -->
+```python
+# uv run --extra serve python -m kev.serve --run jaredpalmer/kev-0.8b --port 8009
+dspy.configure(
+    lm=JevLM("kev-latest", url="http://127.0.0.1:8009/v1/systemone"), adapter=JevAdapter()
+)
+```
 
 #### Local open models (SemIf)
 
