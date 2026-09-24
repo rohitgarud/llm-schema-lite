@@ -44,6 +44,9 @@ are JevBench's own runs.
 | `SemIfLM`, Qwen3-0.6B Q8_0 | 87.5% | 48.6% | 36.0% | 28.1 | 0.03 s / 0.75 s |
 | `SemIfLM`, Qwen3-VL-4B-Instruct Q4_K_M (not a SemIf model) | 100% | 86.1% | 45.0% | 30.9 | 0.10 s / 2.19 s |
 | `JevLM` to [Kev](https://github.com/jaredpalmer/kev)-0.8B bf16 (`kev.serve`) | 100% | 75.0% | 29.7% | 55.1 | 0.11 s / 0.24 s |
+| `JevLM` to [Decider](https://github.com/Mapika/decider)-2B v10 bf16 (`decider.serve`, eager) | 100% | 86.1% | 45.0% | 44.8 | not serial |
+| `JevLM` to [Laya](https://github.com/NandhaKishorM/laya) (`laya-serve`, its router) | 95.8% | 68.1% | 33.3% | 62.4 | 0.05 s / 6.8 s |
+| [OpenSourceJev](https://github.com/sabeel111/OpenSourceJev), Qwen3.5-4B Q4_K_M (unsloth) | 100% | 93.1% | 59.5% | 65.1 | 0.82 s / 17.1 s |
 
 - **Same model, 4-bit, lands a few items short of SemIf's BF16 run.** Of the 21 items only
   one of the two got right, SemIf's run got 15 and `SemIfLM` got 6 (McNemar p = 0.078).
@@ -56,6 +59,17 @@ are JevBench's own runs.
   4B and 9B well above it, and it has no GGUF. On the hard tier it is the least accurate
   run here, but its calibration (55.1) beats the 2B and 0.6B `SemIfLM` runs. Qwen3.5-4B
   beats it on both.
+- **Other open decision models.** Decider and Laya take `JevAdapter`'s requests unchanged,
+  so they ran through `JevLM`. Decider ran without its CUDA graphs, whose capture stalled
+  on the 8 GB GPU, and its latency is left out because a second client overlapped the run.
+  Laya's router picks its checkpoint per request, and its English checkpoint reads 512
+  tokens, which may explain its hard-tier score on these long states.
+- **OpenSourceJev is not a drop-in backend.** It rejects the `instructions` object
+  `JevAdapter` sends (`{"task": ..., "question": ...}`) with an HTTP 500, so it was sent
+  JevBench's plain string, with its context raised from 4k to 8k tokens. It reads option
+  logits from llama.cpp, as `SemIfLM` does, on the GGUF its code pins (unsloth's, not the
+  bartowski file in the `SemIfLM` row). Its 93.1% on the standard tier matches the 93% it
+  reports for JevBench's original set.
 - **p95 is the hard tier's long states,** which run to about 4k tokens of prompt each.
 
 ### `question_first=True`

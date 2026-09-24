@@ -1,0 +1,2283 @@
+{
+  "summary": {
+    "ours": {
+      "accuracy": {
+        "easy": 0.9583333333333334,
+        "standard": 0.6805555555555556,
+        "hard": 0.3333333333333333
+      },
+      "errors": 0,
+      "hard_ece": 0.21954864864864865,
+      "hard_mean_tvd": 0.31216,
+      "p50_s": 0.05272062400035793,
+      "p95_s": 6.7987339995015645,
+      "calibration": 62.43713513513514
+    },
+    "semif-qwen3.5-4b": {
+      "accuracy": {
+        "easy": 1,
+        "standard": 0.9861111111111112,
+        "hard": 0.6126126126126126
+      },
+      "both_right": 115,
+      "only_ours_right": 17,
+      "only_theirs_right": 72
+    },
+    "jev-1.13.0": {
+      "accuracy": {
+        "easy": 1,
+        "standard": 0.9861111111111112,
+        "hard": 0.7297297297297297
+      },
+      "both_right": 118,
+      "only_ours_right": 14,
+      "only_theirs_right": 82
+    },
+    "our_model": "Laya router",
+    "question_first": false,
+    "workers": 1,
+    "references": {
+      "semif-qwen3.5-4b": "SemIf (Qwen3.5-4B BF16, SemIf's own code)",
+      "jev-1.13.0": "Jev 1.13.0 (TypeSafe API)"
+    },
+    "jevbench_commit": "2fa63fa3226cb369795525ed011800f57dcbd894",
+    "date": "2026-09-24"
+  },
+  "rows": [
+    {
+      "id": "easy-intent-00",
+      "probs": {
+        "billing_question": 0.0072,
+        "cancel_order": 0.0047,
+        "change_address": 0.0041,
+        "report_damage": 0.0528,
+        "track_order": 0.9311
+      },
+      "seconds": 4.885652570003003
+    },
+    {
+      "id": "easy-intent-01",
+      "probs": {
+        "billing_question": 0.0004,
+        "cancel_order": 0.9966,
+        "change_address": 0.0004,
+        "report_damage": 0.0021,
+        "track_order": 0.0005
+      },
+      "seconds": 0.04610752900043735
+    },
+    {
+      "id": "easy-intent-02",
+      "probs": {
+        "billing_question": 0.0034,
+        "cancel_order": 0.0046,
+        "change_address": 0.9815,
+        "report_damage": 0.0069,
+        "track_order": 0.0036
+      },
+      "seconds": 0.04411224299838068
+    },
+    {
+      "id": "easy-intent-03",
+      "probs": {
+        "billing_question": 0.0035,
+        "cancel_order": 0.0039,
+        "change_address": 0.0035,
+        "report_damage": 0.981,
+        "track_order": 0.0081
+      },
+      "seconds": 0.04605522799829487
+    },
+    {
+      "id": "easy-intent-04",
+      "probs": {
+        "billing_question": 0.7391,
+        "cancel_order": 0.0256,
+        "change_address": 0.017,
+        "report_damage": 0.1241,
+        "track_order": 0.0942
+      },
+      "seconds": 0.04973872899427079
+    },
+    {
+      "id": "easy-intent-05",
+      "probs": {
+        "billing_question": 0.0111,
+        "cancel_order": 0.008,
+        "change_address": 0.0064,
+        "report_damage": 0.0573,
+        "track_order": 0.9171
+      },
+      "seconds": 0.049632578004093375
+    },
+    {
+      "id": "easy-intent-06",
+      "probs": {
+        "play_music": 0.0007,
+        "send_message": 0.0007,
+        "set_alarm": 0.9971,
+        "turn_off_lights": 0.0008,
+        "weather": 0.0007
+      },
+      "seconds": 0.051151937994291075
+    },
+    {
+      "id": "easy-intent-07",
+      "probs": {
+        "play_music": 0.9836,
+        "send_message": 0.0034,
+        "set_alarm": 0.0046,
+        "turn_off_lights": 0.0039,
+        "weather": 0.0044
+      },
+      "seconds": 0.05254026300099213
+    },
+    {
+      "id": "easy-intent-08",
+      "probs": {
+        "play_music": 0.0075,
+        "send_message": 0.0079,
+        "set_alarm": 0.0077,
+        "turn_off_lights": 0.0091,
+        "weather": 0.9678
+      },
+      "seconds": 0.05334250599844381
+    },
+    {
+      "id": "easy-intent-09",
+      "probs": {
+        "play_music": 0.0013,
+        "send_message": 0.9947,
+        "set_alarm": 0.0013,
+        "turn_off_lights": 0.0014,
+        "weather": 0.0013
+      },
+      "seconds": 0.04432878299849108
+    },
+    {
+      "id": "easy-intent-10",
+      "probs": {
+        "play_music": 0.002,
+        "send_message": 0.0021,
+        "set_alarm": 0.014,
+        "turn_off_lights": 0.9791,
+        "weather": 0.0027
+      },
+      "seconds": 0.04723203600588022
+    },
+    {
+      "id": "easy-intent-11",
+      "probs": {
+        "play_music": 0.0002,
+        "send_message": 0.0002,
+        "set_alarm": 0.9992,
+        "turn_off_lights": 0.0002,
+        "weather": 0.0002
+      },
+      "seconds": 0.04259862800245173
+    },
+    {
+      "id": "easy-fact-00",
+      "probs": {
+        "yes": 0.9206,
+        "no": 0.07940000000000003
+      },
+      "seconds": 0.06635815600020578
+    },
+    {
+      "id": "easy-fact-01",
+      "probs": {
+        "yes": 0.8733,
+        "no": 0.12670000000000003
+      },
+      "seconds": 0.04554831700079376
+    },
+    {
+      "id": "easy-fact-02",
+      "probs": {
+        "yes": 0.7545,
+        "no": 0.24550000000000005
+      },
+      "seconds": 0.0429883830001927
+    },
+    {
+      "id": "easy-fact-03",
+      "probs": {
+        "yes": 0.0873,
+        "no": 0.9127
+      },
+      "seconds": 0.04616065600566799
+    },
+    {
+      "id": "easy-fact-04",
+      "probs": {
+        "yes": 0.8263,
+        "no": 0.17369999999999997
+      },
+      "seconds": 0.04759219999687048
+    },
+    {
+      "id": "easy-fact-05",
+      "probs": {
+        "yes": 0.287,
+        "no": 0.7130000000000001
+      },
+      "seconds": 9.639653560996521
+    },
+    {
+      "id": "easy-fact-06",
+      "probs": {
+        "yes": 0.7818,
+        "no": 0.21819999999999995
+      },
+      "seconds": 0.05445465500088176
+    },
+    {
+      "id": "easy-fact-07",
+      "probs": {
+        "yes": 0.047,
+        "no": 0.953
+      },
+      "seconds": 0.048761645004560705
+    },
+    {
+      "id": "easy-fact-08",
+      "probs": {
+        "yes": 0.8528,
+        "no": 0.1472
+      },
+      "seconds": 0.05400008700235048
+    },
+    {
+      "id": "easy-fact-09",
+      "probs": {
+        "yes": 0.4842,
+        "no": 0.5158
+      },
+      "seconds": 0.04379219900147291
+    },
+    {
+      "id": "easy-fact-10",
+      "probs": {
+        "yes": 0.8813,
+        "no": 0.11870000000000003
+      },
+      "seconds": 0.040570509001554456
+    },
+    {
+      "id": "easy-fact-11",
+      "probs": {
+        "yes": 0.0907,
+        "no": 0.9093
+      },
+      "seconds": 0.04793728700315114
+    },
+    {
+      "id": "easy-extraction-00",
+      "probs": {
+        "bank_transfer": 0.0633,
+        "cash": 0.0622,
+        "credit_card": 0.4412,
+        "paypal": 0.4334
+      },
+      "seconds": 0.045471830999304075
+    },
+    {
+      "id": "easy-extraction-01",
+      "probs": {
+        "bank_transfer": 0.0832,
+        "cash": 0.8112,
+        "credit_card": 0.0738,
+        "paypal": 0.0318
+      },
+      "seconds": 0.04407659800199326
+    },
+    {
+      "id": "easy-extraction-02",
+      "probs": {
+        "bank_transfer": 0.9819,
+        "cash": 0.0033,
+        "credit_card": 0.01,
+        "paypal": 0.0047
+      },
+      "seconds": 0.04671896000218112
+    },
+    {
+      "id": "easy-extraction-03",
+      "probs": {
+        "high": 0.8766,
+        "low": 0.007,
+        "medium": 0.0108,
+        "urgent": 0.1055
+      },
+      "seconds": 0.12449065999680897
+    },
+    {
+      "id": "easy-extraction-04",
+      "probs": {
+        "high": 0.0036,
+        "low": 0.9714,
+        "medium": 0.0083,
+        "urgent": 0.0167
+      },
+      "seconds": 0.04250047999812523
+    },
+    {
+      "id": "easy-extraction-05",
+      "probs": {
+        "high": 0.0196,
+        "low": 0.012,
+        "medium": 0.0171,
+        "urgent": 0.9514
+      },
+      "seconds": 0.03822340499755228
+    },
+    {
+      "id": "easy-extraction-06",
+      "probs": {
+        "L": 0.0172,
+        "M": 0.9431,
+        "S": 0.0257,
+        "XL": 0.014
+      },
+      "seconds": 0.036098855001910124
+    },
+    {
+      "id": "easy-extraction-07",
+      "probs": {
+        "L": 0.1046,
+        "M": 0.0159,
+        "S": 0.0103,
+        "XL": 0.8692
+      },
+      "seconds": 0.037699772998166736
+    },
+    {
+      "id": "easy-extraction-08",
+      "probs": {
+        "friday": 0.0023,
+        "monday": 0.0027,
+        "thursday": 0.9887,
+        "tuesday": 0.003,
+        "wednesday": 0.0033
+      },
+      "seconds": 0.04015291599353077
+    },
+    {
+      "id": "easy-extraction-09",
+      "probs": {
+        "friday": 0.0035,
+        "monday": 0.9853,
+        "thursday": 0.0031,
+        "tuesday": 0.0043,
+        "wednesday": 0.0038
+      },
+      "seconds": 0.039987361000385135
+    },
+    {
+      "id": "easy-extraction-10",
+      "probs": {
+        "friday": 0.9242,
+        "monday": 0.0204,
+        "thursday": 0.0161,
+        "tuesday": 0.0208,
+        "wednesday": 0.0184
+      },
+      "seconds": 0.044948139002372045
+    },
+    {
+      "id": "easy-extraction-11",
+      "probs": {
+        "bank_transfer": 0.0228,
+        "cash": 0.0106,
+        "credit_card": 0.947,
+        "paypal": 0.0197
+      },
+      "seconds": 0.04234059399459511
+    },
+    {
+      "id": "easy-tool_selection-00",
+      "probs": {
+        "convert_currency": 0.0007,
+        "create_calendar_event": 0.0009,
+        "get_weather": 0.9968,
+        "send_email": 0.0008,
+        "translate_text": 0.0008
+      },
+      "seconds": 0.044399633996363264
+    },
+    {
+      "id": "easy-tool_selection-01",
+      "probs": {
+        "convert_currency": 0.0003,
+        "create_calendar_event": 0.0005,
+        "get_weather": 0.0003,
+        "send_email": 0.9986,
+        "translate_text": 0.0003
+      },
+      "seconds": 0.03994604499894194
+    },
+    {
+      "id": "easy-tool_selection-02",
+      "probs": {
+        "convert_currency": 0.0002,
+        "create_calendar_event": 0.9992,
+        "get_weather": 0.0002,
+        "send_email": 0.0002,
+        "translate_text": 0.0002
+      },
+      "seconds": 0.043513237993465737
+    },
+    {
+      "id": "easy-tool_selection-03",
+      "probs": {
+        "convert_currency": 0.9997,
+        "create_calendar_event": 0.0001,
+        "get_weather": 0.0001,
+        "send_email": 0.0001,
+        "translate_text": 0.0001
+      },
+      "seconds": 0.04324251300567994
+    },
+    {
+      "id": "easy-tool_selection-04",
+      "probs": {
+        "convert_currency": 0.0072,
+        "create_calendar_event": 0.0231,
+        "get_weather": 0.0076,
+        "send_email": 0.0105,
+        "translate_text": 0.9516
+      },
+      "seconds": 8.907994220004184
+    },
+    {
+      "id": "easy-tool_selection-05",
+      "probs": {
+        "convert_currency": 0.0,
+        "create_calendar_event": 0.9998,
+        "get_weather": 0.0,
+        "send_email": 0.0001,
+        "translate_text": 0.0001
+      },
+      "seconds": 0.05175716300436761
+    },
+    {
+      "id": "easy-tool_selection-06",
+      "probs": {
+        "book_restaurant": 0.0001,
+        "call_taxi": 0.0001,
+        "get_stock_price": 0.0001,
+        "search_flights": 0.9997,
+        "set_reminder": 0.0001
+      },
+      "seconds": 0.07824470399646088
+    },
+    {
+      "id": "easy-tool_selection-07",
+      "probs": {
+        "book_restaurant": 0.9999,
+        "call_taxi": 0.0,
+        "get_stock_price": 0.0,
+        "search_flights": 0.0,
+        "set_reminder": 0.0
+      },
+      "seconds": 0.05812988099933136
+    },
+    {
+      "id": "easy-tool_selection-08",
+      "probs": {
+        "book_restaurant": 0.0088,
+        "call_taxi": 0.0108,
+        "get_stock_price": 0.0098,
+        "search_flights": 0.0108,
+        "set_reminder": 0.9599
+      },
+      "seconds": 0.046062850997259375
+    },
+    {
+      "id": "easy-tool_selection-09",
+      "probs": {
+        "book_restaurant": 0.0,
+        "call_taxi": 0.0,
+        "get_stock_price": 0.9998,
+        "search_flights": 0.0,
+        "set_reminder": 0.0
+      },
+      "seconds": 0.04348500999913085
+    },
+    {
+      "id": "easy-tool_selection-10",
+      "probs": {
+        "book_restaurant": 0.0022,
+        "call_taxi": 0.9908,
+        "get_stock_price": 0.0022,
+        "search_flights": 0.0025,
+        "set_reminder": 0.0024
+      },
+      "seconds": 0.042084765002073254
+    },
+    {
+      "id": "easy-tool_selection-11",
+      "probs": {
+        "book_restaurant": 0.0029,
+        "call_taxi": 0.0032,
+        "get_stock_price": 0.0034,
+        "search_flights": 0.0034,
+        "set_reminder": 0.9872
+      },
+      "seconds": 0.041982941002061125
+    },
+    {
+      "id": "original-policy-01-0",
+      "probs": {
+        "yes": 0.2593,
+        "no": 0.7407
+      },
+      "seconds": 0.046965218003606424
+    },
+    {
+      "id": "original-policy-01-1",
+      "probs": {
+        "yes": 0.5128,
+        "no": 0.48719999999999997
+      },
+      "seconds": 0.04694427200593054
+    },
+    {
+      "id": "original-policy-02-0",
+      "probs": {
+        "yes": 0.6825,
+        "no": 0.3175
+      },
+      "seconds": 0.04502484799741069
+    },
+    {
+      "id": "original-policy-02-1",
+      "probs": {
+        "yes": 0.7552,
+        "no": 0.24480000000000002
+      },
+      "seconds": 0.044255624001380056
+    },
+    {
+      "id": "original-policy-03-0",
+      "probs": {
+        "yes": 0.2865,
+        "no": 0.7135
+      },
+      "seconds": 0.0456095510016894
+    },
+    {
+      "id": "original-policy-03-1",
+      "probs": {
+        "yes": 0.7638,
+        "no": 0.23619999999999997
+      },
+      "seconds": 0.043170221004402265
+    },
+    {
+      "id": "original-policy-04-0",
+      "probs": {
+        "yes": 0.502,
+        "no": 0.498
+      },
+      "seconds": 0.04207864199997857
+    },
+    {
+      "id": "original-policy-04-1",
+      "probs": {
+        "yes": 0.4719,
+        "no": 0.5281
+      },
+      "seconds": 0.05021847399621038
+    },
+    {
+      "id": "original-policy-05-0",
+      "probs": {
+        "yes": 0.5177,
+        "no": 0.48229999999999995
+      },
+      "seconds": 0.04334739700425416
+    },
+    {
+      "id": "original-policy-05-1",
+      "probs": {
+        "yes": 0.2557,
+        "no": 0.7443
+      },
+      "seconds": 0.05463733299984597
+    },
+    {
+      "id": "original-policy-06-0",
+      "probs": {
+        "yes": 0.8373,
+        "no": 0.16269999999999996
+      },
+      "seconds": 0.0845749820000492
+    },
+    {
+      "id": "original-policy-06-1",
+      "probs": {
+        "yes": 0.6708,
+        "no": 0.32920000000000005
+      },
+      "seconds": 0.05770423299691174
+    },
+    {
+      "id": "original-intent-01-0",
+      "probs": {
+        "cancel": 0.0463,
+        "change_address": 0.0042,
+        "other": 0.0121,
+        "refund": 0.9288,
+        "status": 0.0086
+      },
+      "seconds": 9.442907343000115
+    },
+    {
+      "id": "original-intent-01-1",
+      "probs": {
+        "cancel": 0.0534,
+        "change_address": 0.0056,
+        "other": 0.0093,
+        "refund": 0.9264,
+        "status": 0.0052
+      },
+      "seconds": 0.07074737600487424
+    },
+    {
+      "id": "original-intent-02-0",
+      "probs": {
+        "cancel": 0.0294,
+        "change_address": 0.561,
+        "other": 0.2523,
+        "refund": 0.0787,
+        "status": 0.0785
+      },
+      "seconds": 0.05688025800191099
+    },
+    {
+      "id": "original-intent-02-1",
+      "probs": {
+        "cancel": 0.0188,
+        "change_address": 0.1445,
+        "other": 0.1802,
+        "refund": 0.0473,
+        "status": 0.6093
+      },
+      "seconds": 0.058152397999947425
+    },
+    {
+      "id": "original-intent-03-0",
+      "probs": {
+        "cancel": 0.0298,
+        "change_address": 0.2703,
+        "other": 0.1016,
+        "refund": 0.0883,
+        "status": 0.51
+      },
+      "seconds": 0.04963852699438576
+    },
+    {
+      "id": "original-intent-03-1",
+      "probs": {
+        "cancel": 0.0033,
+        "change_address": 0.9675,
+        "other": 0.0102,
+        "refund": 0.0098,
+        "status": 0.0092
+      },
+      "seconds": 0.04836326700024074
+    },
+    {
+      "id": "original-intent-04-0",
+      "probs": {
+        "cancel": 0.8359,
+        "change_address": 0.0095,
+        "other": 0.053,
+        "refund": 0.0788,
+        "status": 0.0227
+      },
+      "seconds": 0.04731382899626624
+    },
+    {
+      "id": "original-intent-04-1",
+      "probs": {
+        "cancel": 0.7462,
+        "change_address": 0.0198,
+        "other": 0.1123,
+        "refund": 0.0884,
+        "status": 0.0334
+      },
+      "seconds": 0.08537330700346502
+    },
+    {
+      "id": "original-intent-05-0",
+      "probs": {
+        "cancel": 0.0151,
+        "change_address": 0.0155,
+        "other": 0.0879,
+        "refund": 0.8285,
+        "status": 0.053
+      },
+      "seconds": 0.08004516799701378
+    },
+    {
+      "id": "original-intent-05-1",
+      "probs": {
+        "cancel": 0.0158,
+        "change_address": 0.0103,
+        "other": 0.0496,
+        "refund": 0.9034,
+        "status": 0.0209
+      },
+      "seconds": 0.07330909599841107
+    },
+    {
+      "id": "original-intent-06-0",
+      "probs": {
+        "cancel": 0.0367,
+        "change_address": 0.0068,
+        "other": 0.0653,
+        "refund": 0.0195,
+        "status": 0.8718
+      },
+      "seconds": 0.05496783299895469
+    },
+    {
+      "id": "original-intent-06-1",
+      "probs": {
+        "cancel": 0.4472,
+        "change_address": 0.0058,
+        "other": 0.0366,
+        "refund": 0.0131,
+        "status": 0.4974
+      },
+      "seconds": 0.0672464309973293
+    },
+    {
+      "id": "original-ordinal-01-0",
+      "probs": {
+        "0": 0.4513,
+        "1": 0.2373,
+        "2": 0.2557,
+        "3": 0.0557
+      },
+      "seconds": 0.052855333997285925
+    },
+    {
+      "id": "original-ordinal-01-1",
+      "probs": {
+        "0": 0.3763,
+        "1": 0.3763,
+        "2": 0.2269,
+        "3": 0.0205
+      },
+      "seconds": 0.14466207299847156
+    },
+    {
+      "id": "original-ordinal-02-0",
+      "probs": {
+        "0": 0.0522,
+        "1": 0.8903,
+        "2": 0.0437,
+        "3": 0.0138
+      },
+      "seconds": 0.04807233999599703
+    },
+    {
+      "id": "original-ordinal-02-1",
+      "probs": {
+        "0": 0.1277,
+        "1": 0.8308,
+        "2": 0.0252,
+        "3": 0.0163
+      },
+      "seconds": 0.0438477839998086
+    },
+    {
+      "id": "original-ordinal-03-0",
+      "probs": {
+        "0": 0.0163,
+        "1": 0.0556,
+        "2": 0.8448,
+        "3": 0.0832
+      },
+      "seconds": 0.053675709998060483
+    },
+    {
+      "id": "original-ordinal-03-1",
+      "probs": {
+        "0": 0.0314,
+        "1": 0.137,
+        "2": 0.6484,
+        "3": 0.1832
+      },
+      "seconds": 9.537379813998996
+    },
+    {
+      "id": "original-ordinal-04-0",
+      "probs": {
+        "0": 0.0133,
+        "1": 0.0165,
+        "2": 0.0235,
+        "3": 0.9467
+      },
+      "seconds": 0.04988182799570495
+    },
+    {
+      "id": "original-ordinal-04-1",
+      "probs": {
+        "0": 0.0274,
+        "1": 0.0653,
+        "2": 0.0634,
+        "3": 0.844
+      },
+      "seconds": 0.04650383200350916
+    },
+    {
+      "id": "original-ordinal-05-0",
+      "probs": {
+        "0": 0.446,
+        "1": 0.2442,
+        "2": 0.1443,
+        "3": 0.1655
+      },
+      "seconds": 0.05085031600174261
+    },
+    {
+      "id": "original-ordinal-05-1",
+      "probs": {
+        "0": 0.173,
+        "1": 0.3375,
+        "2": 0.3848,
+        "3": 0.1047
+      },
+      "seconds": 0.05541491199983284
+    },
+    {
+      "id": "original-ordinal-06-0",
+      "probs": {
+        "0": 0.066,
+        "1": 0.2315,
+        "2": 0.665,
+        "3": 0.0375
+      },
+      "seconds": 0.06285834399750456
+    },
+    {
+      "id": "original-ordinal-06-1",
+      "probs": {
+        "0": 0.0107,
+        "1": 0.0912,
+        "2": 0.8714,
+        "3": 0.0267
+      },
+      "seconds": 0.07930895799654536
+    },
+    {
+      "id": "original-extraction-01-0",
+      "probs": {
+        "courier": 0.1737,
+        "pickup": 0.6209,
+        "post": 0.0578,
+        "unknown": 0.1476
+      },
+      "seconds": 0.07752822100155754
+    },
+    {
+      "id": "original-extraction-01-1",
+      "probs": {
+        "courier": 0.2257,
+        "pickup": 0.3481,
+        "post": 0.0655,
+        "unknown": 0.3607
+      },
+      "seconds": 0.08039216099859914
+    },
+    {
+      "id": "original-extraction-02-0",
+      "probs": {
+        "courier": 0.0725,
+        "pickup": 0.0202,
+        "post": 0.1778,
+        "unknown": 0.7294
+      },
+      "seconds": 0.06413575400074478
+    },
+    {
+      "id": "original-extraction-02-1",
+      "probs": {
+        "courier": 0.0496,
+        "pickup": 0.0152,
+        "post": 0.7371,
+        "unknown": 0.1981
+      },
+      "seconds": 0.056051607003610115
+    },
+    {
+      "id": "original-extraction-03-0",
+      "probs": {
+        "courier": 0.4478,
+        "pickup": 0.4098,
+        "post": 0.044,
+        "unknown": 0.0984
+      },
+      "seconds": 0.05529750999994576
+    },
+    {
+      "id": "original-extraction-03-1",
+      "probs": {
+        "courier": 0.8926,
+        "pickup": 0.0154,
+        "post": 0.0203,
+        "unknown": 0.0716
+      },
+      "seconds": 0.0495899189991178
+    },
+    {
+      "id": "original-extraction-04-0",
+      "probs": {
+        "courier": 0.0758,
+        "pickup": 0.0955,
+        "post": 0.7463,
+        "unknown": 0.0825
+      },
+      "seconds": 0.04686144999868702
+    },
+    {
+      "id": "original-extraction-04-1",
+      "probs": {
+        "courier": 0.0731,
+        "pickup": 0.016,
+        "post": 0.8081,
+        "unknown": 0.1028
+      },
+      "seconds": 0.07883230099832872
+    },
+    {
+      "id": "original-extraction-05-0",
+      "probs": {
+        "courier": 0.5299,
+        "pickup": 0.0175,
+        "post": 0.0572,
+        "unknown": 0.3954
+      },
+      "seconds": 0.0659391270019114
+    },
+    {
+      "id": "original-extraction-05-1",
+      "probs": {
+        "courier": 0.3241,
+        "pickup": 0.0221,
+        "post": 0.0895,
+        "unknown": 0.5644
+      },
+      "seconds": 0.060592816000280436
+    },
+    {
+      "id": "original-extraction-06-0",
+      "probs": {
+        "courier": 0.8449,
+        "pickup": 0.0095,
+        "post": 0.1061,
+        "unknown": 0.0395
+      },
+      "seconds": 0.05191781900066417
+    },
+    {
+      "id": "original-extraction-06-1",
+      "probs": {
+        "courier": 0.5432,
+        "pickup": 0.0186,
+        "post": 0.3119,
+        "unknown": 0.1263
+      },
+      "seconds": 0.05182467399572488
+    },
+    {
+      "id": "original-adequacy-01-0",
+      "probs": {
+        "yes": 0.1455,
+        "no": 0.8545
+      },
+      "seconds": 0.051231525001639966
+    },
+    {
+      "id": "original-adequacy-01-1",
+      "probs": {
+        "yes": 0.4641,
+        "no": 0.5359
+      },
+      "seconds": 9.060847442000522
+    },
+    {
+      "id": "original-adequacy-02-0",
+      "probs": {
+        "yes": 0.8159,
+        "no": 0.18410000000000004
+      },
+      "seconds": 0.0519010209973203
+    },
+    {
+      "id": "original-adequacy-02-1",
+      "probs": {
+        "yes": 0.4783,
+        "no": 0.5217
+      },
+      "seconds": 0.04616291900310898
+    },
+    {
+      "id": "original-adequacy-03-0",
+      "probs": {
+        "yes": 0.8325,
+        "no": 0.16749999999999998
+      },
+      "seconds": 0.050281940995773766
+    },
+    {
+      "id": "original-adequacy-03-1",
+      "probs": {
+        "yes": 0.3435,
+        "no": 0.6565
+      },
+      "seconds": 0.04854318399884505
+    },
+    {
+      "id": "original-adequacy-04-0",
+      "probs": {
+        "yes": 0.9343,
+        "no": 0.06569999999999998
+      },
+      "seconds": 0.045759994005493354
+    },
+    {
+      "id": "original-adequacy-04-1",
+      "probs": {
+        "yes": 0.861,
+        "no": 0.139
+      },
+      "seconds": 0.049072351001086645
+    },
+    {
+      "id": "original-adequacy-05-0",
+      "probs": {
+        "yes": 0.261,
+        "no": 0.739
+      },
+      "seconds": 0.04629210900020553
+    },
+    {
+      "id": "original-adequacy-05-1",
+      "probs": {
+        "yes": 0.5108,
+        "no": 0.48919999999999997
+      },
+      "seconds": 0.05445776199485408
+    },
+    {
+      "id": "original-adequacy-06-0",
+      "probs": {
+        "yes": 0.7949,
+        "no": 0.20509999999999995
+      },
+      "seconds": 0.043663037999067456
+    },
+    {
+      "id": "original-adequacy-06-1",
+      "probs": {
+        "yes": 0.3701,
+        "no": 0.6299
+      },
+      "seconds": 0.07611801799794193
+    },
+    {
+      "id": "original-routing-01-0",
+      "probs": {
+        "coding": 0.1742,
+        "coding_agent": 0.0262,
+        "document": 0.0033,
+        "general": 0.0249,
+        "math": 0.7567,
+        "tools": 0.0146
+      },
+      "seconds": 0.055604876004508696
+    },
+    {
+      "id": "original-routing-01-1",
+      "probs": {
+        "coding": 0.2677,
+        "coding_agent": 0.0499,
+        "document": 0.0465,
+        "general": 0.1527,
+        "math": 0.4147,
+        "tools": 0.0685
+      },
+      "seconds": 0.06366135799908079
+    },
+    {
+      "id": "original-routing-02-0",
+      "probs": {
+        "coding": 0.9667,
+        "coding_agent": 0.0202,
+        "document": 0.0007,
+        "general": 0.0046,
+        "math": 0.0007,
+        "tools": 0.0071
+      },
+      "seconds": 0.06600488100229995
+    },
+    {
+      "id": "original-routing-02-1",
+      "probs": {
+        "coding": 0.974,
+        "coding_agent": 0.0084,
+        "document": 0.0017,
+        "general": 0.0063,
+        "math": 0.0015,
+        "tools": 0.008
+      },
+      "seconds": 0.057544139002857264
+    },
+    {
+      "id": "original-routing-03-0",
+      "probs": {
+        "coding": 0.4966,
+        "coding_agent": 0.3549,
+        "document": 0.0046,
+        "general": 0.0711,
+        "math": 0.0035,
+        "tools": 0.0693
+      },
+      "seconds": 0.04618009400292067
+    },
+    {
+      "id": "original-routing-03-1",
+      "probs": {
+        "coding": 0.4072,
+        "coding_agent": 0.4951,
+        "document": 0.0049,
+        "general": 0.0678,
+        "math": 0.0036,
+        "tools": 0.0214
+      },
+      "seconds": 0.05583090900472598
+    },
+    {
+      "id": "original-routing-04-0",
+      "probs": {
+        "coding": 0.0156,
+        "coding_agent": 0.008,
+        "document": 0.0284,
+        "general": 0.9449,
+        "math": 0.0013,
+        "tools": 0.0018
+      },
+      "seconds": 0.042930433999572415
+    },
+    {
+      "id": "original-routing-04-1",
+      "probs": {
+        "coding": 0.2379,
+        "coding_agent": 0.1033,
+        "document": 0.0369,
+        "general": 0.5299,
+        "math": 0.0279,
+        "tools": 0.064
+      },
+      "seconds": 0.04722280299756676
+    },
+    {
+      "id": "original-routing-05-0",
+      "probs": {
+        "coding": 0.3084,
+        "coding_agent": 0.0808,
+        "document": 0.0568,
+        "general": 0.4795,
+        "math": 0.0146,
+        "tools": 0.06
+      },
+      "seconds": 0.04501740600244375
+    },
+    {
+      "id": "original-routing-05-1",
+      "probs": {
+        "coding": 0.3161,
+        "coding_agent": 0.0499,
+        "document": 0.0407,
+        "general": 0.5304,
+        "math": 0.0149,
+        "tools": 0.048
+      },
+      "seconds": 0.05272062400035793
+    },
+    {
+      "id": "original-routing-06-0",
+      "probs": {
+        "coding": 0.3079,
+        "coding_agent": 0.1232,
+        "document": 0.0311,
+        "general": 0.4685,
+        "math": 0.0137,
+        "tools": 0.0555
+      },
+      "seconds": 0.05376078399422113
+    },
+    {
+      "id": "original-routing-06-1",
+      "probs": {
+        "coding": 0.2333,
+        "coding_agent": 0.0687,
+        "document": 0.0079,
+        "general": 0.6266,
+        "math": 0.0088,
+        "tools": 0.0548
+      },
+      "seconds": 9.08035863400437
+    },
+    {
+      "id": "hard-opus-a-long_policy-01",
+      "probs": {
+        "deny_repeated_seepage": 0.4765,
+        "deny_vacancy_exclusion": 0.1101,
+        "pay_full_estimate_less_deductible": 0.2724,
+        "pay_subject_to_10000_sublimit": 0.0687,
+        "pay_subject_to_15000_sublimit": 0.0723
+      },
+      "seconds": 0.1734941750037251
+    },
+    {
+      "id": "hard-opus-a-long_policy-04",
+      "probs": {
+        "budget_holder": 0.2752,
+        "cfo": 0.2851,
+        "department_head": 0.163,
+        "executive_committee": 0.1365,
+        "vp_and_finance_director": 0.1402
+      },
+      "seconds": 0.10391466900182422
+    },
+    {
+      "id": "hard-opus-a-long_policy-08",
+      "probs": {
+        "full_repair_no_charge": 0.366,
+        "not_covered": 0.0905,
+        "parts_covered_labour_charged": 0.3596,
+        "pro_rata_replacement_credit": 0.184
+      },
+      "seconds": 0.09875531499710632
+    },
+    {
+      "id": "hard-opus-a-long_policy-09",
+      "probs": {
+        "license_exception_lvs": 0.57,
+        "license_required": 0.021,
+        "no_license_required": 0.1846,
+        "shipment_prohibited": 0.2244
+      },
+      "seconds": 0.10820892499759793
+    },
+    {
+      "id": "hard-opus-a-long_policy-11",
+      "probs": {
+        "yes": 0.5398,
+        "no": 0.46020000000000005
+      },
+      "seconds": 0.08780459300032817
+    },
+    {
+      "id": "hard-opus-a-long_policy-13",
+      "probs": {
+        "yes": 0.696,
+        "no": 0.30400000000000005
+      },
+      "seconds": 0.11798880900460063
+    },
+    {
+      "id": "hard-opus-a-long_policy-17",
+      "probs": {
+        "database_oncall": 0.2008,
+        "no_page_ticket_only": 0.0883,
+        "platform_oncall": 0.1928,
+        "security_incident_response": 0.4191,
+        "vendor_support": 0.099
+      },
+      "seconds": 0.07599091000156477
+    },
+    {
+      "id": "hard-opus-a-long_policy-19",
+      "probs": {
+        "yes": 0.497,
+        "no": 0.503
+      },
+      "seconds": 0.07564907299820334
+    },
+    {
+      "id": "hard-opus-a-probability-03",
+      "probs": {
+        "yes": 0.6684,
+        "no": 0.3316
+      },
+      "seconds": 0.07794107699737651
+    },
+    {
+      "id": "hard-opus-a-probability-04",
+      "probs": {
+        "early": 0.5058,
+        "late": 0.2646,
+        "on_time": 0.2296
+      },
+      "seconds": 0.06743621000350686
+    },
+    {
+      "id": "hard-opus-a-probability-07",
+      "probs": {
+        "escalated": 0.491,
+        "reopened": 0.2392,
+        "resolved_first_contact": 0.2697
+      },
+      "seconds": 0.053072119000717066
+    },
+    {
+      "id": "hard-opus-a-probability-08",
+      "probs": {
+        "yes": 0.5427,
+        "no": 0.45730000000000004
+      },
+      "seconds": 8.711815429000126
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-03",
+      "probs": {
+        "yes": 0.6397,
+        "no": 0.36029999999999995
+      },
+      "seconds": 0.04740388600475853
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-06",
+      "probs": {
+        "yes": 0.8129,
+        "no": 0.18710000000000004
+      },
+      "seconds": 0.051373049995163456
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-07",
+      "probs": {
+        "sep_24": 0.218,
+        "sep_25": 0.2116,
+        "sep_26": 0.2626,
+        "sep_27": 0.1682,
+        "sep_28": 0.1396
+      },
+      "seconds": 0.06838065500051016
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-09",
+      "probs": {
+        "yes": 0.9029,
+        "no": 0.09709999999999996
+      },
+      "seconds": 0.06876450499839848
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-12",
+      "probs": {
+        "0": 0.0649,
+        "1": 0.1677,
+        "2": 0.6221,
+        "3": 0.1453
+      },
+      "seconds": 0.05194149899762124
+    },
+    {
+      "id": "hard-opus-b-ambiguous-02",
+      "probs": {
+        "cannot_determine": 0.1244,
+        "false_positive": 0.3185,
+        "real_incident": 0.5571
+      },
+      "seconds": 0.05811860999529017
+    },
+    {
+      "id": "hard-opus-b-ambiguous-03",
+      "probs": {
+        "insufficient_information": 0.1954,
+        "time_barred": 0.2787,
+        "within_limitation": 0.5258
+      },
+      "seconds": 0.08268425300047966
+    },
+    {
+      "id": "hard-opus-b-ambiguous-07",
+      "probs": {
+        "insufficient_information": 0.1166,
+        "over_limit": 0.5792,
+        "within_policy": 0.3043
+      },
+      "seconds": 0.0671331060002558
+    },
+    {
+      "id": "hard-opus-b-ambiguous-09",
+      "probs": {
+        "compromised": 0.382,
+        "inconclusive": 0.1432,
+        "legitimate": 0.4748
+      },
+      "seconds": 0.08027045600465499
+    },
+    {
+      "id": "hard-opus-b-ambiguous-10",
+      "probs": {
+        "ask_user_which_alex": 0.303,
+        "send_to_alex_moreno": 0.4246,
+        "send_to_alexandra_lind": 0.2724
+      },
+      "seconds": 0.10495298999740044
+    },
+    {
+      "id": "hard-opus-b-ambiguous-11",
+      "probs": {
+        "cannot_determine": 0.1918,
+        "grade_correct": 0.4032,
+        "grade_should_be_higher": 0.405
+      },
+      "seconds": 0.17373478000081377
+    },
+    {
+      "id": "hard-opus-b-ambiguous-13",
+      "probs": {
+        "cannot_determine": 0.1299,
+        "charge_data_team": 0.2194,
+        "charge_platform_team": 0.1738,
+        "split_50_50": 0.477
+      },
+      "seconds": 0.13821160500083352
+    },
+    {
+      "id": "hard-opus-b-multi_hop-03",
+      "probs": {
+        "tier1_team_lead": 0.126,
+        "tier2_department_head": 0.1365,
+        "tier3_cfo": 0.4597,
+        "tier4_board": 0.2778
+      },
+      "seconds": 8.878788100002566
+    },
+    {
+      "id": "hard-opus-b-multi_hop-04",
+      "probs": {
+        "ana": 0.0238,
+        "bjorn": 0.0136,
+        "chen": 0.0127,
+        "dmitri": 0.0125,
+        "esra": 0.0854,
+        "no_page_ticket_only": 0.852
+      },
+      "seconds": 0.057186316000297666
+    },
+    {
+      "id": "hard-opus-b-multi_hop-05",
+      "probs": {
+        "0": 0.1023,
+        "1": 0.2489,
+        "2": 0.3677,
+        "3": 0.1982,
+        "4": 0.083
+      },
+      "seconds": 0.05776495800091652
+    },
+    {
+      "id": "hard-opus-b-multi_hop-07",
+      "probs": {
+        "credit_10_percent": 0.2217,
+        "credit_20_percent": 0.1874,
+        "credit_25_percent": 0.1441,
+        "credit_50_percent": 0.1356,
+        "credit_full_month": 0.1595,
+        "no_credit": 0.1516
+      },
+      "seconds": 0.07678864000627073
+    },
+    {
+      "id": "hard-opus-b-multi_hop-08",
+      "probs": {
+        "yes": 0.7798,
+        "no": 0.22019999999999995
+      },
+      "seconds": 0.11410683100257302
+    },
+    {
+      "id": "hard-opus-b-probability-01",
+      "probs": {
+        "customer_wins": 0.3653,
+        "customer_withdraws": 0.2173,
+        "merchant_wins": 0.4173
+      },
+      "seconds": 0.06499171099858359
+    },
+    {
+      "id": "hard-opus-b-probability-02",
+      "probs": {
+        "bad_push": 0.8885,
+        "database_hardware": 0.0505,
+        "upstream_provider": 0.061
+      },
+      "seconds": 0.05936102299892809
+    },
+    {
+      "id": "hard-opus-b-probability-03",
+      "probs": {
+        "yes": 0.5064,
+        "no": 0.49360000000000004
+      },
+      "seconds": 0.08916832599788904
+    },
+    {
+      "id": "hard-opus-b-probability-04",
+      "probs": {
+        "attended": 0.3048,
+        "late_cancellation": 0.086,
+        "no_show": 0.6092
+      },
+      "seconds": 0.08929392400023062
+    },
+    {
+      "id": "hard-opus-b-probability-06",
+      "probs": {
+        "modified": 0.2389,
+        "overturned": 0.2009,
+        "upheld": 0.5602
+      },
+      "seconds": 0.08988807700370671
+    },
+    {
+      "id": "hard-opus-b-tradeoff-01",
+      "probs": {
+        "escalate_to_engineering": 0.3159,
+        "escalate_to_security": 0.2357,
+        "page_oncall": 0.1065,
+        "process_refund": 0.2827,
+        "send_kb_article": 0.0593
+      },
+      "seconds": 0.0767431780041079
+    },
+    {
+      "id": "hard-opus-b-tradeoff-03",
+      "probs": {
+        "order_a": 0.4102,
+        "order_b": 0.4482,
+        "order_c": 0.1036,
+        "order_d": 0.038
+      },
+      "seconds": 0.05374185900291195
+    },
+    {
+      "id": "hard-opus-b-tradeoff-06",
+      "probs": {
+        "yes": 0.5271,
+        "no": 0.4729
+      },
+      "seconds": 0.07437327400111826
+    },
+    {
+      "id": "hard-opus-b-tradeoff-07",
+      "probs": {
+        "out_of_scope": 0.0842,
+        "p0_fix_24h": 0.3247,
+        "p1_fix_7d": 0.2401,
+        "p2_fix_30d": 0.2297,
+        "p3_backlog": 0.1213
+      },
+      "seconds": 9.053801736998139
+    },
+    {
+      "id": "hard-opus-b-tradeoff-08",
+      "probs": {
+        "yes": 0.6324,
+        "no": 0.36760000000000004
+      },
+      "seconds": 0.0726762679987587
+    },
+    {
+      "id": "hard-opus-b-tradeoff-12",
+      "probs": {
+        "deny_refund": 0.2228,
+        "escalate_to_fraud_team": 0.3013,
+        "offer_store_credit": 0.0524,
+        "refund_now": 0.2745,
+        "wait_for_inspection": 0.1489
+      },
+      "seconds": 0.06154810099542374
+    },
+    {
+      "id": "hard-opus-c-long_policy-02",
+      "probs": {
+        "erase_all": 0.256,
+        "erase_but_retain_transaction_records": 0.2041,
+        "erase_marketing_only": 0.1481,
+        "reject_unverified_request": 0.1181,
+        "restrict_all_pending_legal_hold": 0.2736
+      },
+      "seconds": 0.09838314000080572
+    },
+    {
+      "id": "hard-opus-c-long_policy-03",
+      "probs": {
+        "eur_0": 0.2544,
+        "eur_150": 0.3096,
+        "eur_200": 0.2032,
+        "eur_300": 0.1164,
+        "eur_400": 0.0791,
+        "eur_600": 0.0373
+      },
+      "seconds": 0.058094246000109706
+    },
+    {
+      "id": "hard-opus-c-long_policy-04",
+      "probs": {
+        "yes": 0.3724,
+        "no": 0.6275999999999999
+      },
+      "seconds": 0.07464342800085433
+    },
+    {
+      "id": "hard-opus-c-long_policy-05",
+      "probs": {
+        "0": 0.3961,
+        "1": 0.301,
+        "2": 0.2169,
+        "3": 0.0861
+      },
+      "seconds": 0.11586348300625104
+    },
+    {
+      "id": "hard-opus-c-long_policy-08",
+      "probs": {
+        "0": 0.1582,
+        "1": 0.2639,
+        "2": 0.4896,
+        "3": 0.0883
+      },
+      "seconds": 0.07254526299948338
+    },
+    {
+      "id": "hard-opus-c-long_policy-10",
+      "probs": {
+        "credit_minus_restocking_fee": 0.7412,
+        "full_credit": 0.0887,
+        "reject_return": 0.1094,
+        "repair_or_replace_only": 0.0607
+      },
+      "seconds": 0.05366571299964562
+    },
+    {
+      "id": "hard-opus-c-long_policy-11",
+      "probs": {
+        "yes": 0.8044,
+        "no": 0.1956
+      },
+      "seconds": 0.05247763100487646
+    },
+    {
+      "id": "hard-opus-c-probability-03",
+      "probs": {
+        "halvorsen_polymer": 0.463,
+        "kuznets_technik": 0.2066,
+        "ortega_seal_works": 0.3304
+      },
+      "seconds": 0.053299031998903956
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-02",
+      "probs": {
+        "yes": 0.6469,
+        "no": 0.35309999999999997
+      },
+      "seconds": 0.04592750300071202
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-03",
+      "probs": {
+        "eur_617_00": 0.1722,
+        "eur_688_00": 0.3569,
+        "eur_692_00": 0.1959,
+        "eur_693_90": 0.1308,
+        "eur_812_00": 0.1442
+      },
+      "seconds": 0.0518744049986708
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-04",
+      "probs": {
+        "usd_2222_50": 0.2231,
+        "usd_2303_01": 0.2449,
+        "usd_2303_33": 0.2538,
+        "usd_2335_00": 0.1485,
+        "usd_2340_00": 0.1297
+      },
+      "seconds": 0.05648772199492669
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-06",
+      "probs": {
+        "none_declined": 0.5413,
+        "sep_15_office_chair": 0.1398,
+        "sep_16_taxi": 0.0895,
+        "sep_17_parking": 0.065,
+        "sep_18_book_set": 0.0604,
+        "sep_21_client_dinner": 0.104
+      },
+      "seconds": 0.06424243099900195
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-08",
+      "probs": {
+        "eur_497_40": 0.294,
+        "eur_498_81": 0.285,
+        "eur_506_06": 0.1449,
+        "eur_513_69": 0.1337,
+        "eur_532_01": 0.1423
+      },
+      "seconds": 0.06006269199860981
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-12",
+      "probs": {
+        "covered": 0.2854,
+        "expired_24_month_term": 0.4034,
+        "expired_30_month_cap": 0.3112
+      },
+      "seconds": 0.04874538000149187
+    },
+    {
+      "id": "hard-sol-a-adversarial-01",
+      "probs": {
+        "deny_inactive_user": 0.1633,
+        "deny_missing_approval": 0.1878,
+        "grant_access": 0.5053,
+        "grant_owner_exception": 0.1436
+      },
+      "seconds": 0.04612803799682297
+    },
+    {
+      "id": "hard-sol-a-adversarial-06",
+      "probs": {
+        "yes": 0.8624,
+        "no": 0.13759999999999994
+      },
+      "seconds": 9.192840379997506
+    },
+    {
+      "id": "hard-sol-a-adversarial-07",
+      "probs": {
+        "delete_now": 0.3038,
+        "needs_signature_review": 0.079,
+        "retain_indefinitely": 0.3093,
+        "retain_until_2031": 0.3079
+      },
+      "seconds": 0.06404651899356395
+    },
+    {
+      "id": "hard-sol-a-adversarial-08",
+      "probs": {
+        "yes": 0.7681,
+        "no": 0.2319
+      },
+      "seconds": 0.0438603169968701
+    },
+    {
+      "id": "hard-sol-a-adversarial-09",
+      "probs": {
+        "0": 0.0625,
+        "1": 0.462,
+        "2": 0.4078,
+        "3": 0.0678
+      },
+      "seconds": 0.04417162299796473
+    },
+    {
+      "id": "hard-sol-a-adversarial-11",
+      "probs": {
+        "ethics_review": 0.2122,
+        "major_grants": 0.3458,
+        "manual_hold": 0.1054,
+        "standard_research": 0.3367
+      },
+      "seconds": 0.053658156997698825
+    },
+    {
+      "id": "hard-sol-a-multi_hop-01",
+      "probs": {
+        "accept_s2_dusk": 0.8157,
+        "reject_cutoff": 0.0558,
+        "reject_tier": 0.0828,
+        "reroute_s3": 0.0458
+      },
+      "seconds": 0.07825425900227856
+    },
+    {
+      "id": "hard-sol-a-multi_hop-02",
+      "probs": {
+        "executive_bridge": 0.0885,
+        "heron_q2": 0.6473,
+        "insufficient_information": 0.1441,
+        "security_primary": 0.1201
+      },
+      "seconds": 0.061083890999725554
+    },
+    {
+      "id": "hard-sol-a-multi_hop-05",
+      "probs": {
+        "pay_manager_approved": 0.4372,
+        "reject_category": 0.0979,
+        "require_director": 0.335,
+        "require_finance_board": 0.1299
+      },
+      "seconds": 0.05723445100011304
+    },
+    {
+      "id": "hard-sol-a-multi_hop-07",
+      "probs": {
+        "admit": 0.5412,
+        "deny_prerequisite": 0.127,
+        "deny_score": 0.1886,
+        "manual_equivalency": 0.1432
+      },
+      "seconds": 0.054072177001216915
+    },
+    {
+      "id": "hard-sol-a-multi_hop-08",
+      "probs": {
+        "central_engineering": 0.1489,
+        "insufficient_log": 0.1996,
+        "local_maintenance": 0.5843,
+        "safety_shutdown": 0.0671
+      },
+      "seconds": 0.055593367003893945
+    },
+    {
+      "id": "hard-sol-a-multi_hop-09",
+      "probs": {
+        "confirm_l3": 0.4375,
+        "reject_capacity": 0.2974,
+        "require_steward": 0.1075,
+        "switch_l4": 0.1576
+      },
+      "seconds": 0.0694931620018906
+    },
+    {
+      "id": "hard-sol-a-multi_hop-10",
+      "probs": {
+        "approve_45_days": 0.2171,
+        "deny_sensitive": 0.1951,
+        "needs_field_review": 0.397,
+        "reduce_to_30_days": 0.1908
+      },
+      "seconds": 0.0724369379968266
+    },
+    {
+      "id": "hard-sol-a-multi_hop-12",
+      "probs": {
+        "covered_recurrence": 0.4108,
+        "expired": 0.1473,
+        "needs_authentication": 0.1953,
+        "wrong_issue_class": 0.2466
+      },
+      "seconds": 0.06246581300365506
+    },
+    {
+      "id": "hard-sol-a-trap-02",
+      "probs": {
+        "yes": 0.8258,
+        "no": 0.17420000000000002
+      },
+      "seconds": 0.04200783499982208
+    },
+    {
+      "id": "hard-sol-a-trap-04",
+      "probs": {
+        "yes": 0.8384,
+        "no": 0.16159999999999997
+      },
+      "seconds": 0.04415184399840655
+    },
+    {
+      "id": "hard-sol-a-trap-05",
+      "probs": {
+        "0": 0.1409,
+        "1": 0.1637,
+        "2": 0.5722,
+        "3": 0.1232
+      },
+      "seconds": 0.03947161899850471
+    },
+    {
+      "id": "hard-sol-a-trap-06",
+      "probs": {
+        "await_internal_metrics": 0.1174,
+        "close_agent_verified": 0.3711,
+        "close_confirmed": 0.4374,
+        "keep_open_unresolved": 0.0741
+      },
+      "seconds": 0.03578897200350184
+    },
+    {
+      "id": "hard-sol-a-trap-08",
+      "probs": {
+        "canceled": 0.0999,
+        "indeterminate": 0.0793,
+        "late": 0.1615,
+        "on_time": 0.6592
+      },
+      "seconds": 0.044657457001449075
+    },
+    {
+      "id": "hard-sol-a-trap-10",
+      "probs": {
+        "blocked_failed_test": 0.1991,
+        "blocked_second_review": 0.1587,
+        "ready_one_review": 0.1671,
+        "ready_two_reviews": 0.4752
+      },
+      "seconds": 0.04299768900091294
+    },
+    {
+      "id": "hard-sol-a-trap-13",
+      "probs": {
+        "yes": 0.7342,
+        "no": 0.26580000000000004
+      },
+      "seconds": 0.044976860997849144
+    },
+    {
+      "id": "hard-sol-a-trap-15",
+      "probs": {
+        "yes": 0.8341,
+        "no": 0.16590000000000005
+      },
+      "seconds": 8.7397333839981
+    },
+    {
+      "id": "hard-sol-b-judge_hard-01",
+      "probs": {
+        "yes": 0.3596,
+        "no": 0.6404000000000001
+      },
+      "seconds": 0.0406123069988098
+    },
+    {
+      "id": "hard-sol-b-judge_hard-02",
+      "probs": {
+        "yes": 0.7478,
+        "no": 0.2522
+      },
+      "seconds": 0.04156182299630018
+    },
+    {
+      "id": "hard-sol-b-judge_hard-05",
+      "probs": {
+        "yes": 0.5632,
+        "no": 0.43679999999999997
+      },
+      "seconds": 0.045595869996759575
+    },
+    {
+      "id": "hard-sol-b-judge_hard-08",
+      "probs": {
+        "yes": 0.2192,
+        "no": 0.7807999999999999
+      },
+      "seconds": 0.04299868900125148
+    },
+    {
+      "id": "hard-sol-b-judge_hard-10",
+      "probs": {
+        "yes": 0.6647,
+        "no": 0.33530000000000004
+      },
+      "seconds": 0.04573182999592973
+    },
+    {
+      "id": "hard-sol-b-judge_hard-14",
+      "probs": {
+        "yes": 0.7012,
+        "no": 0.29879999999999995
+      },
+      "seconds": 0.04514762300095754
+    },
+    {
+      "id": "hard-sol-b-judge_hard-15",
+      "probs": {
+        "yes": 0.5525,
+        "no": 0.4475
+      },
+      "seconds": 0.04214596699603135
+    },
+    {
+      "id": "hard-sol-b-judge_hard-18",
+      "probs": {
+        "yes": 0.8838,
+        "no": 0.11619999999999997
+      },
+      "seconds": 0.046098730999801774
+    },
+    {
+      "id": "hard-sol-b-long_policy-01",
+      "probs": {
+        "approve_all": 0.3676,
+        "approve_lodging_only": 0.319,
+        "approve_meals_only": 0.1756,
+        "reject_entire_claim": 0.1378
+      },
+      "seconds": 0.06543345400132239
+    },
+    {
+      "id": "hard-sol-b-long_policy-02",
+      "probs": {
+        "analytics_owner_only": 0.3281,
+        "deny_current_export": 0.1704,
+        "privacy_and_security": 0.334,
+        "privacy_only": 0.1674
+      },
+      "seconds": 0.06915387000481132
+    },
+    {
+      "id": "hard-sol-b-long_policy-05",
+      "probs": {
+        "delete_everything": 0.2216,
+        "delete_nothing": 0.0757,
+        "delete_only_profile": 0.26,
+        "delete_profile_omar_april_and_table": 0.4428
+      },
+      "seconds": 0.05043034599657403
+    },
+    {
+      "id": "hard-sol-b-long_policy-06",
+      "probs": {
+        "east_ward": 0.0199,
+        "harbor_neighbors": 0.919,
+        "no_award": 0.0524,
+        "river_arts": 0.0088
+      },
+      "seconds": 0.0500735040041036
+    },
+    {
+      "id": "hard-sol-b-routing_hard-01",
+      "probs": {
+        "data_pipeline": 0.1737,
+        "desktop_support": 0.2083,
+        "finance_review": 0.1186,
+        "office_file_repair": 0.2227,
+        "spreadsheet_formula": 0.2768
+      },
+      "seconds": 0.03922485800285358
+    },
+    {
+      "id": "hard-sol-b-routing_hard-02",
+      "probs": {
+        "customer_support": 0.1828,
+        "fraud_review": 0.0787,
+        "ledger_reconciliation": 0.192,
+        "mobile_app": 0.2061,
+        "payment_disputes": 0.3404
+      },
+      "seconds": 0.04477343000326073
+    },
+    {
+      "id": "hard-sol-b-routing_hard-03",
+      "probs": {
+        "api_platform": 0.3862,
+        "authoritative_dns": 0.2208,
+        "endpoint_devices": 0.0744,
+        "network_dns": 0.2227,
+        "tls_certificates": 0.0958
+      },
+      "seconds": 0.04247304300224641
+    },
+    {
+      "id": "hard-sol-b-routing_hard-07",
+      "probs": {
+        "ci_infrastructure": 0.3187,
+        "code_signing": 0.1642,
+        "endpoint_security": 0.0507,
+        "macos_runtime": 0.1642,
+        "release_notarization": 0.3022
+      },
+      "seconds": 0.04466571400553221
+    },
+    {
+      "id": "hard-sol-b-routing_hard-09",
+      "probs": {
+        "git_client": 0.1992,
+        "identity_login": 0.1902,
+        "repository_admin": 0.251,
+        "source_access": 0.1823,
+        "vpn_network": 0.1773
+      },
+      "seconds": 0.04626052000094205
+    },
+    {
+      "id": "hard-sol-b-temporal_numeric-01",
+      "probs": {
+        "before_open": 0.2512,
+        "late_by_2h_or_more": 0.1981,
+        "late_by_under_2h": 0.1557,
+        "within_window": 0.395
+      },
+      "seconds": 0.05586014300206443
+    },
+    {
+      "id": "hard-sol-b-temporal_numeric-02",
+      "probs": {
+        "at_least_100gb_below": 0.2791,
+        "exactly_equal": 0.2706,
+        "over_limit": 0.2828,
+        "under_100gb_below": 0.1675
+      },
+      "seconds": 0.04450829400593648
+    },
+    {
+      "id": "hard-sol-b-temporal_numeric-03",
+      "probs": {
+        "12_credits": 0.3486,
+        "15_credits": 0.1832,
+        "6_credits": 0.2144,
+        "9_credits": 0.2538
+      },
+      "seconds": 0.039586858001712244
+    },
+    {
+      "id": "hard-sol-b-temporal_numeric-04",
+      "probs": {
+        "clear_fail": 0.1839,
+        "narrow_fail": 0.3531,
+        "pass": 0.463
+      },
+      "seconds": 0.04467849199863849
+    },
+    {
+      "id": "hard-sol-c-judge_hard-03",
+      "probs": {
+        "yes": 0.7613,
+        "no": 0.23870000000000002
+      },
+      "seconds": 0.044140864003566094
+    },
+    {
+      "id": "hard-sol-c-judge_hard-05",
+      "probs": {
+        "yes": 0.3082,
+        "no": 0.6918
+      },
+      "seconds": 0.04604062999715097
+    },
+    {
+      "id": "hard-sol-c-judge_hard-07",
+      "probs": {
+        "yes": 0.3329,
+        "no": 0.6671
+      },
+      "seconds": 0.04315303199837217
+    },
+    {
+      "id": "hard-sol-c-judge_hard-08",
+      "probs": {
+        "yes": 0.62,
+        "no": 0.38
+      },
+      "seconds": 8.95197576499777
+    },
+    {
+      "id": "hard-sol-c-judge_hard-09",
+      "probs": {
+        "yes": 0.374,
+        "no": 0.626
+      },
+      "seconds": 0.071985123999184
+    },
+    {
+      "id": "hard-sol-c-judge_hard-10",
+      "probs": {
+        "yes": 0.6022,
+        "no": 0.39780000000000004
+      },
+      "seconds": 0.04800634500134038
+    },
+    {
+      "id": "hard-sol-c-judge_hard-11",
+      "probs": {
+        "yes": 0.8493,
+        "no": 0.15069999999999995
+      },
+      "seconds": 0.052259062002121937
+    },
+    {
+      "id": "hard-sol-c-judge_hard-13",
+      "probs": {
+        "yes": 0.1632,
+        "no": 0.8368
+      },
+      "seconds": 0.1104193419960211
+    },
+    {
+      "id": "hard-sol-c-judge_hard-15",
+      "probs": {
+        "yes": 0.8308,
+        "no": 0.16920000000000002
+      },
+      "seconds": 0.06605240200588014
+    },
+    {
+      "id": "hard-sol-c-multi_hop-07",
+      "probs": {
+        "partial_release": 0.102,
+        "programme_review": 0.3744,
+        "reject_draw": 0.1765,
+        "release_draw": 0.3472
+      },
+      "seconds": 0.06137961999775143
+    },
+    {
+      "id": "hard-sol-c-multi_hop-09",
+      "probs": {
+        "bus_substitution": 0.0874,
+        "call_fen_cross": 0.0785,
+        "pass_fen_cross": 0.0687,
+        "terminate_oakmere": 0.7654
+      },
+      "seconds": 0.050683959998423234
+    },
+    {
+      "id": "hard-sol-c-multi_hop-11",
+      "probs": {
+        "adjuster_referral": 0.142,
+        "coverage_confirmed": 0.365,
+        "coverage_excluded": 0.2621,
+        "documentation_needed": 0.2309
+      },
+      "seconds": 0.05158313699939754
+    },
+    {
+      "id": "hard-sol-c-multi_hop-12",
+      "probs": {
+        "conservation_hold": 0.1667,
+        "deny_request": 0.0629,
+        "digital_copy_only": 0.1939,
+        "supervised_delivery": 0.5765
+      },
+      "seconds": 0.043291521003993694
+    },
+    {
+      "id": "hard-sol-c-multi_hop-13",
+      "probs": {
+        "engineering_review": 0.2551,
+        "normal_release": 0.4848,
+        "rework": 0.198,
+        "scrap_lot": 0.0621
+      },
+      "seconds": 0.05504227100027492
+    }
+  ]
+}

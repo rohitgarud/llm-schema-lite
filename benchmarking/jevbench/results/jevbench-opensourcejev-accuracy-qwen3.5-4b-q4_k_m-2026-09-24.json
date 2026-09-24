@@ -1,0 +1,2283 @@
+{
+  "summary": {
+    "ours": {
+      "accuracy": {
+        "easy": 1,
+        "standard": 0.9305555555555556,
+        "hard": 0.5945945945945946
+      },
+      "errors": 0,
+      "hard_ece": 0.15294033333333337,
+      "hard_mean_tvd": 0.39277280000000003,
+      "p50_s": 0.8174894559997483,
+      "p95_s": 17.064118957001483,
+      "calibration": 65.06732666666667
+    },
+    "semif-qwen3.5-4b": {
+      "accuracy": {
+        "easy": 1,
+        "standard": 0.9861111111111112,
+        "hard": 0.6126126126126126
+      },
+      "both_right": 169,
+      "only_ours_right": 12,
+      "only_theirs_right": 18
+    },
+    "jev-1.13.0": {
+      "accuracy": {
+        "easy": 1,
+        "standard": 0.9861111111111112,
+        "hard": 0.7297297297297297
+      },
+      "both_right": 170,
+      "only_ours_right": 11,
+      "only_theirs_right": 30
+    },
+    "our_model": "OpenSourceJev accuracy Qwen3.5-4B Q4_K_M",
+    "question_first": false,
+    "workers": 1,
+    "references": {
+      "semif-qwen3.5-4b": "SemIf (Qwen3.5-4B BF16, SemIf's own code)",
+      "jev-1.13.0": "Jev 1.13.0 (TypeSafe API)"
+    },
+    "jevbench_commit": "2fa63fa3226cb369795525ed011800f57dcbd894",
+    "date": "2026-09-24"
+  },
+  "rows": [
+    {
+      "id": "easy-intent-00",
+      "probs": {
+        "billing_question": 3.7e-05,
+        "cancel_order": 0.000336,
+        "change_address": 0.00188,
+        "report_damage": 2.7e-05,
+        "track_order": 0.99772
+      },
+      "seconds": 9.292588281998178
+    },
+    {
+      "id": "easy-intent-01",
+      "probs": {
+        "billing_question": 3e-06,
+        "cancel_order": 0.998972,
+        "change_address": 0.001025,
+        "report_damage": 0.0,
+        "track_order": 0.0
+      },
+      "seconds": 8.460205228999257
+    },
+    {
+      "id": "easy-intent-02",
+      "probs": {
+        "billing_question": 1e-06,
+        "cancel_order": 1.8e-05,
+        "change_address": 0.999981,
+        "report_damage": 0.0,
+        "track_order": 0.0
+      },
+      "seconds": 0.5526058079994982
+    },
+    {
+      "id": "easy-intent-03",
+      "probs": {
+        "billing_question": 0.00112,
+        "cancel_order": 7.7e-05,
+        "change_address": 0.012446,
+        "report_damage": 0.986355,
+        "track_order": 2e-06
+      },
+      "seconds": 8.27415146700514
+    },
+    {
+      "id": "easy-intent-04",
+      "probs": {
+        "billing_question": 0.999995,
+        "cancel_order": 1e-06,
+        "change_address": 4e-06,
+        "report_damage": 0.0,
+        "track_order": 0.0
+      },
+      "seconds": 0.5475205389957409
+    },
+    {
+      "id": "easy-intent-05",
+      "probs": {
+        "billing_question": 5e-06,
+        "cancel_order": 7.8e-05,
+        "change_address": 0.001467,
+        "report_damage": 1.2e-05,
+        "track_order": 0.998438
+      },
+      "seconds": 7.426070374000119
+    },
+    {
+      "id": "easy-intent-06",
+      "probs": {
+        "play_music": 0.205472,
+        "send_message": 0.011988,
+        "set_alarm": 0.775676,
+        "turn_off_lights": 1e-06,
+        "weather": 0.006862
+      },
+      "seconds": 8.205959666003764
+    },
+    {
+      "id": "easy-intent-07",
+      "probs": {
+        "play_music": 0.999995,
+        "send_message": 5e-06,
+        "set_alarm": 0.0,
+        "turn_off_lights": 0.0,
+        "weather": 1e-06
+      },
+      "seconds": 0.592868603001989
+    },
+    {
+      "id": "easy-intent-08",
+      "probs": {
+        "play_music": 0.000112,
+        "send_message": 4e-06,
+        "set_alarm": 0.0,
+        "turn_off_lights": 0.0,
+        "weather": 0.999884
+      },
+      "seconds": 7.3157607880057185
+    },
+    {
+      "id": "easy-intent-09",
+      "probs": {
+        "play_music": 0.000129,
+        "send_message": 0.999865,
+        "set_alarm": 0.0,
+        "turn_off_lights": 0.0,
+        "weather": 5e-06
+      },
+      "seconds": 0.6259317950025434
+    },
+    {
+      "id": "easy-intent-10",
+      "probs": {
+        "play_music": 0.01162,
+        "send_message": 1e-05,
+        "set_alarm": 1e-06,
+        "turn_off_lights": 0.988245,
+        "weather": 0.000124
+      },
+      "seconds": 7.653163989001769
+    },
+    {
+      "id": "easy-intent-11",
+      "probs": {
+        "play_music": 0.413657,
+        "send_message": 0.000309,
+        "set_alarm": 0.578896,
+        "turn_off_lights": 0.0,
+        "weather": 0.007138
+      },
+      "seconds": 0.5564895819989033
+    },
+    {
+      "id": "easy-fact-00",
+      "probs": {
+        "yes": 0.575856,
+        "no": 0.42414399999999997
+      },
+      "seconds": 0.11835112199332798
+    },
+    {
+      "id": "easy-fact-01",
+      "probs": {
+        "yes": 0.367494,
+        "no": 0.632506
+      },
+      "seconds": 7.259298097997089
+    },
+    {
+      "id": "easy-fact-02",
+      "probs": {
+        "yes": 0.559533,
+        "no": 0.44046700000000005
+      },
+      "seconds": 0.13577497100050095
+    },
+    {
+      "id": "easy-fact-03",
+      "probs": {
+        "yes": 0.380923,
+        "no": 0.619077
+      },
+      "seconds": 0.136587025001063
+    },
+    {
+      "id": "easy-fact-04",
+      "probs": {
+        "yes": 0.555171,
+        "no": 0.44482900000000003
+      },
+      "seconds": 0.12574299600237282
+    },
+    {
+      "id": "easy-fact-05",
+      "probs": {
+        "yes": 0.444426,
+        "no": 0.555574
+      },
+      "seconds": 0.11065334899467416
+    },
+    {
+      "id": "easy-fact-06",
+      "probs": {
+        "yes": 0.565562,
+        "no": 0.434438
+      },
+      "seconds": 0.11682920899329474
+    },
+    {
+      "id": "easy-fact-07",
+      "probs": {
+        "yes": 0.403667,
+        "no": 0.596333
+      },
+      "seconds": 0.10553361799975391
+    },
+    {
+      "id": "easy-fact-08",
+      "probs": {
+        "yes": 0.599139,
+        "no": 0.400861
+      },
+      "seconds": 0.10746257199934917
+    },
+    {
+      "id": "easy-fact-09",
+      "probs": {
+        "yes": 0.378122,
+        "no": 0.6218779999999999
+      },
+      "seconds": 0.11303404200589284
+    },
+    {
+      "id": "easy-fact-10",
+      "probs": {
+        "yes": 0.511121,
+        "no": 0.48887899999999995
+      },
+      "seconds": 7.071909492995474
+    },
+    {
+      "id": "easy-fact-11",
+      "probs": {
+        "yes": 0.373216,
+        "no": 0.626784
+      },
+      "seconds": 0.11273623300075997
+    },
+    {
+      "id": "easy-extraction-00",
+      "probs": {
+        "bank_transfer": 9e-06,
+        "cash": 1.1e-05,
+        "credit_card": 7e-06,
+        "paypal": 0.999973
+      },
+      "seconds": 0.3040256699969177
+    },
+    {
+      "id": "easy-extraction-01",
+      "probs": {
+        "bank_transfer": 3.5e-05,
+        "cash": 0.999954,
+        "credit_card": 6e-06,
+        "paypal": 5e-06
+      },
+      "seconds": 0.2785010980005609
+    },
+    {
+      "id": "easy-extraction-02",
+      "probs": {
+        "bank_transfer": 0.999964,
+        "cash": 1.6e-05,
+        "credit_card": 1.8e-05,
+        "paypal": 2e-06
+      },
+      "seconds": 0.27212901399616385
+    },
+    {
+      "id": "easy-extraction-03",
+      "probs": {
+        "high": 0.998967,
+        "low": 0.0005,
+        "medium": 0.00036,
+        "urgent": 0.000172
+      },
+      "seconds": 7.643780899001285
+    },
+    {
+      "id": "easy-extraction-04",
+      "probs": {
+        "high": 0.000695,
+        "low": 0.999277,
+        "medium": 2.8e-05,
+        "urgent": 1e-06
+      },
+      "seconds": 0.12640974199894117
+    },
+    {
+      "id": "easy-extraction-05",
+      "probs": {
+        "high": 8.8e-05,
+        "low": 8e-06,
+        "medium": 9e-06,
+        "urgent": 0.999896
+      },
+      "seconds": 0.11304057399684098
+    },
+    {
+      "id": "easy-extraction-06",
+      "probs": {
+        "L": 0.000402,
+        "M": 0.999505,
+        "S": 9.3e-05,
+        "XL": 0.0
+      },
+      "seconds": 0.11899447500036331
+    },
+    {
+      "id": "easy-extraction-07",
+      "probs": {
+        "L": 0.012964,
+        "M": 0.000256,
+        "S": 0.000649,
+        "XL": 0.986132
+      },
+      "seconds": 0.11957765799888875
+    },
+    {
+      "id": "easy-extraction-08",
+      "probs": {
+        "friday": 0.000386,
+        "monday": 1.9e-05,
+        "thursday": 0.994454,
+        "tuesday": 0.004878,
+        "wednesday": 0.000263
+      },
+      "seconds": 8.230762523999147
+    },
+    {
+      "id": "easy-extraction-09",
+      "probs": {
+        "friday": 0.000728,
+        "monday": 0.998996,
+        "thursday": 5.3e-05,
+        "tuesday": 0.000139,
+        "wednesday": 8.4e-05
+      },
+      "seconds": 0.3766595459965174
+    },
+    {
+      "id": "easy-extraction-10",
+      "probs": {
+        "friday": 0.998035,
+        "monday": 0.000226,
+        "thursday": 0.00137,
+        "tuesday": 6.7e-05,
+        "wednesday": 0.000302
+      },
+      "seconds": 0.3445669459979399
+    },
+    {
+      "id": "easy-extraction-11",
+      "probs": {
+        "bank_transfer": 0.001415,
+        "cash": 0.000597,
+        "credit_card": 0.99789,
+        "paypal": 9.9e-05
+      },
+      "seconds": 0.30733457500173245
+    },
+    {
+      "id": "easy-tool_selection-00",
+      "probs": {
+        "convert_currency": 0.00052,
+        "create_calendar_event": 0.000349,
+        "get_weather": 0.999131,
+        "send_email": 1e-06,
+        "translate_text": 0.0
+      },
+      "seconds": 8.578252182000142
+    },
+    {
+      "id": "easy-tool_selection-01",
+      "probs": {
+        "convert_currency": 0.007058,
+        "create_calendar_event": 0.005312,
+        "get_weather": 0.000813,
+        "send_email": 0.986817,
+        "translate_text": 0.0
+      },
+      "seconds": 7.548822987002495
+    },
+    {
+      "id": "easy-tool_selection-02",
+      "probs": {
+        "convert_currency": 0.001798,
+        "create_calendar_event": 0.998199,
+        "get_weather": 3e-06,
+        "send_email": 0.0,
+        "translate_text": 0.0
+      },
+      "seconds": 8.928994520996639
+    },
+    {
+      "id": "easy-tool_selection-03",
+      "probs": {
+        "convert_currency": 0.999857,
+        "create_calendar_event": 0.000133,
+        "get_weather": 1e-05,
+        "send_email": 1e-06,
+        "translate_text": 0.0
+      },
+      "seconds": 0.5335510660006548
+    },
+    {
+      "id": "easy-tool_selection-04",
+      "probs": {
+        "convert_currency": 0.278744,
+        "create_calendar_event": 0.009132,
+        "get_weather": 0.000671,
+        "send_email": 1.7e-05,
+        "translate_text": 0.711437
+      },
+      "seconds": 7.5030965710029704
+    },
+    {
+      "id": "easy-tool_selection-05",
+      "probs": {
+        "convert_currency": 0.00092,
+        "create_calendar_event": 0.999078,
+        "get_weather": 2e-06,
+        "send_email": 0.0,
+        "translate_text": 0.0
+      },
+      "seconds": 0.6545532469972386
+    },
+    {
+      "id": "easy-tool_selection-06",
+      "probs": {
+        "book_restaurant": 0.000836,
+        "call_taxi": 6.4e-05,
+        "get_stock_price": 0.000162,
+        "search_flights": 0.998936,
+        "set_reminder": 3e-06
+      },
+      "seconds": 8.72438213800342
+    },
+    {
+      "id": "easy-tool_selection-07",
+      "probs": {
+        "book_restaurant": 0.999981,
+        "call_taxi": 1.6e-05,
+        "get_stock_price": 0.0,
+        "search_flights": 2e-06,
+        "set_reminder": 0.0
+      },
+      "seconds": 7.617046218998439
+    },
+    {
+      "id": "easy-tool_selection-08",
+      "probs": {
+        "book_restaurant": 0.000871,
+        "call_taxi": 0.000677,
+        "get_stock_price": 0.000293,
+        "search_flights": 6.1e-05,
+        "set_reminder": 0.998098
+      },
+      "seconds": 17.185267683002166
+    },
+    {
+      "id": "easy-tool_selection-09",
+      "probs": {
+        "book_restaurant": 0.000287,
+        "call_taxi": 0.000144,
+        "get_stock_price": 0.999527,
+        "search_flights": 2e-05,
+        "set_reminder": 2.3e-05
+      },
+      "seconds": 0.8174894559997483
+    },
+    {
+      "id": "easy-tool_selection-10",
+      "probs": {
+        "book_restaurant": 0.003194,
+        "call_taxi": 0.996798,
+        "get_stock_price": 4e-06,
+        "search_flights": 3e-06,
+        "set_reminder": 1e-06
+      },
+      "seconds": 8.148284770999453
+    },
+    {
+      "id": "easy-tool_selection-11",
+      "probs": {
+        "book_restaurant": 0.001795,
+        "call_taxi": 6e-05,
+        "get_stock_price": 0.000798,
+        "search_flights": 4.3e-05,
+        "set_reminder": 0.997304
+      },
+      "seconds": 7.814054214999487
+    },
+    {
+      "id": "original-policy-01-0",
+      "probs": {
+        "yes": 0.379542,
+        "no": 0.620458
+      },
+      "seconds": 0.14498157200432615
+    },
+    {
+      "id": "original-policy-01-1",
+      "probs": {
+        "yes": 0.392296,
+        "no": 0.607704
+      },
+      "seconds": 0.14030330799869262
+    },
+    {
+      "id": "original-policy-02-0",
+      "probs": {
+        "yes": 0.540304,
+        "no": 0.459696
+      },
+      "seconds": 0.12722817299800226
+    },
+    {
+      "id": "original-policy-02-1",
+      "probs": {
+        "yes": 0.50031,
+        "no": 0.49968999999999997
+      },
+      "seconds": 0.11900297700049123
+    },
+    {
+      "id": "original-policy-03-0",
+      "probs": {
+        "yes": 0.513803,
+        "no": 0.486197
+      },
+      "seconds": 7.020285581005737
+    },
+    {
+      "id": "original-policy-03-1",
+      "probs": {
+        "yes": 0.447635,
+        "no": 0.552365
+      },
+      "seconds": 0.12266435399942566
+    },
+    {
+      "id": "original-policy-04-0",
+      "probs": {
+        "yes": 0.412847,
+        "no": 0.587153
+      },
+      "seconds": 0.12497860200528521
+    },
+    {
+      "id": "original-policy-04-1",
+      "probs": {
+        "yes": 0.425825,
+        "no": 0.574175
+      },
+      "seconds": 0.14014018699526787
+    },
+    {
+      "id": "original-policy-05-0",
+      "probs": {
+        "yes": 0.425674,
+        "no": 0.574326
+      },
+      "seconds": 0.1285467339985189
+    },
+    {
+      "id": "original-policy-05-1",
+      "probs": {
+        "yes": 0.409845,
+        "no": 0.590155
+      },
+      "seconds": 0.11335071200301172
+    },
+    {
+      "id": "original-policy-06-0",
+      "probs": {
+        "yes": 0.509457,
+        "no": 0.49054299999999995
+      },
+      "seconds": 0.1217367680001189
+    },
+    {
+      "id": "original-policy-06-1",
+      "probs": {
+        "yes": 0.514908,
+        "no": 0.48509199999999997
+      },
+      "seconds": 0.11313586200412828
+    },
+    {
+      "id": "original-intent-01-0",
+      "probs": {
+        "cancel": 0.000203,
+        "change_address": 0.000147,
+        "other": 0.039441,
+        "refund": 0.960171,
+        "status": 3.8e-05
+      },
+      "seconds": 7.765948371001286
+    },
+    {
+      "id": "original-intent-01-1",
+      "probs": {
+        "cancel": 0.000119,
+        "change_address": 0.000241,
+        "other": 0.021667,
+        "refund": 0.977937,
+        "status": 3.6e-05
+      },
+      "seconds": 0.23669414599862648
+    },
+    {
+      "id": "original-intent-02-0",
+      "probs": {
+        "cancel": 0.017801,
+        "change_address": 0.181345,
+        "other": 0.28646,
+        "refund": 0.006213,
+        "status": 0.508182
+      },
+      "seconds": 0.24239137599943206
+    },
+    {
+      "id": "original-intent-02-1",
+      "probs": {
+        "cancel": 2e-06,
+        "change_address": 0.000175,
+        "other": 0.041759,
+        "refund": 2e-05,
+        "status": 0.958044
+      },
+      "seconds": 0.21706136900320416
+    },
+    {
+      "id": "original-intent-03-0",
+      "probs": {
+        "cancel": 5.5e-05,
+        "change_address": 0.99814,
+        "other": 0.001768,
+        "refund": 1.3e-05,
+        "status": 2.5e-05
+      },
+      "seconds": 0.20983884499582928
+    },
+    {
+      "id": "original-intent-03-1",
+      "probs": {
+        "cancel": 7.8e-05,
+        "change_address": 0.996523,
+        "other": 0.003347,
+        "refund": 2.1e-05,
+        "status": 3.1e-05
+      },
+      "seconds": 7.399190096002712
+    },
+    {
+      "id": "original-intent-04-0",
+      "probs": {
+        "cancel": 0.718057,
+        "change_address": 0.002432,
+        "other": 0.253199,
+        "refund": 0.025379,
+        "status": 0.000934
+      },
+      "seconds": 0.21727256599842804
+    },
+    {
+      "id": "original-intent-04-1",
+      "probs": {
+        "cancel": 0.631435,
+        "change_address": 0.003964,
+        "other": 0.322991,
+        "refund": 0.027876,
+        "status": 0.013734
+      },
+      "seconds": 0.22432154000125593
+    },
+    {
+      "id": "original-intent-05-0",
+      "probs": {
+        "cancel": 0.018498,
+        "change_address": 0.00508,
+        "other": 0.247515,
+        "refund": 0.717343,
+        "status": 0.011565
+      },
+      "seconds": 0.21192541599884862
+    },
+    {
+      "id": "original-intent-05-1",
+      "probs": {
+        "cancel": 0.078387,
+        "change_address": 0.005862,
+        "other": 0.345003,
+        "refund": 0.557481,
+        "status": 0.013268
+      },
+      "seconds": 0.21138809499825584
+    },
+    {
+      "id": "original-intent-06-0",
+      "probs": {
+        "cancel": 0.00044,
+        "change_address": 0.001629,
+        "other": 0.025275,
+        "refund": 0.004455,
+        "status": 0.9682
+      },
+      "seconds": 8.033913136998308
+    },
+    {
+      "id": "original-intent-06-1",
+      "probs": {
+        "cancel": 3.5e-05,
+        "change_address": 0.000435,
+        "other": 0.063634,
+        "refund": 0.000187,
+        "status": 0.93571
+      },
+      "seconds": 0.19362578800064512
+    },
+    {
+      "id": "original-ordinal-01-0",
+      "probs": {
+        "0": 0.892829,
+        "1": 0.098835,
+        "2": 0.006751,
+        "3": 0.001584
+      },
+      "seconds": 0.4665974159943289
+    },
+    {
+      "id": "original-ordinal-01-1",
+      "probs": {
+        "0": 0.991602,
+        "1": 0.00645,
+        "2": 0.00123,
+        "3": 0.000718
+      },
+      "seconds": 7.145157188999292
+    },
+    {
+      "id": "original-ordinal-02-0",
+      "probs": {
+        "0": 0.065677,
+        "1": 0.463997,
+        "2": 0.430961,
+        "3": 0.039365
+      },
+      "seconds": 0.4914172319986392
+    },
+    {
+      "id": "original-ordinal-02-1",
+      "probs": {
+        "0": 0.184226,
+        "1": 0.795525,
+        "2": 0.018048,
+        "3": 0.002201
+      },
+      "seconds": 8.516497309996339
+    },
+    {
+      "id": "original-ordinal-03-0",
+      "probs": {
+        "0": 0.001013,
+        "1": 0.002567,
+        "2": 0.974803,
+        "3": 0.021617
+      },
+      "seconds": 0.5313316769970697
+    },
+    {
+      "id": "original-ordinal-03-1",
+      "probs": {
+        "0": 0.050894,
+        "1": 0.118041,
+        "2": 0.643915,
+        "3": 0.18715
+      },
+      "seconds": 7.613388457000838
+    },
+    {
+      "id": "original-ordinal-04-0",
+      "probs": {
+        "0": 0.000315,
+        "1": 0.000339,
+        "2": 0.001184,
+        "3": 0.998162
+      },
+      "seconds": 0.48913948200060986
+    },
+    {
+      "id": "original-ordinal-04-1",
+      "probs": {
+        "0": 0.000638,
+        "1": 0.00086,
+        "2": 0.002881,
+        "3": 0.995621
+      },
+      "seconds": 0.4456092790060211
+    },
+    {
+      "id": "original-ordinal-05-0",
+      "probs": {
+        "0": 0.917809,
+        "1": 0.047223,
+        "2": 0.019675,
+        "3": 0.015293
+      },
+      "seconds": 7.490304330000072
+    },
+    {
+      "id": "original-ordinal-05-1",
+      "probs": {
+        "0": 0.921869,
+        "1": 0.034307,
+        "2": 0.01583,
+        "3": 0.027995
+      },
+      "seconds": 0.49751729000126943
+    },
+    {
+      "id": "original-ordinal-06-0",
+      "probs": {
+        "0": 0.04393,
+        "1": 0.093204,
+        "2": 0.858923,
+        "3": 0.003943
+      },
+      "seconds": 7.714682981997612
+    },
+    {
+      "id": "original-ordinal-06-1",
+      "probs": {
+        "0": 0.000551,
+        "1": 0.000794,
+        "2": 0.996486,
+        "3": 0.002169
+      },
+      "seconds": 0.5033215139992535
+    },
+    {
+      "id": "original-extraction-01-0",
+      "probs": {
+        "courier": 0.001992,
+        "pickup": 0.997643,
+        "post": 0.000328,
+        "unknown": 3.6e-05
+      },
+      "seconds": 0.11760761599725811
+    },
+    {
+      "id": "original-extraction-01-1",
+      "probs": {
+        "courier": 0.000168,
+        "pickup": 0.999607,
+        "post": 0.000142,
+        "unknown": 8.4e-05
+      },
+      "seconds": 0.11997993299883092
+    },
+    {
+      "id": "original-extraction-02-0",
+      "probs": {
+        "courier": 0.000121,
+        "pickup": 5e-05,
+        "post": 0.034105,
+        "unknown": 0.965724
+      },
+      "seconds": 0.12104196300060721
+    },
+    {
+      "id": "original-extraction-02-1",
+      "probs": {
+        "courier": 3e-06,
+        "pickup": 4e-06,
+        "post": 0.008856,
+        "unknown": 0.991137
+      },
+      "seconds": 8.352896959004283
+    },
+    {
+      "id": "original-extraction-03-0",
+      "probs": {
+        "courier": 0.552398,
+        "pickup": 0.10939,
+        "post": 0.013096,
+        "unknown": 0.325116
+      },
+      "seconds": 0.11590977200103225
+    },
+    {
+      "id": "original-extraction-03-1",
+      "probs": {
+        "courier": 0.999726,
+        "pickup": 1.3e-05,
+        "post": 5.9e-05,
+        "unknown": 0.000202
+      },
+      "seconds": 0.10051577300328063
+    },
+    {
+      "id": "original-extraction-04-0",
+      "probs": {
+        "courier": 2.4e-05,
+        "pickup": 6e-06,
+        "post": 0.998962,
+        "unknown": 0.001008
+      },
+      "seconds": 0.11028227499627974
+    },
+    {
+      "id": "original-extraction-04-1",
+      "probs": {
+        "courier": 4.8e-05,
+        "pickup": 4e-06,
+        "post": 0.999754,
+        "unknown": 0.000193
+      },
+      "seconds": 0.10226953299570596
+    },
+    {
+      "id": "original-extraction-05-0",
+      "probs": {
+        "courier": 1.1e-05,
+        "pickup": 8e-06,
+        "post": 0.000107,
+        "unknown": 0.999874
+      },
+      "seconds": 0.10510841500217794
+    },
+    {
+      "id": "original-extraction-05-1",
+      "probs": {
+        "courier": 0.008545,
+        "pickup": 0.003376,
+        "post": 0.008587,
+        "unknown": 0.979492
+      },
+      "seconds": 0.11668108999583637
+    },
+    {
+      "id": "original-extraction-06-0",
+      "probs": {
+        "courier": 0.999725,
+        "pickup": 4e-06,
+        "post": 0.000143,
+        "unknown": 0.000127
+      },
+      "seconds": 8.106838155996229
+    },
+    {
+      "id": "original-extraction-06-1",
+      "probs": {
+        "courier": 0.990476,
+        "pickup": 0.000356,
+        "post": 0.0042,
+        "unknown": 0.004968
+      },
+      "seconds": 0.16246975099784322
+    },
+    {
+      "id": "original-adequacy-01-0",
+      "probs": {
+        "yes": 0.527842,
+        "no": 0.47215799999999997
+      },
+      "seconds": 0.12838269700296223
+    },
+    {
+      "id": "original-adequacy-01-1",
+      "probs": {
+        "yes": 0.515922,
+        "no": 0.484078
+      },
+      "seconds": 0.12826023600064218
+    },
+    {
+      "id": "original-adequacy-02-0",
+      "probs": {
+        "yes": 0.449798,
+        "no": 0.5502020000000001
+      },
+      "seconds": 0.11846614100068109
+    },
+    {
+      "id": "original-adequacy-02-1",
+      "probs": {
+        "yes": 0.42169,
+        "no": 0.57831
+      },
+      "seconds": 0.12786838600004558
+    },
+    {
+      "id": "original-adequacy-03-0",
+      "probs": {
+        "yes": 0.52386,
+        "no": 0.47614
+      },
+      "seconds": 0.11999481599923456
+    },
+    {
+      "id": "original-adequacy-03-1",
+      "probs": {
+        "yes": 0.491269,
+        "no": 0.508731
+      },
+      "seconds": 0.1150858779947157
+    },
+    {
+      "id": "original-adequacy-04-0",
+      "probs": {
+        "yes": 0.520726,
+        "no": 0.479274
+      },
+      "seconds": 0.1147467660048278
+    },
+    {
+      "id": "original-adequacy-04-1",
+      "probs": {
+        "yes": 0.502509,
+        "no": 0.497491
+      },
+      "seconds": 7.253827862004982
+    },
+    {
+      "id": "original-adequacy-05-0",
+      "probs": {
+        "yes": 0.490396,
+        "no": 0.509604
+      },
+      "seconds": 0.12838368799566524
+    },
+    {
+      "id": "original-adequacy-05-1",
+      "probs": {
+        "yes": 0.494237,
+        "no": 0.505763
+      },
+      "seconds": 0.10992336300114403
+    },
+    {
+      "id": "original-adequacy-06-0",
+      "probs": {
+        "yes": 0.519769,
+        "no": 0.48023099999999996
+      },
+      "seconds": 0.10640969000087352
+    },
+    {
+      "id": "original-adequacy-06-1",
+      "probs": {
+        "yes": 0.486441,
+        "no": 0.513559
+      },
+      "seconds": 0.11394422200100962
+    },
+    {
+      "id": "original-routing-01-0",
+      "probs": {
+        "coding": 0.075159,
+        "coding_agent": 0.001511,
+        "document": 2.7e-05,
+        "general": 0.012682,
+        "math": 0.904708,
+        "tools": 0.005912
+      },
+      "seconds": 8.46080572700157
+    },
+    {
+      "id": "original-routing-01-1",
+      "probs": {
+        "coding": 0.101326,
+        "coding_agent": 0.002245,
+        "document": 2e-05,
+        "general": 0.002777,
+        "math": 0.891405,
+        "tools": 0.002226
+      },
+      "seconds": 0.6880663349948009
+    },
+    {
+      "id": "original-routing-02-0",
+      "probs": {
+        "coding": 0.521592,
+        "coding_agent": 0.47708,
+        "document": 1e-06,
+        "general": 0.00023,
+        "math": 4.7e-05,
+        "tools": 0.00105
+      },
+      "seconds": 7.633260367998446
+    },
+    {
+      "id": "original-routing-02-1",
+      "probs": {
+        "coding": 0.769703,
+        "coding_agent": 0.23019,
+        "document": 0.0,
+        "general": 2e-05,
+        "math": 3e-06,
+        "tools": 8.4e-05
+      },
+      "seconds": 8.339965967999888
+    },
+    {
+      "id": "original-routing-03-0",
+      "probs": {
+        "coding": 0.001277,
+        "coding_agent": 0.996782,
+        "document": 1e-06,
+        "general": 1e-06,
+        "math": 0.0,
+        "tools": 0.00194
+      },
+      "seconds": 0.6864192170032766
+    },
+    {
+      "id": "original-routing-03-1",
+      "probs": {
+        "coding": 0.000917,
+        "coding_agent": 0.998812,
+        "document": 0.0,
+        "general": 0.0,
+        "math": 0.0,
+        "tools": 0.00027
+      },
+      "seconds": 7.594155423001212
+    },
+    {
+      "id": "original-routing-04-0",
+      "probs": {
+        "coding": 0.010221,
+        "coding_agent": 0.0036,
+        "document": 0.985098,
+        "general": 0.000121,
+        "math": 9e-06,
+        "tools": 0.000952
+      },
+      "seconds": 9.345788516999164
+    },
+    {
+      "id": "original-routing-04-1",
+      "probs": {
+        "coding": 0.092719,
+        "coding_agent": 0.053616,
+        "document": 0.809455,
+        "general": 0.005255,
+        "math": 0.000788,
+        "tools": 0.038167
+      },
+      "seconds": 8.006119660996774
+    },
+    {
+      "id": "original-routing-05-0",
+      "probs": {
+        "coding": 0.000292,
+        "coding_agent": 0.000356,
+        "document": 4e-06,
+        "general": 0.000375,
+        "math": 1e-06,
+        "tools": 0.998972
+      },
+      "seconds": 0.6635993759991834
+    },
+    {
+      "id": "original-routing-05-1",
+      "probs": {
+        "coding": 0.001069,
+        "coding_agent": 0.002116,
+        "document": 4.9e-05,
+        "general": 0.006909,
+        "math": 3e-06,
+        "tools": 0.989854
+      },
+      "seconds": 8.105427390000841
+    },
+    {
+      "id": "original-routing-06-0",
+      "probs": {
+        "coding": 0.093805,
+        "coding_agent": 0.004415,
+        "document": 0.005015,
+        "general": 0.874162,
+        "math": 4.2e-05,
+        "tools": 0.022561
+      },
+      "seconds": 8.372363624999707
+    },
+    {
+      "id": "original-routing-06-1",
+      "probs": {
+        "coding": 0.026447,
+        "coding_agent": 0.001283,
+        "document": 0.002687,
+        "general": 0.960623,
+        "math": 1.6e-05,
+        "tools": 0.008944
+      },
+      "seconds": 0.7106773240011535
+    },
+    {
+      "id": "hard-opus-a-long_policy-01",
+      "probs": {
+        "deny_repeated_seepage": 0.003414,
+        "deny_vacancy_exclusion": 0.00299,
+        "pay_full_estimate_less_deductible": 0.885054,
+        "pay_subject_to_10000_sublimit": 0.106843,
+        "pay_subject_to_15000_sublimit": 0.0017
+      },
+      "seconds": 42.755176901002415
+    },
+    {
+      "id": "hard-opus-a-long_policy-04",
+      "probs": {
+        "budget_holder": 0.053908,
+        "cfo": 0.13124,
+        "department_head": 0.808466,
+        "executive_committee": 0.000638,
+        "vp_and_finance_director": 0.005748
+      },
+      "seconds": 15.80250497200177
+    },
+    {
+      "id": "hard-opus-a-long_policy-08",
+      "probs": {
+        "full_repair_no_charge": 0.01859,
+        "not_covered": 0.072248,
+        "parts_covered_labour_charged": 0.883722,
+        "pro_rata_replacement_credit": 0.02544
+      },
+      "seconds": 16.061478436997277
+    },
+    {
+      "id": "hard-opus-a-long_policy-09",
+      "probs": {
+        "license_exception_lvs": 0.412284,
+        "license_required": 0.554042,
+        "no_license_required": 0.006826,
+        "shipment_prohibited": 0.026848
+      },
+      "seconds": 8.24050948600052
+    },
+    {
+      "id": "hard-opus-a-long_policy-11",
+      "probs": {
+        "yes": 0.482138,
+        "no": 0.517862
+      },
+      "seconds": 8.595202642994991
+    },
+    {
+      "id": "hard-opus-a-long_policy-13",
+      "probs": {
+        "yes": 0.427197,
+        "no": 0.572803
+      },
+      "seconds": 8.122373263002373
+    },
+    {
+      "id": "hard-opus-a-long_policy-17",
+      "probs": {
+        "database_oncall": 0.518059,
+        "no_page_ticket_only": 0.447353,
+        "platform_oncall": 0.011144,
+        "security_incident_response": 0.000438,
+        "vendor_support": 0.023006
+      },
+      "seconds": 8.66744210300385
+    },
+    {
+      "id": "hard-opus-a-long_policy-19",
+      "probs": {
+        "yes": 0.462456,
+        "no": 0.537544
+      },
+      "seconds": 8.887212214998726
+    },
+    {
+      "id": "hard-opus-a-probability-03",
+      "probs": {
+        "yes": 0.485996,
+        "no": 0.514004
+      },
+      "seconds": 7.843389391004166
+    },
+    {
+      "id": "hard-opus-a-probability-04",
+      "probs": {
+        "early": 0.10663,
+        "late": 0.676801,
+        "on_time": 0.216569
+      },
+      "seconds": 0.49312475300394
+    },
+    {
+      "id": "hard-opus-a-probability-07",
+      "probs": {
+        "escalated": 0.133264,
+        "reopened": 0.001366,
+        "resolved_first_contact": 0.86537
+      },
+      "seconds": 8.651431594000314
+    },
+    {
+      "id": "hard-opus-a-probability-08",
+      "probs": {
+        "yes": 0.472019,
+        "no": 0.527981
+      },
+      "seconds": 0.18621715599874733
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-03",
+      "probs": {
+        "yes": 0.465331,
+        "no": 0.5346690000000001
+      },
+      "seconds": 0.21236231899820268
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-06",
+      "probs": {
+        "yes": 0.457517,
+        "no": 0.542483
+      },
+      "seconds": 0.24353591300314292
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-07",
+      "probs": {
+        "sep_24": 0.524802,
+        "sep_25": 0.332266,
+        "sep_26": 0.127025,
+        "sep_27": 0.013791,
+        "sep_28": 0.002116
+      },
+      "seconds": 15.378232981005567
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-09",
+      "probs": {
+        "yes": 0.454053,
+        "no": 0.545947
+      },
+      "seconds": 0.3143774120035232
+    },
+    {
+      "id": "hard-opus-a-temporal_numeric-12",
+      "probs": {
+        "0": 0.078878,
+        "1": 0.089319,
+        "2": 0.24988,
+        "3": 0.581922
+      },
+      "seconds": 8.181741881999187
+    },
+    {
+      "id": "hard-opus-b-ambiguous-02",
+      "probs": {
+        "cannot_determine": 0.003484,
+        "false_positive": 0.924008,
+        "real_incident": 0.072508
+      },
+      "seconds": 7.342388259996369
+    },
+    {
+      "id": "hard-opus-b-ambiguous-03",
+      "probs": {
+        "insufficient_information": 0.06055,
+        "time_barred": 0.517282,
+        "within_limitation": 0.422168
+      },
+      "seconds": 0.7238097849985934
+    },
+    {
+      "id": "hard-opus-b-ambiguous-07",
+      "probs": {
+        "insufficient_information": 0.002471,
+        "over_limit": 0.984917,
+        "within_policy": 0.012612
+      },
+      "seconds": 7.385229902996798
+    },
+    {
+      "id": "hard-opus-b-ambiguous-09",
+      "probs": {
+        "compromised": 0.037305,
+        "inconclusive": 0.000184,
+        "legitimate": 0.962511
+      },
+      "seconds": 0.41694121299951803
+    },
+    {
+      "id": "hard-opus-b-ambiguous-10",
+      "probs": {
+        "ask_user_which_alex": 0.967696,
+        "send_to_alex_moreno": 0.017226,
+        "send_to_alexandra_lind": 0.015078
+      },
+      "seconds": 7.7470817279972835
+    },
+    {
+      "id": "hard-opus-b-ambiguous-11",
+      "probs": {
+        "cannot_determine": 0.982153,
+        "grade_correct": 0.015578,
+        "grade_should_be_higher": 0.00227
+      },
+      "seconds": 7.554054959000496
+    },
+    {
+      "id": "hard-opus-b-ambiguous-13",
+      "probs": {
+        "cannot_determine": 0.95334,
+        "charge_data_team": 0.012909,
+        "charge_platform_team": 1e-06,
+        "split_50_50": 0.033749
+      },
+      "seconds": 7.729542854998726
+    },
+    {
+      "id": "hard-opus-b-multi_hop-03",
+      "probs": {
+        "tier1_team_lead": 0.05388,
+        "tier2_department_head": 0.134991,
+        "tier3_cfo": 0.440853,
+        "tier4_board": 0.370277
+      },
+      "seconds": 15.998676816001534
+    },
+    {
+      "id": "hard-opus-b-multi_hop-04",
+      "probs": {
+        "ana": 0.055591,
+        "bjorn": 0.537039,
+        "chen": 0.002048,
+        "dmitri": 0.361312,
+        "esra": 0.027294,
+        "no_page_ticket_only": 0.016716
+      },
+      "seconds": 14.209015293999983
+    },
+    {
+      "id": "hard-opus-b-multi_hop-05",
+      "probs": {
+        "0": 0.05747,
+        "1": 0.336386,
+        "2": 0.186792,
+        "3": 0.194337,
+        "4": 0.225016
+      },
+      "seconds": 7.668597069001407
+    },
+    {
+      "id": "hard-opus-b-multi_hop-07",
+      "probs": {
+        "credit_10_percent": 0.039839,
+        "credit_20_percent": 0.10662,
+        "credit_25_percent": 0.000641,
+        "credit_50_percent": 1.8e-05,
+        "credit_full_month": 0.840492,
+        "no_credit": 0.01239
+      },
+      "seconds": 16.296233588000177
+    },
+    {
+      "id": "hard-opus-b-multi_hop-08",
+      "probs": {
+        "yes": 0.449056,
+        "no": 0.550944
+      },
+      "seconds": 8.153028314998664
+    },
+    {
+      "id": "hard-opus-b-probability-01",
+      "probs": {
+        "customer_wins": 0.692707,
+        "customer_withdraws": 0.190185,
+        "merchant_wins": 0.117108
+      },
+      "seconds": 7.201238396002736
+    },
+    {
+      "id": "hard-opus-b-probability-02",
+      "probs": {
+        "bad_push": 0.994985,
+        "database_hardware": 0.004882,
+        "upstream_provider": 0.000134
+      },
+      "seconds": 0.5425519220007118
+    },
+    {
+      "id": "hard-opus-b-probability-03",
+      "probs": {
+        "yes": 0.468227,
+        "no": 0.531773
+      },
+      "seconds": 7.169647126997006
+    },
+    {
+      "id": "hard-opus-b-probability-04",
+      "probs": {
+        "attended": 0.709891,
+        "late_cancellation": 0.004201,
+        "no_show": 0.285909
+      },
+      "seconds": 0.5027873609942617
+    },
+    {
+      "id": "hard-opus-b-probability-06",
+      "probs": {
+        "modified": 0.421667,
+        "overturned": 0.557133,
+        "upheld": 0.0212
+      },
+      "seconds": 6.890352921000158
+    },
+    {
+      "id": "hard-opus-b-tradeoff-01",
+      "probs": {
+        "escalate_to_engineering": 0.117256,
+        "escalate_to_security": 0.882434,
+        "page_oncall": 3e-05,
+        "process_refund": 0.000173,
+        "send_kb_article": 0.000107
+      },
+      "seconds": 8.082827576996351
+    },
+    {
+      "id": "hard-opus-b-tradeoff-03",
+      "probs": {
+        "order_a": 0.188638,
+        "order_b": 0.603289,
+        "order_c": 0.187357,
+        "order_d": 0.020716
+      },
+      "seconds": 7.1791341610005475
+    },
+    {
+      "id": "hard-opus-b-tradeoff-06",
+      "probs": {
+        "yes": 0.466683,
+        "no": 0.533317
+      },
+      "seconds": 0.3772100499991211
+    },
+    {
+      "id": "hard-opus-b-tradeoff-07",
+      "probs": {
+        "out_of_scope": 0.002829,
+        "p0_fix_24h": 0.208816,
+        "p1_fix_7d": 0.313783,
+        "p2_fix_30d": 0.011914,
+        "p3_backlog": 0.462658
+      },
+      "seconds": 16.562201681997976
+    },
+    {
+      "id": "hard-opus-b-tradeoff-08",
+      "probs": {
+        "yes": 0.48324,
+        "no": 0.51676
+      },
+      "seconds": 0.3517286230053287
+    },
+    {
+      "id": "hard-opus-b-tradeoff-12",
+      "probs": {
+        "deny_refund": 0.000139,
+        "escalate_to_fraud_team": 1.5e-05,
+        "offer_store_credit": 0.000275,
+        "refund_now": 0.999527,
+        "wait_for_inspection": 4.3e-05
+      },
+      "seconds": 8.40465321100055
+    },
+    {
+      "id": "hard-opus-c-long_policy-02",
+      "probs": {
+        "erase_all": 0.010769,
+        "erase_but_retain_transaction_records": 0.700712,
+        "erase_marketing_only": 0.102398,
+        "reject_unverified_request": 0.052864,
+        "restrict_all_pending_legal_hold": 0.133258
+      },
+      "seconds": 23.92363152899634
+    },
+    {
+      "id": "hard-opus-c-long_policy-03",
+      "probs": {
+        "eur_0": 0.225835,
+        "eur_150": 0.017241,
+        "eur_200": 0.298459,
+        "eur_300": 0.256598,
+        "eur_400": 0.134127,
+        "eur_600": 0.06774
+      },
+      "seconds": 17.45689064400358
+    },
+    {
+      "id": "hard-opus-c-long_policy-04",
+      "probs": {
+        "yes": 0.499552,
+        "no": 0.500448
+      },
+      "seconds": 17.090397033003683
+    },
+    {
+      "id": "hard-opus-c-long_policy-05",
+      "probs": {
+        "0": 0.121484,
+        "1": 0.236621,
+        "2": 0.383501,
+        "3": 0.258394
+      },
+      "seconds": 7.956165496005269
+    },
+    {
+      "id": "hard-opus-c-long_policy-08",
+      "probs": {
+        "0": 0.037124,
+        "1": 0.200341,
+        "2": 0.62862,
+        "3": 0.133915
+      },
+      "seconds": 7.855872333995649
+    },
+    {
+      "id": "hard-opus-c-long_policy-10",
+      "probs": {
+        "credit_minus_restocking_fee": 0.241785,
+        "full_credit": 0.208281,
+        "reject_return": 0.530713,
+        "repair_or_replace_only": 0.019221
+      },
+      "seconds": 15.556207513000118
+    },
+    {
+      "id": "hard-opus-c-long_policy-11",
+      "probs": {
+        "yes": 0.489813,
+        "no": 0.510187
+      },
+      "seconds": 8.298584700998617
+    },
+    {
+      "id": "hard-opus-c-probability-03",
+      "probs": {
+        "halvorsen_polymer": 0.211351,
+        "kuznets_technik": 0.783095,
+        "ortega_seal_works": 0.005554
+      },
+      "seconds": 15.092199824001
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-02",
+      "probs": {
+        "yes": 0.468154,
+        "no": 0.531846
+      },
+      "seconds": 0.4448243290025857
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-03",
+      "probs": {
+        "eur_617_00": 0.170782,
+        "eur_688_00": 0.04479,
+        "eur_692_00": 0.013577,
+        "eur_693_90": 0.746856,
+        "eur_812_00": 0.023994
+      },
+      "seconds": 23.847038740001153
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-04",
+      "probs": {
+        "usd_2222_50": 0.196814,
+        "usd_2303_01": 0.376511,
+        "usd_2303_33": 0.290542,
+        "usd_2335_00": 0.109376,
+        "usd_2340_00": 0.026756
+      },
+      "seconds": 25.315658450002957
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-06",
+      "probs": {
+        "none_declined": 0.015717,
+        "sep_15_office_chair": 0.333045,
+        "sep_16_taxi": 0.421962,
+        "sep_17_parking": 0.178657,
+        "sep_18_book_set": 0.048089,
+        "sep_21_client_dinner": 0.002531
+      },
+      "seconds": 24.928822365000087
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-08",
+      "probs": {
+        "eur_497_40": 0.094106,
+        "eur_498_81": 0.474382,
+        "eur_506_06": 0.190154,
+        "eur_513_69": 0.215648,
+        "eur_532_01": 0.02571
+      },
+      "seconds": 17.087739290000172
+    },
+    {
+      "id": "hard-opus-c-temporal_numeric-12",
+      "probs": {
+        "covered": 0.043005,
+        "expired_24_month_term": 0.685117,
+        "expired_30_month_cap": 0.271878
+      },
+      "seconds": 8.166645552999398
+    },
+    {
+      "id": "hard-sol-a-adversarial-01",
+      "probs": {
+        "deny_inactive_user": 0.004787,
+        "deny_missing_approval": 0.855063,
+        "grant_access": 0.136942,
+        "grant_owner_exception": 0.003208
+      },
+      "seconds": 7.701546766998945
+    },
+    {
+      "id": "hard-sol-a-adversarial-06",
+      "probs": {
+        "yes": 0.402966,
+        "no": 0.5970340000000001
+      },
+      "seconds": 0.13171366400638362
+    },
+    {
+      "id": "hard-sol-a-adversarial-07",
+      "probs": {
+        "delete_now": 0.000299,
+        "needs_signature_review": 0.000951,
+        "retain_indefinitely": 0.202951,
+        "retain_until_2031": 0.795798
+      },
+      "seconds": 8.706369243001973
+    },
+    {
+      "id": "hard-sol-a-adversarial-08",
+      "probs": {
+        "yes": 0.500341,
+        "no": 0.49965899999999996
+      },
+      "seconds": 0.19295321700337809
+    },
+    {
+      "id": "hard-sol-a-adversarial-09",
+      "probs": {
+        "0": 0.010392,
+        "1": 0.278884,
+        "2": 0.632097,
+        "3": 0.078627
+      },
+      "seconds": 7.853457899000205
+    },
+    {
+      "id": "hard-sol-a-adversarial-11",
+      "probs": {
+        "ethics_review": 0.608703,
+        "major_grants": 0.015974,
+        "manual_hold": 0.007478,
+        "standard_research": 0.367846
+      },
+      "seconds": 0.6880649419981637
+    },
+    {
+      "id": "hard-sol-a-multi_hop-01",
+      "probs": {
+        "accept_s2_dusk": 0.909621,
+        "reject_cutoff": 0.004726,
+        "reject_tier": 0.041053,
+        "reroute_s3": 0.0446
+      },
+      "seconds": 16.035951187004684
+    },
+    {
+      "id": "hard-sol-a-multi_hop-02",
+      "probs": {
+        "executive_bridge": 0.415195,
+        "heron_q2": 0.380787,
+        "insufficient_information": 0.152208,
+        "security_primary": 0.05181
+      },
+      "seconds": 8.456787953000457
+    },
+    {
+      "id": "hard-sol-a-multi_hop-05",
+      "probs": {
+        "pay_manager_approved": 0.00366,
+        "reject_category": 0.015562,
+        "require_director": 0.894054,
+        "require_finance_board": 0.086724
+      },
+      "seconds": 8.60227936100273
+    },
+    {
+      "id": "hard-sol-a-multi_hop-07",
+      "probs": {
+        "admit": 0.015057,
+        "deny_prerequisite": 0.61793,
+        "deny_score": 0.364732,
+        "manual_equivalency": 0.002281
+      },
+      "seconds": 15.056107358002919
+    },
+    {
+      "id": "hard-sol-a-multi_hop-08",
+      "probs": {
+        "central_engineering": 0.573306,
+        "insufficient_log": 0.009744,
+        "local_maintenance": 0.414138,
+        "safety_shutdown": 0.002812
+      },
+      "seconds": 8.313144129999273
+    },
+    {
+      "id": "hard-sol-a-multi_hop-09",
+      "probs": {
+        "confirm_l3": 0.23602,
+        "reject_capacity": 0.20558,
+        "require_steward": 0.547006,
+        "switch_l4": 0.011394
+      },
+      "seconds": 9.108204488999036
+    },
+    {
+      "id": "hard-sol-a-multi_hop-10",
+      "probs": {
+        "approve_45_days": 0.777951,
+        "deny_sensitive": 0.166325,
+        "needs_field_review": 0.028465,
+        "reduce_to_30_days": 0.027259
+      },
+      "seconds": 17.482142724002188
+    },
+    {
+      "id": "hard-sol-a-multi_hop-12",
+      "probs": {
+        "covered_recurrence": 0.211313,
+        "expired": 0.403936,
+        "needs_authentication": 0.373979,
+        "wrong_issue_class": 0.010771
+      },
+      "seconds": 10.14975779499946
+    },
+    {
+      "id": "hard-sol-a-trap-02",
+      "probs": {
+        "yes": 0.416248,
+        "no": 0.583752
+      },
+      "seconds": 7.694902944000205
+    },
+    {
+      "id": "hard-sol-a-trap-04",
+      "probs": {
+        "yes": 0.410185,
+        "no": 0.589815
+      },
+      "seconds": 0.1986775219993433
+    },
+    {
+      "id": "hard-sol-a-trap-05",
+      "probs": {
+        "0": 0.720031,
+        "1": 0.04378,
+        "2": 0.174309,
+        "3": 0.06188
+      },
+      "seconds": 0.5192103929948644
+    },
+    {
+      "id": "hard-sol-a-trap-06",
+      "probs": {
+        "await_internal_metrics": 0.000304,
+        "close_agent_verified": 0.00296,
+        "close_confirmed": 0.04684,
+        "keep_open_unresolved": 0.949895
+      },
+      "seconds": 9.012917401996674
+    },
+    {
+      "id": "hard-sol-a-trap-08",
+      "probs": {
+        "canceled": 4.1e-05,
+        "indeterminate": 8.6e-05,
+        "late": 0.974716,
+        "on_time": 0.025158
+      },
+      "seconds": 0.36185271000431385
+    },
+    {
+      "id": "hard-sol-a-trap-10",
+      "probs": {
+        "blocked_failed_test": 0.001281,
+        "blocked_second_review": 0.987109,
+        "ready_one_review": 0.01161,
+        "ready_two_reviews": 0.0
+      },
+      "seconds": 8.305021042004228
+    },
+    {
+      "id": "hard-sol-a-trap-13",
+      "probs": {
+        "yes": 0.375157,
+        "no": 0.624843
+      },
+      "seconds": 0.13568743899668334
+    },
+    {
+      "id": "hard-sol-a-trap-15",
+      "probs": {
+        "yes": 0.442982,
+        "no": 0.557018
+      },
+      "seconds": 0.17228389999945648
+    },
+    {
+      "id": "hard-sol-b-judge_hard-01",
+      "probs": {
+        "yes": 0.527281,
+        "no": 0.472719
+      },
+      "seconds": 7.402668275004544
+    },
+    {
+      "id": "hard-sol-b-judge_hard-02",
+      "probs": {
+        "yes": 0.52013,
+        "no": 0.47987
+      },
+      "seconds": 0.1726527559949318
+    },
+    {
+      "id": "hard-sol-b-judge_hard-05",
+      "probs": {
+        "yes": 0.533731,
+        "no": 0.46626900000000004
+      },
+      "seconds": 0.13939398899674416
+    },
+    {
+      "id": "hard-sol-b-judge_hard-08",
+      "probs": {
+        "yes": 0.528906,
+        "no": 0.471094
+      },
+      "seconds": 0.13781458500307053
+    },
+    {
+      "id": "hard-sol-b-judge_hard-10",
+      "probs": {
+        "yes": 0.489617,
+        "no": 0.510383
+      },
+      "seconds": 0.1385117169993464
+    },
+    {
+      "id": "hard-sol-b-judge_hard-14",
+      "probs": {
+        "yes": 0.449998,
+        "no": 0.550002
+      },
+      "seconds": 0.14616787500563078
+    },
+    {
+      "id": "hard-sol-b-judge_hard-15",
+      "probs": {
+        "yes": 0.533714,
+        "no": 0.466286
+      },
+      "seconds": 0.12575090999598615
+    },
+    {
+      "id": "hard-sol-b-judge_hard-18",
+      "probs": {
+        "yes": 0.479775,
+        "no": 0.5202249999999999
+      },
+      "seconds": 7.934523960000661
+    },
+    {
+      "id": "hard-sol-b-long_policy-01",
+      "probs": {
+        "approve_all": 0.126968,
+        "approve_lodging_only": 0.497624,
+        "approve_meals_only": 0.260701,
+        "reject_entire_claim": 0.114707
+      },
+      "seconds": 10.293258073004836
+    },
+    {
+      "id": "hard-sol-b-long_policy-02",
+      "probs": {
+        "analytics_owner_only": 0.000964,
+        "deny_current_export": 0.489692,
+        "privacy_and_security": 0.475845,
+        "privacy_only": 0.0335
+      },
+      "seconds": 17.040498624002794
+    },
+    {
+      "id": "hard-sol-b-long_policy-05",
+      "probs": {
+        "delete_everything": 0.077055,
+        "delete_nothing": 0.591057,
+        "delete_only_profile": 0.135456,
+        "delete_profile_omar_april_and_table": 0.196432
+      },
+      "seconds": 18.17777799200121
+    },
+    {
+      "id": "hard-sol-b-long_policy-06",
+      "probs": {
+        "east_ward": 0.415565,
+        "harbor_neighbors": 0.134474,
+        "no_award": 0.419689,
+        "river_arts": 0.030273
+      },
+      "seconds": 17.967356690998713
+    },
+    {
+      "id": "hard-sol-b-routing_hard-01",
+      "probs": {
+        "data_pipeline": 0.000469,
+        "desktop_support": 6.2e-05,
+        "finance_review": 0.000222,
+        "office_file_repair": 0.998724,
+        "spreadsheet_formula": 0.000522
+      },
+      "seconds": 0.6926653539994732
+    },
+    {
+      "id": "hard-sol-b-routing_hard-02",
+      "probs": {
+        "customer_support": 0.006101,
+        "fraud_review": 0.000364,
+        "ledger_reconciliation": 0.992041,
+        "mobile_app": 0.001492,
+        "payment_disputes": 3e-06
+      },
+      "seconds": 7.803724391000287
+    },
+    {
+      "id": "hard-sol-b-routing_hard-03",
+      "probs": {
+        "api_platform": 0.000753,
+        "authoritative_dns": 0.000388,
+        "endpoint_devices": 0.067654,
+        "network_dns": 0.931205,
+        "tls_certificates": 1e-06
+      },
+      "seconds": 8.18796023500181
+    },
+    {
+      "id": "hard-sol-b-routing_hard-07",
+      "probs": {
+        "ci_infrastructure": 3.7e-05,
+        "code_signing": 0.000364,
+        "endpoint_security": 1e-05,
+        "macos_runtime": 2e-06,
+        "release_notarization": 0.999588
+      },
+      "seconds": 8.280908512002497
+    },
+    {
+      "id": "hard-sol-b-routing_hard-09",
+      "probs": {
+        "git_client": 0.02407,
+        "identity_login": 0.005181,
+        "repository_admin": 0.16302,
+        "source_access": 0.807725,
+        "vpn_network": 4e-06
+      },
+      "seconds": 0.6081142590046511
+    },
+    {
+      "id": "hard-sol-b-temporal_numeric-01",
+      "probs": {
+        "before_open": 0.046828,
+        "late_by_2h_or_more": 0.233743,
+        "late_by_under_2h": 0.443975,
+        "within_window": 0.275453
+      },
+      "seconds": 8.069443857006263
+    },
+    {
+      "id": "hard-sol-b-temporal_numeric-02",
+      "probs": {
+        "at_least_100gb_below": 0.372345,
+        "exactly_equal": 0.057782,
+        "over_limit": 0.501265,
+        "under_100gb_below": 0.068609
+      },
+      "seconds": 14.860895909994724
+    },
+    {
+      "id": "hard-sol-b-temporal_numeric-03",
+      "probs": {
+        "12_credits": 0.981912,
+        "15_credits": 0.004043,
+        "6_credits": 0.013974,
+        "9_credits": 7.1e-05
+      },
+      "seconds": 8.432005465998373
+    },
+    {
+      "id": "hard-sol-b-temporal_numeric-04",
+      "probs": {
+        "clear_fail": 0.618931,
+        "narrow_fail": 0.180463,
+        "pass": 0.200606
+      },
+      "seconds": 0.34160222700302256
+    },
+    {
+      "id": "hard-sol-c-judge_hard-03",
+      "probs": {
+        "yes": 0.47159,
+        "no": 0.52841
+      },
+      "seconds": 0.21867860599741107
+    },
+    {
+      "id": "hard-sol-c-judge_hard-05",
+      "probs": {
+        "yes": 0.476154,
+        "no": 0.523846
+      },
+      "seconds": 0.17764075699960813
+    },
+    {
+      "id": "hard-sol-c-judge_hard-07",
+      "probs": {
+        "yes": 0.478691,
+        "no": 0.521309
+      },
+      "seconds": 6.700312311004382
+    },
+    {
+      "id": "hard-sol-c-judge_hard-08",
+      "probs": {
+        "yes": 0.485297,
+        "no": 0.514703
+      },
+      "seconds": 0.20140701399941463
+    },
+    {
+      "id": "hard-sol-c-judge_hard-09",
+      "probs": {
+        "yes": 0.491893,
+        "no": 0.508107
+      },
+      "seconds": 0.17279783800040605
+    },
+    {
+      "id": "hard-sol-c-judge_hard-10",
+      "probs": {
+        "yes": 0.507161,
+        "no": 0.492839
+      },
+      "seconds": 0.18974745899322443
+    },
+    {
+      "id": "hard-sol-c-judge_hard-11",
+      "probs": {
+        "yes": 0.392992,
+        "no": 0.607008
+      },
+      "seconds": 0.15937349500018172
+    },
+    {
+      "id": "hard-sol-c-judge_hard-13",
+      "probs": {
+        "yes": 0.476148,
+        "no": 0.523852
+      },
+      "seconds": 0.16905339199729497
+    },
+    {
+      "id": "hard-sol-c-judge_hard-15",
+      "probs": {
+        "yes": 0.513787,
+        "no": 0.486213
+      },
+      "seconds": 6.489583955997659
+    },
+    {
+      "id": "hard-sol-c-multi_hop-07",
+      "probs": {
+        "partial_release": 0.040519,
+        "programme_review": 0.958959,
+        "reject_draw": 0.000495,
+        "release_draw": 2.8e-05
+      },
+      "seconds": 8.528270771006646
+    },
+    {
+      "id": "hard-sol-c-multi_hop-09",
+      "probs": {
+        "bus_substitution": 0.986762,
+        "call_fen_cross": 0.010563,
+        "pass_fen_cross": 3.4e-05,
+        "terminate_oakmere": 0.00264
+      },
+      "seconds": 16.78054426000017
+    },
+    {
+      "id": "hard-sol-c-multi_hop-11",
+      "probs": {
+        "adjuster_referral": 0.000924,
+        "coverage_confirmed": 0.437389,
+        "coverage_excluded": 0.457562,
+        "documentation_needed": 0.104126
+      },
+      "seconds": 8.42698488899623
+    },
+    {
+      "id": "hard-sol-c-multi_hop-12",
+      "probs": {
+        "conservation_hold": 0.718123,
+        "deny_request": 0.007386,
+        "digital_copy_only": 0.002337,
+        "supervised_delivery": 0.272154
+      },
+      "seconds": 7.025653491000412
+    },
+    {
+      "id": "hard-sol-c-multi_hop-13",
+      "probs": {
+        "engineering_review": 0.00049,
+        "normal_release": 0.999111,
+        "rework": 0.000392,
+        "scrap_lot": 7e-06
+      },
+      "seconds": 7.743670814001234
+    }
+  ]
+}

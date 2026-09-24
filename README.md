@@ -641,7 +641,9 @@ and decodes the answers back into typed output fields. Supported backends:
 | Backend | Sent by | Runs |
 |---|---|---|
 | [Jev](https://docs.typesafe.ai/introduction) (TypeSafe) | `JevLM` (OpenRouter by default, reading `$OPENROUTER_API_KEY`) | hosted |
-| [Kev](https://github.com/jaredpalmer/kev) (open weights, Apache-2.0) | `JevLM(url=...)`, same API | local, [below](#local-open-weights-models-kev) |
+| [Kev](https://github.com/jaredpalmer/kev) (open weights, Apache-2.0) | `JevLM(url=...)`, same API | local, [below](#local-open-weights-models) |
+| [Decider](https://github.com/Mapika/decider) (open weights, Apache-2.0) | `JevLM(url=...)`, same API | local, [below](#local-open-weights-models) |
+| [Laya](https://github.com/NandhaKishorM/laya) (open weights, Apache-2.0) | `JevLM(url=...)`, same API | local, CPU or GPU, [below](#local-open-weights-models) |
 | any chat model through [SemIf](https://github.com/TheoLeeCJ/SemIf)'s readout | `SemIfLM` | local, [below](#local-open-models-semif) |
 
 <!-- lsl-docs: skip: issues a live Jev decision request via OpenRouter -->
@@ -704,20 +706,30 @@ pred.jev["route.team"]["confidence"]   # raw answers: probabilities and confiden
 - **`JevLM`** supports `acall`, DSPy's request cache (`cache=False` to bypass) and saving
   programs. Its saved state keeps `url` but never the API key. Pass
   `url="https://api.typesafe.ai/v1/systemone"` to call TypeSafe directly.
-#### Local open-weights models (Kev)
+#### Local open-weights models
 
-[Kev](https://github.com/jaredpalmer/kev) is a family of open decision models (0.8B, 4B and
-9B) that serves TypeSafe's API locally, so `JevLM` drives it unchanged. It answers a
-request's questions from a single pass over the state and takes up to 255 options per
-question. Kev-0.8B runs in about 4 GB of VRAM.
+These open decision models serve TypeSafe's API locally, so `JevLM` drives them unchanged.
+Each answers a request's questions without generating text.
 
-<!-- lsl-docs: skip: needs a running Kev server -->
+- [Kev](https://github.com/jaredpalmer/kev) (0.8B, 4B, 9B) takes up to 255 options per
+  question. Kev-0.8B runs in about 4 GB of VRAM.
+- [Decider](https://github.com/Mapika/decider) (0.8B, 2B, 4B, 35B-A3B) is Qwen3.5 trained
+  for typed decisions. Its README puts Decider-2B at about 4 GB of VRAM.
+- [Laya](https://github.com/NandhaKishorM/laya) (322M and 421M encoders) runs on CPU and
+  answered a JevBench item in 0.05 s (median). It is the least accurate of the three on
+  long states.
+
+<!-- lsl-docs: skip: needs a running decision model server -->
 ```python
 # uv run --extra serve python -m kev.serve --run jaredpalmer/kev-0.8b --port 8009
+# or: DECIDER_MODEL=Mapika/decider-2b uvicorn decider.serve:app --port 8009
+# or: LAYA_PORT=8009 laya-serve
 dspy.configure(
     lm=JevLM("kev-latest", url="http://127.0.0.1:8009/v1/systemone"), adapter=JevAdapter()
 )
 ```
+
+[`benchmarking/jevbench`](benchmarking/jevbench/README.md) compares them on JevBench.
 
 #### Local open models (SemIf)
 
