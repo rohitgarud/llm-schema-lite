@@ -28,6 +28,7 @@ TURN_LEFT, TURN_RIGHT, ATTACK = [1, 0, 0], [0, 1, 0], [0, 0, 1]
 NAME = {"centre": "FIRE", "left": "TURN LEFT", "right": "TURN RIGHT", "none": "TURN RIGHT"}
 KEYS = ["centre", "left", "right", "none"]
 GW, GH, PW = 400, 300, 250
+HUD_TOP = 480 * 168 // 200  # the status bar is the bottom 32 of Doom's 200 rows
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf"
 
 
@@ -99,6 +100,9 @@ g.load_config(os.path.join(SC, "defend_the_center.cfg"))
 g.set_window_visible(False)
 g.set_screen_resolution(vzd.ScreenResolution.RES_640X480)
 g.set_screen_format(vzd.ScreenFormat.RGB24)
+g.set_render_hud(True)  # the full status bar: ammo, health, face, arms
+if os.environ.get("DOOM_IWAD"):  # e.g. your own DOOM2.WAD; Freedoom otherwise
+    g.set_doom_game_path(os.environ["DOOM_IWAD"])
 g.init()
 
 EPISODES = int(sys.argv[1]) if len(sys.argv) > 1 else 4
@@ -110,7 +114,8 @@ for ep in range(EPISODES):
         st = g.get_state()
         if st is None:
             break
-        shot = Image.fromarray(st.screen_buffer).resize((320, 240))
+        full = Image.fromarray(st.screen_buffer)
+        shot = full.crop((0, 0, 640, HUD_TOP)).resize((320, 204))  # the model sees no HUD
         t = time.perf_counter()
         probs = pred(frame=dspy.Image(png_uri(shot))).jev["enemy"]["probabilities"]
         ms = (time.perf_counter() - t) * 1000
@@ -122,9 +127,7 @@ for ep in range(EPISODES):
             act, tag = TURN_LEFT, "TURN LEFT"
         else:
             act, tag = TURN_RIGHT, "TURN RIGHT"
-        frames.append(
-            compose(Image.fromarray(st.screen_buffer), probs, argmax, tag, ms, g.get_total_reward())
-        )
+        frames.append(compose(full, probs, argmax, tag, ms, g.get_total_reward()))
         g.make_action(act, 4)
     scores.append(g.get_total_reward())
     print(f"  episode {ep + 1}: {scores[-1]:+.0f}  ({len(frames)} frames)", flush=True)
