@@ -646,6 +646,9 @@ and decodes the answers back into typed output fields. Supported backends:
 | [Laya](https://github.com/NandhaKishorM/laya) (open weights, Apache-2.0) | `JevLM(url=...)`, same API | local, CPU or GPU, [below](#local-open-weights-models) |
 | any chat model through [SemIf](https://github.com/TheoLeeCJ/SemIf)'s readout | `SemIfLM` | local, [below](#local-open-models-semif) |
 
+Local default: `SemIfLM` with Qwen3.5-4B Q4_K_M. For CPU-only use, Laya through `JevLM`.
+For the highest accuracy, hosted Jev ([JevBench results](benchmarking/jevbench/README.md)).
+
 <!-- lsl-docs: skip: issues a live Jev decision request via OpenRouter -->
 ```python
 from enum import Enum
