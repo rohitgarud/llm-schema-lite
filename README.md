@@ -699,6 +699,11 @@ pred.jev["route.team"]["confidence"]   # raw answers: probabilities and confiden
 - **`JevLM`** supports `acall`, DSPy's request cache (`cache=False` to bypass) and saving
   programs. Its saved state keeps `url` but never the API key. Pass
   `url="https://api.typesafe.ai/v1/systemone"` to call TypeSafe directly.
+- **Kev:** [Kev](https://github.com/jaredpalmer/kev) is an open-weights model (Apache-2.0)
+  that serves the same API locally, so `JevLM("kev-latest",
+  url="http://127.0.0.1:8009/v1/systemone")` drives it unchanged. Kev-0.8B runs in about 4
+  GB of VRAM. It answers a request's questions from a single pass over the state and takes
+  up to 255 options per question.
 
 #### Local open models (SemIf)
 
