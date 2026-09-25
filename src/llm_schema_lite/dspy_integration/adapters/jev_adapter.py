@@ -30,8 +30,13 @@ from collections.abc import Callable
 from typing import Any, Literal, get_args, get_origin
 
 import dspy
+import litellm
 import pydantic
 import pydantic_core
+from dspy.adapters.types.base_type import (
+    CUSTOM_TYPE_START_IDENTIFIER,
+    split_message_content_for_custom_types,
+)
 from dspy.clients.cache import request_cache
 
 _Decode = Callable[[dict[str, Any]], Any]
@@ -131,7 +136,12 @@ class JevAdapter(dspy.Adapter):  # type: ignore[misc]
         state = {name: inputs[name] for name in signature.input_fields if name in inputs}
         questions = {qid: q for qid, (q, _) in _compile(signature, self.threshold).items()}
         payload = {"state": pydantic_core.to_jsonable_python(state), "questions": questions}
-        return [{"role": "user", "content": json.dumps(payload)}]
+        messages = [{"role": "user", "content": json.dumps(payload)}]
+        if CUSTOM_TYPE_START_IDENTIFIER in messages[0]["content"]:
+            # Expand dspy.Image inputs into content blocks. DSPy 3.3 did this at the LM
+            # boundary; 3.4 does it only in Adapter.format, which this method replaces.
+            messages = split_message_content_for_custom_types(messages)
+        return messages
 
     def parse(self, signature: type[dspy.Signature], completion: str) -> dict[str, Any]:
         answers = json.loads(completion)
@@ -159,8 +169,12 @@ class JevAdapter(dspy.Adapter):  # type: ignore[misc]
 
 
 @request_cache(ignored_args_for_cache_key=["api_key"])  # type: ignore[misc]
-def _decide(url: str, payload: dict[str, Any], api_key: str) -> dspy.LMResponse:
-    """POST one decision request. Cached on (url, payload); a hit comes back with ``cache_hit``."""
+def _request_decision(url: str, payload: dict[str, Any], api_key: str) -> litellm.ModelResponse:
+    """POST one decision request. Cached on (url, payload); a hit comes back with ``cache_hit``.
+
+    Renamed from ``_decide``, whose cached entries hold DSPy 3.3 ``LMResponse`` objects:
+    the name is part of DSPy's cache key, so those entries are never read back.
+    """
     http_request = urllib.request.Request(  # noqa: S310 - caller-configured endpoint
         url,
         data=json.dumps(payload).encode(),
@@ -168,8 +182,15 @@ def _decide(url: str, payload: dict[str, Any], api_key: str) -> dspy.LMResponse:
     )
     with urllib.request.urlopen(http_request) as response:  # noqa: S310
         body = json.load(response)
-    return dspy.LMResponse.from_text(
-        json.dumps(body["answers"]), model=body.get("model"), usage=body.get("usage")
+    message = {"role": "assistant", "content": json.dumps(body["answers"])}
+    usage = body.get("usage") or {}
+    return litellm.ModelResponse(
+        model=body.get("model"),
+        choices=[{"message": message, "finish_reason": "stop"}],
+        usage=litellm.Usage(
+            prompt_tokens=usage.get("input_tokens", usage.get("prompt_tokens", 0)),
+            completion_tokens=usage.get("output_tokens", usage.get("completion_tokens", 0)),
+        ),
     )
 
 
@@ -186,8 +207,6 @@ class JevLM(dspy.BaseLM):  # type: ignore[misc]
         url: Decisions endpoint. TypeSafe's native one is ``https://api.typesafe.ai/v1/systemone``.
     """
 
-    forward_contract = "typed_lm"
-
     def __init__(
         self,
         model: str = "typesafe/jev-1.13",
@@ -202,13 +221,20 @@ class JevLM(dspy.BaseLM):  # type: ignore[misc]
     def dump_state(self) -> dict[str, Any]:
         return {**super().dump_state(), "url": self.url}
 
-    def forward(self, request: dspy.LMRequest) -> dspy.LMResponse:
-        payload = {"model": request.model, **json.loads(request.messages[-1].parts[0].text)}
-        per_call = request.config.cache.enabled if request.config.cache else None
-        use_cache = self.cache if per_call is None else per_call
-        decide = _decide if use_cache else _decide.__wrapped__
-        return decide(url=self.url, payload=payload, api_key=self.api_key)
+    # DSPy's legacy LM contract, the one both 3.3 and 3.4 accept: 3.4 removed the typed one.
+    def forward(
+        self, prompt: str | None = None, messages: list[dict[str, Any]] | None = None, **kwargs: Any
+    ) -> litellm.ModelResponse:
+        payload = {"model": self.model, **json.loads((messages or [])[-1]["content"])}
+        use_cache = kwargs.get("cache", self.cache)
+        decide = _request_decision if use_cache else _request_decision.__wrapped__
+        response: litellm.ModelResponse = decide(
+            url=self.url, payload=payload, api_key=self.api_key
+        )
+        return response
 
-    async def aforward(self, request: dspy.LMRequest) -> dspy.LMResponse:
+    async def aforward(
+        self, prompt: str | None = None, messages: list[dict[str, Any]] | None = None, **kwargs: Any
+    ) -> litellm.ModelResponse:
         # ponytail: blocking HTTP on a worker thread; use an async client if fan-out gets wide.
-        return await asyncio.to_thread(self.forward, request)
+        return await asyncio.to_thread(self.forward, prompt, messages, **kwargs)

@@ -16,9 +16,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import pydantic
 from dspy.adapters import ChatAdapter, JSONAdapter
 from dspy.adapters.baml_adapter import BAMLAdapter  # C1: the only working import path
 from dspy.adapters.base import Adapter
+from dspy.adapters.json_adapter import _get_structured_outputs_response_format
 
 from llm_schema_lite import ParseConfig
 from llm_schema_lite.dspy_integration import (
@@ -85,11 +87,13 @@ class ConstrainedJSONAdapter(JSONAdapter):
     verified against `falcon3:1b` with a `Literal["ZZQX_PURPLE_ONLY"]` field, which forced
     that value as the colour of a banana while the unconstrained call answered "yellow".
 
-    Returning `None` from the common pre-check is the whole override: both `__call__` and
-    `acall` read it as "no early return" and fall through to their structured-output path,
-    including its existing downgrade-to-`json_object` rescue if the schema build fails.
-    Without this cell the matrix has no grammar-constrained arm at all, so every number in
-    it compares prompt-plus-parse against prompt-plus-parse.
+    DSPy moved the choice between releases, so both private hooks are overridden. Up to
+    3.3.x, `_json_adapter_call_common` returning `None` sends `__call__` and `acall` down
+    their structured-output path. From 3.4.0, `_prepare_response_format` sets the format
+    before the call, and the override always sets the schema. Either way, if the schema
+    cannot be built, the adapter falls back to `json_object` as upstream does. Without this
+    cell the matrix has no grammar-constrained arm at all, so every number in it compares
+    prompt-plus-parse against prompt-plus-parse.
     """
 
     def _json_adapter_call_common(  # type: ignore[override]
@@ -103,6 +107,21 @@ class ConstrainedJSONAdapter(JSONAdapter):
     ) -> None:
         """Always fall through to the structured-output path. Never returns a result."""
         return None
+
+    def _prepare_response_format(  # type: ignore[override]
+        self, lm: Any, lm_kwargs: dict[str, Any], signature: Any
+    ) -> None:
+        """Always send the signature's schema, whatever the LM claims to support."""
+        try:
+            lm_kwargs["response_format"] = _get_structured_outputs_response_format(
+                signature, self.use_native_function_calling
+            )
+        except (
+            ValueError,
+            pydantic.PydanticInvalidForJsonSchema,
+            pydantic.PydanticSchemaGenerationError,
+        ):
+            lm_kwargs["response_format"] = {"type": "json_object"}
 
 
 ADAPTERS: dict[str, AdapterCell] = {

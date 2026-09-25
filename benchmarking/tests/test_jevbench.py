@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 dspy = pytest.importorskip("dspy")
+import litellm  # noqa: E402
 
 from benchmarking.jevbench.run import distribution, payload, score_task, summarize  # noqa: E402
 from llm_schema_lite.dspy_integration import JevLM  # noqa: E402
@@ -80,10 +81,11 @@ def test_score_task_sends_the_item_to_a_systemone_endpoint_through_jev_lm(
 
     def decide(url: str, payload: dict[str, Any], api_key: str) -> Any:
         sent.update(url=url, payload=payload)
-        return dspy.LMResponse.from_text(json.dumps({"q": {"type": "noul", "noul": 0.7}}))
+        message = {"role": "assistant", "content": json.dumps({"q": {"type": "noul", "noul": 0.7}})}
+        return litellm.ModelResponse(choices=[{"message": message}])
 
     decide.__wrapped__ = decide  # type: ignore[attr-defined]  # cache=False takes this path
-    monkeypatch.setattr(jev_adapter, "_decide", decide)
+    monkeypatch.setattr(jev_adapter, "_request_decision", decide)
 
     row = score_task(JevLM("kev-latest", url="http://kev/v1/systemone", cache=False), NOUL)
 

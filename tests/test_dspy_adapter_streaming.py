@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Any
 from unittest import mock
 
@@ -65,7 +66,10 @@ def _fake_acompletion(tokens: list[str], calls: list[Any]) -> Any:
 @pytest.fixture(scope="module", autouse=True)
 def _configure_lm() -> Any:
     """Configure a real, uncached dspy.LM once for the module (dspy.configure is task-bound)."""
-    dspy.configure(lm=dspy.LM("openai/gpt-4o-mini", cache=False))
+    # DSPy 3.4 sends openai/ models through its own engine unless told to use litellm,
+    # whose acompletion these tests patch; 3.3 has no `engine` and always uses litellm.
+    engine = {"engine": "litellm"} if "engine" in inspect.signature(dspy.LM).parameters else {}
+    dspy.configure(lm=dspy.LM("openai/gpt-4o-mini", cache=False, api_key="test", **engine))
     yield
 
 
