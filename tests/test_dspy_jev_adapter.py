@@ -82,11 +82,14 @@ ANSWERS: dict[str, Any] = {
 class _StubJev(dspy.BaseLM):  # type: ignore[misc]
     """Returns canned Jev answers and records the payload it was sent."""
 
-    forward_contract = "typed_lm"
+    def forward(
+        self, prompt: str | None = None, messages: list[dict[str, Any]] | None = None, **_: Any
+    ) -> Any:
+        import litellm
 
-    def forward(self, request: dspy.LMRequest) -> dspy.LMResponse:
-        self.payload = json.loads(request.messages[-1].parts[0].text)
-        return dspy.LMResponse.from_text(json.dumps(ANSWERS), model=request.model)
+        self.payload = json.loads((messages or [])[-1]["content"])
+        message = {"role": "assistant", "content": json.dumps(ANSWERS)}
+        return litellm.ModelResponse(model=self.model, choices=[{"message": message}])
 
 
 def test_format_builds_state_and_typed_questions() -> None:
@@ -179,7 +182,7 @@ def test_jev_lm_caches_identical_requests() -> None:
         first, second = lm(messages=msg), lm(messages=msg)
         assert urlopen.call_count == 1
         assert first == second
-        assert lm.history[-1].response.cache_hit
+        assert lm.history[-1]["response"].cache_hit
 
         lm(messages=msg, cache=False)
         assert urlopen.call_count == 2
@@ -361,7 +364,7 @@ def test_semif_lm_async_asks_one_states_questions_in_turn(
         nonlocal in_flight
         in_flight += 1
         seen.append(in_flight)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)  # long enough for DSPy 3.4's awaits to interleave
         in_flight -= 1
         return _fake_completion(request, **kwargs)
 
