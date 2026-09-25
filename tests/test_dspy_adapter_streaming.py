@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from unittest import mock
 
@@ -245,3 +249,82 @@ class TestYamlStreamingGuard:
         lm = DummyLM([{"answer": "4"}], adapter=adapter)
         result = adapter(lm, {}, QA, [], {"question": "3+3?"})
         assert result == [{"answer": "4"}]
+
+
+class _SSEHandler(BaseHTTPRequestHandler):
+    """An OpenAI-compatible /chat/completions endpoint that streams `server.tokens`."""
+
+    def log_message(self, *args: Any) -> None:
+        """Keep test output quiet."""
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's hook name
+        """Record the request and stream one chunk per token, then [DONE]."""
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.server.requests.append(body)  # type: ignore[attr-defined]
+        base = {"id": "c", "object": "chat.completion.chunk", "created": 0, "model": body["model"]}
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        for token in self.server.tokens:  # type: ignore[attr-defined]
+            choice = {"index": 0, "delta": {"content": token}, "finish_reason": None}
+            self.wfile.write(f"data: {json.dumps({**base, 'choices': [choice]})}\n\n".encode())
+        end = {"index": 0, "delta": {}, "finish_reason": "stop"}
+        self.wfile.write(f"data: {json.dumps({**base, 'choices': [end]})}\n\n".encode())
+        self.wfile.write(b"data: [DONE]\n\n")
+
+
+@pytest.fixture
+def sse_server() -> Iterator[Any]:
+    """A local streaming server on a free port; `tokens` and `requests` sit on it."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _SSEHandler)
+    server.tokens, server.requests = [], []  # type: ignore[attr-defined]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+class TestStreamingThroughDefaultEngine:
+    """Streaming over real HTTP through dspy.LM's default engine, with nothing patched.
+
+    On DSPy 3.4 that engine is DSPy's own, not litellm, so the patched tests above never
+    reach it; on 3.3 it is litellm.
+    """
+
+    def _stream(self, server: Any, adapter: Any, tokens: list[str]) -> tuple[list[str], Any]:
+        server.tokens = tokens
+        base = f"http://127.0.0.1:{server.server_address[1]}/v1"
+        lm = dspy.LM("openai/gpt-4o-mini", cache=False, api_key="test", api_base=base)
+
+        async def _run() -> tuple[list[str], Any]:
+            listener = dspy.streaming.StreamListener(signature_field_name="answer")
+            streamed = dspy.streamify(dspy.Predict("question->answer"), stream_listeners=[listener])
+            chunks, prediction = [], None
+            with dspy.context(lm=lm, adapter=adapter):
+                async for value in streamed(question="capital of France?"):
+                    if isinstance(value, dspy.streaming.StreamResponse):
+                        chunks.append(value.chunk)
+                    elif isinstance(value, dspy.Prediction):
+                        prediction = value
+            return chunks, prediction
+
+        return asyncio.run(_run())
+
+    @pytest.mark.parametrize("mode", [OutputMode.JSONISH, OutputMode.JSON])
+    def test_json_modes_stream_like_upstream(self, sse_server: Any, mode: OutputMode) -> None:
+        """Chunks match dspy.JSONAdapter's, and the request asked the server to stream."""
+        ours, prediction = self._stream(sse_server, make_adapter(mode), JSON_TOKENS)
+        theirs, _ = self._stream(sse_server, dspy.JSONAdapter(), JSON_TOKENS)
+
+        assert all(r.get("stream") is True for r in sse_server.requests)
+        assert EXPECTED_ANSWER in "".join(ours)
+        assert ours == theirs
+        assert prediction is not None and prediction.answer == EXPECTED_ANSWER
+
+    def test_yaml_guard_fires_before_any_request(self, sse_server: Any) -> None:
+        """The YAML guard still stops the call before it reaches the server."""
+        with pytest.raises(BaseException) as excinfo:  # noqa: B017
+            self._stream(sse_server, make_adapter(OutputMode.YAML), YAML_TOKENS)
+
+        assert isinstance(unwrap(excinfo), StreamingNotSupportedError)
+        assert sse_server.requests == []
