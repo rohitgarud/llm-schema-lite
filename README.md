@@ -511,7 +511,7 @@ anything different. Hand the model `schema.to_string()`, hand the reply to `load
 program gets the compact schema and the small-model parsing without changing any of its
 signatures. Skip this section if you are not using DSPy.
 
-`pip install "llm-schema-lite[dspy]"` (DSPy `>=3.3.1`) adds `StructuredOutputAdapter`, a
+`pip install "llm-schema-lite[dspy]"` (DSPy `>=3.3.1,<3.5`) adds `StructuredOutputAdapter`, a
 drop-in DSPy adapter that renders signature schemas in the compact format above instead of
 full JSON Schema.
 

@@ -669,7 +669,7 @@ the test suite.
 ### DSPy Not Found
 
 ```bash
-pip install "dspy>=3.3.1"
+pip install "dspy>=3.3.1,<3.5"
 ```
 
 ### PyYAML Not Found (for YAML mode)
