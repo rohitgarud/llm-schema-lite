@@ -761,6 +761,23 @@ slot: 16 questions over a 1000-word state took 1.5 s in turn and 12 s in paralle
 server that shares its prefix cache across requests, such as vLLM, try
 `parallel_questions=True`.
 
+Which server to use depends on how your questions arrive:
+
+- **For SemIf's exact numbers, use vLLM with the BF16 checkpoint.** Its probabilities
+  match SemIf's own code (KL under 0.007), and it was the fastest server on long states.
+- **One question per state:** start `llama-server` with `--cache-ram 0 --ctx-checkpoints 0`.
+  llama.cpp's prompt cache and, on hybrid models such as Qwen3.5, its context checkpoints
+  cost every request whose prompt is new. Without them a short Qwen3.5-4B question took
+  85 ms instead of 199 ms.
+- **Several questions per state:** keep llama.cpp's defaults. They make the extra
+  questions nearly free: four questions on a long state cost 1.07x one, against 4x
+  without them.
+- **Q4_K_M saves memory, not time.** Every request is a single prefill, so 4-bit weights
+  are no faster than Q8_0 here, and they move more choices.
+
+The [serving comparison](benchmarking/semif/README.md#serving-backends-vs-in-process-2026-09-25)
+has the numbers.
+
 On SemIf's own 144-row workload, `SemIfLM` sends byte-identical prompts. It agrees with
 SemIf's published decisions on 96–98% of rows, and its accuracy lands within 0.011 of
 SemIf's reported numbers. See the [parity benchmark](benchmarking/semif/README.md).

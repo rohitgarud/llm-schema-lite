@@ -15,6 +15,14 @@ uncalibrated unless ``calibration_temperature`` is set. A letter outside the top
 ``top_logprobs`` reads as 0; llama.cpp accepts ``top_logprobs`` well above 20 when the
 exact tail matters.
 
+vLLM serving the BF16 checkpoint reproduces SemIf's own probabilities (KL under 0.007)
+and was the fastest server on long states. llama.cpp's prompt cache and, on hybrid
+models such as Qwen3.5, its context checkpoints cost every request whose prompt is new.
+When each state gets one question, start ``llama-server`` with ``--cache-ram 0
+--ctx-checkpoints 0``: a short Qwen3.5-4B question took 85 ms instead of 199 ms. When a
+state gets several questions, keep the defaults, which make the extra ones nearly free:
+four questions on a long state cost 1.07x one, against 4x without them.
+
 Up to 16 options get letters A-P. 17-256 options get two-letter labels AA-PP, read by
 the chain rule: a label the tokenizer keeps whole is read from the first token; for a
 label it splits, the first letter is pre-filled as the assistant turn and a follow-up

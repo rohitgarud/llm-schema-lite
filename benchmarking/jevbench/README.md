@@ -71,6 +71,12 @@ are JevBench's own runs.
   bartowski file in the `SemIfLM` row). Its 93.1% on the standard tier matches the 93% it
   reports for JevBench's original set.
 - **p95 is the hard tier's long states,** which run to about 4k tokens of prompt each.
+- **The `SemIfLM` latencies use llama.cpp's default cache settings.** Every JevBench item
+  is one question on a new state, which is the case where `--cache-ram 0
+  --ctx-checkpoints 0` pays. On an RTX 2000 Ada it cut Qwen3.5-4B Q8_0 from 209 to 85 ms
+  per short question and from 719 to 543 ms on the hard tier. These rows were not rerun,
+  because the table above comes from a different GPU. See the
+  [serving comparison](../semif/README.md#serving-backends-vs-in-process-2026-09-25).
 
 ### `question_first=True`
 
