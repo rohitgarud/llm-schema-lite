@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.12.1](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.12.1) - 2026-09-25
+
+<small>[Compare with v0.12.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.12.0...v0.12.1)</small>
+
+### Fixed
+
+- **`JevLM` works on DSPy 3.4.** DSPy 3.4.0 removed the typed LM contract `JevLM` was
+  built on, so every call raised `TypeError`. It now uses the legacy contract that DSPy
+  3.3 and 3.4 both accept. Responses cached by 0.12.0 are not read back, because their
+  format differs.
+- **`JevAdapter` sends `dspy.Image` inputs as images on DSPy 3.4.** 3.4 stopped expanding
+  them at the LM boundary, so they reached `SemIfLM` as marker text.
+- `StructuredOutputAdapter` needed no change for 3.4. Its streaming is now also tested over
+  HTTP through `dspy.LM`'s default engine, which on 3.4 is DSPy's own rather than litellm.
+
+### Changed
+
+- **The `dspy` extra requires `dspy>=3.3.1,<3.5`.** DSPy 3.4 deprecates the `forward()`
+  custom-LM interface that `JevLM` and `SemIfLM` use, and plans to remove it in 3.5.
+
+### Added
+
+- **SemIf runtime and serving benchmarks** (`benchmarking/semif/`). The runtime ablation
+  compares SemIf's own in-process path with selected-row `lm_head`, CUDA graphs, fused
+  kernels and quantization on three models. The serving comparison runs `SemIfLM` against
+  llama.cpp and vLLM. vLLM serving the BF16 checkpoint reproduces SemIf's probabilities
+  (KL under 0.007).
+
+### Documentation
+
+- **Which server to run `SemIfLM` on.** The README and the `SemIfLM` docstring advise vLLM
+  BF16 for SemIf's exact numbers. For llama.cpp, set `--cache-ram 0 --ctx-checkpoints 0`
+  when each state gets one question: a short Qwen3.5-4B question took 85 ms instead of
+  199 ms. Keep the defaults when a state gets several questions: four cost 1.07x one.
+
 ## [v0.12.0](https://github.com/rohitgarud/llm-schema-lite/releases/tag/v0.12.0) - 2026-09-24
 
 <small>[Compare with v0.11.0](https://github.com/rohitgarud/llm-schema-lite/compare/v0.11.0...v0.12.0)</small>
